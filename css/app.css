@@ -288,7 +288,9 @@ button.chip:not(.on):not(.quick-chip) { background: var(--chip); color: var(--te
 .help h4, .explain h4 { margin: 14px 0 4px; font-size: 15px; }
 .help ul { margin: 0; padding-left: 20px; }
 .help li { margin: 4px 0; line-height: 1.55; font-size: 15px; }
-.explain p { margin: 0; line-height: 1.65; font-size: 15px; }
+.explain p { margin: 0 0 10px; line-height: 1.65; font-size: 15px; }
+.explain p:last-child { margin-bottom: 0; }
+.head-actions .link { white-space: nowrap; }
 .rule h2 { font-size: 17px; margin: 0 0 8px; }
 .rule p { margin: 0 0 8px; line-height: 1.65; }
 .rule p:last-child { margin-bottom: 0; }
@@ -344,6 +346,32 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .wish-actions .link { min-height: 34px; }
 .ai-summary { margin: 0 0 10px; line-height: 1.65; }
 .done-wishes summary { font-size: 15px; }
+
+/* 买不买 */
+.ask-field { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 14px; padding: 12px 14px; color: var(--muted); box-shadow: var(--shadow); margin: 0 0 4px; font-size: 15px; }
+.ask-field svg.i { color: var(--accent); }
+.lesson-scroll { display: flex; gap: 10px; overflow-x: auto; margin: 0 -16px 12px; padding: 2px 16px 6px; scrollbar-width: none; }
+.lesson-scroll::-webkit-scrollbar { display: none; }
+.lesson { flex: none; width: 138px; min-height: 76px; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 4px; padding: 12px; border-radius: 14px; background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font-weight: 400; }
+.lesson b { font-size: 15px; }
+.lesson span { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.msg { max-width: 88%; padding: 10px 14px; border-radius: 18px; font-size: 15px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.msg.me { align-self: flex-end; background: var(--accent); color: var(--accent-text); border-bottom-right-radius: 6px; }
+.msg.ai { align-self: flex-start; background: var(--card); box-shadow: var(--shadow); border-bottom-left-radius: 6px; }
+.msg.thinking { color: var(--muted); }
+.msg.error-msg { color: var(--danger); }
+.verdict { display: inline-block; font-weight: 700; font-size: 13px; padding: 0 8px; border-radius: 6px; line-height: 1.9; margin-bottom: 6px; background: var(--chip); }
+.verdict.buy { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+.verdict.wait { background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
+.verdict.no { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.facts { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--bg); font-size: 13px; color: var(--muted); white-space: normal; }
+.facts b { color: var(--text); }
+.decide { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.review p { margin: 0 0 6px; }
+.chat-input { position: sticky; bottom: calc(76px + env(safe-area-inset-bottom)); display: flex; gap: 8px; padding: 8px 0; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.chat-input textarea { min-height: 44px; max-height: 120px; }
+.chat-input button { flex: none; }
 
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }

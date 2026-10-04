@@ -64,6 +64,30 @@ export class Store {
     this.writeCache();
   }
 
+  // 读写账本以外的 JSON 文件（比如推送订阅 config/push.json）。不存在返回 null
+  async readJson(path, ref = 'main') {
+    try {
+      return JSON.parse(await this.gh.readText(path, ref));
+    } catch (e) {
+      if (e instanceof GitHubError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  async saveJson(path, mutate, message) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const head = await this.gh.headSha();
+      const next = mutate(structuredClone((await this.readJson(path, head)) || {}));
+      try {
+        const sha = await this.gh.commit(head, [{ path, content: JSON.stringify(next, null, 1) + '\n' }], message);
+        if (head === this.head) this.head = sha; // 账本内容没变，缓存还能用
+        return next;
+      } catch (e) {
+        if (!(e instanceof GitHubError && e.status === 422) || attempt === 3) throw e;
+      }
+    }
+  }
+
   // mutate(data) 直接修改传入的数据，可返回结果；uploads: [{ path, base64 }]；removes: [path]
   async save(message, mutate, { uploads = [], removes = [] } = {}) {
     const blobs = [];

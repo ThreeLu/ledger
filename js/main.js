@@ -2,11 +2,12 @@ import { GitHub } from './github.js';
 import { Store, newId } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
-  periodStats, budgetTotal, livingBudget, duePostings, health, headline, money, md, addDays,
+  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
 } from './money.js';
 import { askJson } from './ai.js';
+import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
@@ -146,13 +147,14 @@ const routes = [
   [/^\/person\/([^/]+)$/, (id) => personView(id)],
   [/^\/reconcile$/, () => reconcileView()],
   [/^\/wishes$/, () => wishesView()],
+  [/^\/ask$/, () => askView()],
   [/^\/budget$/, () => budgetView()],
   [/^\/rules$/, () => rulesView()],
   [/^\/quick$/, () => quickView()],
   [/^\/settings$/, () => settingsView()],
 ];
 const NAV_GROUPS = {
-  '/': [/^\/?$/],
+  '/': [/^\/?$/, /^\/ask/],
   '/list': [/^\/list/],
   '/summary': [/^\/summary/],
   '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/],
@@ -331,6 +333,7 @@ const HOME_HELP = [
   ['健康指标', ['绿 = 很好，不用管；黄 = 留意一下；红 = 需要做点什么。', '每一行都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
   ['总结', ['底部「总结」看每周、每个预算月的图表。']],
+  ['买不买', ['想买东西拿不准，点「想买个东西？问问买不买」。理财小课堂也在那里。']],
 ];
 
 // 「这个月的钱」：收入分成 生活 / 订阅 / 其他花销 / 存下
@@ -385,6 +388,7 @@ function homeView() {
       h('div', { class: 'muted small' }, '这个月还能花'),
       h('div', { class: `big-num${hl.left < 0 ? ' warn-text' : ''}` }, hl.left < 0 ? `超了 ${money(-hl.left)}` : money(hl.left)),
       h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天，每天约 ${money(hl.perDay)}` : `剩 ${hl.daysLeft} 天`)),
+    h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
     h('div', { class: 'section-title' }, '健康指标（点开看解释）'),
     h('div', { class: 'group' }, hl.items.map((x) => h('button', { class: 'cell indicator', type: 'button', onclick: () => openExplain(x, hl) },
       h('span', { class: `light ${x.level}`, 'aria-label': LEVEL_TEXT[x.level] }),
@@ -485,8 +489,8 @@ function addView(q) {
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
     sub: category(d, editing.category)?.sub || null, what: editing.what || '',
   } : {
-    type: q.type || 'expense', amount: '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: '', split: 'none', person: '', sub: null, what: '',
+    type: q.type || 'expense', amount: q.amount || '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
+    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '',
   };
   if (!account(d, st.account)) st.account = firstCny;
   // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
@@ -1622,6 +1626,276 @@ function wishesView() {
         w.status === 'dropped' ? h('button', { class: 'link', onclick: () => upd(`重新想要：${w.name}`, (data) => { const x = data.wishes.find((y) => y.id === w.id); x.status = 'open'; delete x.droppedAt; }) }, '又想要了') : null))) : null);
 }
 
+// ---------- 买不买（聊天）----------
+// 网站先把价格换算、硬规则算好，连同汇总数字一起给 DeepSeek；DeepSeek 负责聊和给建议。
+// 聊天记录只在这次打开的页面里；只有「做了什么决定」会存进账本（data.decisions），一个月后回访。
+
+const chatState = { messages: [], busy: false, draft: '' }; // draft：打了一半的问题，页面重画时不丢
+const REVIEW_DAYS = 30;
+const VERDICT = { buy: '可以买', wait: '等等再说', no: '不建议' };
+
+// 从一句话里找价格：「想买个 1200 的键盘」→ 1200
+function priceIn(text) {
+  const m = String(text).replace(/[，,]/g, '').match(/(\d+(?:\.\d+)?)\s*(?:块|元|¥|rmb|RMB|w|万)?/);
+  if (!m) return null;
+  const n = Number(m[1]) * (/万|w/.test(m[0]) ? 10000 : 1);
+  return n >= 1 ? n : null;
+}
+
+// 价格换算成有感觉的说法 + 两条硬规则
+function priceFacts(d, price) {
+  const t = today();
+  const hl = health(d, t, usdRate());
+  const plan = yearPlan(d);
+  const perDayFood = (Number(d.budget.food) || 0) / 30.4;
+  const free = Number(d.budget.free) || 0;
+  const yearSave = plan.yearIn ? plan.yearIn - plan.yearOut : 0;
+  // 能动用的钱：所有账户 − 应急钱底线 − 这个月还要花的生活费
+  const usable = hl.assets - (d.settings.emergencyFloor || 0) - Math.max(0, hl.left);
+  const big = price > (d.settings.wishBigFrom ?? 300);
+  const facts = [];
+  if (perDayFood) facts.push(`相当于 ${(price / perDayFood).toFixed(price / perDayFood < 10 ? 1 : 0)} 天的饭钱`);
+  if (free) facts.push(`相当于 ${(price / free).toFixed(1)} 个月的自由钱`);
+  if (hl.left > 0) facts.push(`是这个月还能花的 ${money(hl.left)} 的 ${Math.round((price / hl.left) * 100)}%`);
+  if (yearSave > 0) facts.push(`如果从存款出，一年存钱目标晚 ${Math.max(1, Math.round(price / (yearSave / 365)))} 天左右达成`);
+  if (big && d.settings.wishMonthlyCap) facts.push(`按大额心愿每月最多攒 ${money(d.settings.wishMonthlyCap)}，要攒 ${Math.ceil(price / d.settings.wishMonthlyCap)} 个月`);
+  return {
+    price, facts, big,
+    floorBreak: price > usable, // 硬规则 1：会动到应急钱
+    cool: big, // 硬规则 2：大额先冷静几天
+    usable,
+  };
+}
+
+// 给 DeepSeek 的背景：只有汇总数字，不发每一笔流水
+function moneyContext(d) {
+  const t = today();
+  const hl = health(d, t, usdRate());
+  const st = hl.stats;
+  const part = partial(d, hl.period);
+  const rc = receivables(d);
+  const f = wishFunds(d, t);
+  const groupLine = GROUPS.filter((g) => d.budget[g.id]).map((g) => `${g.name} 已花 ${Math.round(st.spent[g.id])} / 预算 ${Math.round(d.budget[g.id] * part.factor)}`).join('；');
+  const hist = closedPeriods(d, t).slice(-3).map((p) => {
+    const s = periodStats(d, p);
+    const top = Object.entries(s.byCat).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([id, v]) => `${catName(id)} ${Math.round(v)}`).join('、');
+    return `${p.label}：收入 ${Math.round(s.income)}，花 ${Math.round(s.total)}（${top}）`;
+  });
+  const ups = upcoming(d, t, 35).map((u) => `${md(u.date)} ${u.r.name} ${u.r.amount}${isUsd(d, u.r.account) ? ' 美元' : ' 元'}`);
+  const wishes = d.wishes.filter((w) => w.status === 'open').map((w) => `${w.name} ${w.price}${isBigWish(d, w) ? `（大额，已攒 ${Math.round(f.saved[w.id] || 0)}）` : '（小额）'}`);
+  const decisions = (d.decisions || []).slice(-8).map((x) => `${x.at} ${x.item} ${x.price || ''} → ${{ buy: '买了', wish: '放进心愿单', skip: '没买' }[x.choice] || ''}${x.review ? `，回访：${{ worth: '值', meh: '一般', regret: '后悔' }[x.review]}` : ''}`);
+  return [
+    `今天 ${t}，预算月 ${hl.period.label} 第 ${hl.period.dayIndex} 天，还剩 ${hl.daysLeft} 天。`,
+    `每月预算：${GROUPS.filter((g) => d.budget[g.id]).map((g) => `${g.name} ${d.budget[g.id]}`).join('、')}。这个预算月：${groupLine}。生活（吃饭+日常+自由钱）还能花 ${Math.round(hl.left)}，平均每天 ${Math.max(0, Math.round(hl.perDay))}。`,
+    `收入：每月正常 ${d.settings.expectedIncome || '?'}${d.settings.summerMonths?.length ? `，${d.settings.summerMonths.join('、')} 月没有收入` : ''}；这个预算月已到 ${Math.round(st.income)}${part.isPartial ? '（这个月是开始记账的第一个月，之前到的没记）' : ''}。`,
+    `总资产 ${Math.round(hl.assets)}，应急钱底线 ${d.settings.emergencyFloor || 0}，安全垫 ${hl.items.find((x) => x.key === 'cushion')?.value || ''}。`,
+    rc.toMe || rc.iOwe ? `待收回 ${Math.round(rc.toMe)}（还不在手里，不能当能花的钱），欠别人 ${Math.round(rc.iOwe)}。` : '',
+    ups.length ? `接下来要扣：${ups.join('；')}。` : '',
+    `心愿基金（小额用）${Math.round(f.small)}；大额心愿每月最多攒 ${d.settings.wishMonthlyCap}，${d.settings.wishBigFrom} 以上算大额。心愿单：${wishes.join('、') || '空'}。`,
+    hist.length ? `最近几个预算月：${hist.join('；')}。` : '刚开始记账，还没有完整的预算月。',
+    decisions.length ? `以前问过的：${decisions.join('；')}。` : '',
+    `规则：先存后花；自由钱每月 ${d.budget.free || 0} 花了不用内疚；${d.settings.wishBigFrom} 以上的东西先冷静 ${d.settings.coolDays} 天、放进心愿单慢慢攒；不动应急钱。`,
+  ].filter(Boolean).join('\n');
+}
+
+async function askMoney(question) {
+  const d = store.data;
+  const ai = await aiConfig();
+  const price = priceIn(question);
+  const pf = price ? priceFacts(d, price) : null;
+  const system = [
+    '你是一个大学生的理财小助手，帮他想清楚「这个东西买不买」，也回答关于他自己花钱情况的问题。',
+    '他对理财不太懂，有点焦虑，想稳定存钱，但也不想过得太紧。说话像朋友：温和、简短、具体，用大白话，不说教，不吓唬人。',
+    '数字只用下面给的，不要编。不推荐任何具体的理财产品、基金、股票；不建议花呗、信用卡、分期、借钱消费。',
+    '他问要不要买某个东西时：如果还不清楚，先问 1～2 个关键问题（现在用的坏了还是只是想换？多久用一次？有没有便宜的替代？能不能等等？）；清楚了再给结论。',
+    '结论用 verdict：buy（可以买）、wait（等等再说，比如先放进心愿单冷静几天、等大促、等心愿基金够）、no（不建议）。还在问问题时 verdict 为 null。',
+    '网站算好的「硬规则」必须遵守：会动到应急钱的，verdict 必须是 no；大额的东西就算值得买，也要建议先冷静几天、放进心愿单。',
+    '他问别的（比如这个月花得怎么样、钱花哪了、某个理财概念）就直接回答，verdict 为 null。',
+    'answer 控制在 150 字以内，可以分几行。item 是他想买的东西（名称和价格，价格不知道就 null），不是买东西的问题就 null。',
+    '只输出 JSON：{"answer":"","verdict":null,"item":{"name":"","price":null}}',
+    '',
+    '他的情况（汇总数字）：',
+    moneyContext(d),
+  ].join('\n');
+  const extra = pf ? [
+    '',
+    `网站对「${money(pf.price)}」算好的：${pf.facts.join('；')}。`,
+    `硬规则：${pf.floorBreak ? `会动到应急钱（能动用的钱只有 ${money(Math.max(0, pf.usable))}）→ 必须不建议。` : '不会动到应急钱。'}${pf.cool ? ` 超过 ${d.settings.wishBigFrom}，属于大额 → 建议先冷静 ${d.settings.coolDays} 天。` : ''}`,
+  ].join('\n') : '';
+  const history = chatState.messages.filter((m) => !m.pending).slice(-8)
+    .map((m) => ({ role: m.role === 'me' ? 'user' : 'assistant', content: m.role === 'me' ? m.text : JSON.stringify({ answer: m.text }) }));
+  const out = await askJson(ai, system + extra, question, { history, maxTokens: 6000, timeout: 90000 });
+  const item = out.item && out.item.name ? { name: String(out.item.name).slice(0, 40), price: Number(out.item.price) || price || null } : null;
+  let verdict = ['buy', 'wait', 'no'].includes(out.verdict) ? out.verdict : null;
+  const facts = item?.price ? priceFacts(d, item.price) : pf;
+  if (verdict && facts?.floorBreak) verdict = 'no'; // 硬规则不靠 AI
+  return { text: String(out.answer || '（没有回答）'), verdict, item, facts };
+}
+
+async function decide(m, choice) {
+  const item = m.item;
+  try {
+    await save(`买不买：${item.name} → ${{ buy: '买了', wish: '放进心愿单', skip: '不买了' }[choice]}`, (data) => {
+      data.decisions ||= [];
+      data.decisions.push({ id: newId('x'), at: today(), item: item.name, price: item.price, verdict: m.verdict, choice });
+      if (choice === 'wish' && !data.wishes.some((w) => w.status === 'open' && w.name === item.name)) {
+        data.wishes.push({ id: newId('w'), name: item.name, price: item.price || 0, want: 'very', reason: '从「买不买」放进来的', link: '', targetDate: '', createdAt: today(), status: 'open' });
+      }
+    });
+    m.decided = choice;
+    if (choice === 'buy') go(`#/add?amount=${item.price || ''}&note=${encodeURIComponent(item.name)}`);
+    else { toast(choice === 'wish' ? '放进心愿单了，冷静几天再看' : '好的，省下了'); render(); }
+  } catch { /* 已提示 */ }
+}
+
+// 买过的东西一个月后问一句：值不值
+function reviewCard() {
+  const d = store.data;
+  const due = (d.decisions || []).filter((x) => x.choice === 'buy' && !x.review && daysSince(x.at) >= REVIEW_DAYS);
+  if (!due.length) return null;
+  const x = due[0];
+  const answer = (review) => save(`回访：${x.item} → ${review}`, (data) => { data.decisions.find((y) => y.id === x.id).review = review; })
+    .then(() => { toast('记下了，下次判断会参考'); render(); }).catch(() => {});
+  return h('div', { class: 'card review' },
+    h('p', {}, `「${x.item}」买了一个多月了，用得怎么样？`),
+    h('div', { class: 'actions' },
+      h('button', { class: 'small', onclick: () => answer('worth') }, '值'),
+      h('button', { class: 'small secondary', onclick: () => answer('meh') }, '一般'),
+      h('button', { class: 'small secondary', onclick: () => answer('regret') }, '有点后悔')));
+}
+
+// ---------- 理财小课堂 ----------
+// 每课几段大白话，用他自己的数字举例。不推荐具体产品。
+
+function lessons(d) {
+  const t = today();
+  const plan = yearPlan(d);
+  const hl = health(d, t, usdRate());
+  const last = closedPeriods(d, t).at(-1);
+  const lastSt = last ? periodStats(d, last) : null;
+  const st = hl.stats;
+  const rate = usdRate();
+  const subsYear = d.recurring.reduce((s, r) => s + (r.day ? r.amount * 12 : r.amount) * (isUsd(d, r.account) ? rate : 1), 0);
+  const dropped = d.wishes.filter((w) => w.status === 'dropped');
+  const floorAcc = account(d, d.settings.floorAccount);
+  return [
+    { id: 'rate', title: '储蓄率', sub: '比「存了多少」更重要的数', body: [
+      '储蓄率 = 存下的钱 ÷ 收入。比如收入 8000、存下 4000，储蓄率就是 50%。',
+      '为什么看它而不是看存了多少：收入会变，但储蓄率能直接说明你花钱的习惯。常见的建议是 20%，能到 30% 以上就很好。',
+      plan.rate != null ? `你的计划：全年储蓄率约 ${plan.rate}%。${lastSt && lastSt.income ? `上个预算月实际是 ${Math.round(((lastSt.income - lastSt.total) / lastSt.income) * 100)}%。` : '记满一个完整的预算月，就能看到实际的数。'}` : '在「预算」里填上每月正常收入，就能算出你的储蓄率。',
+    ] },
+    { id: 'need', title: '必要和想要', sub: '花钱的两种', body: [
+      '必要：不花不行，但可以花得省一点，比如吃饭、日用品、交通。想要：不花也能活，但完全不花日子就太紧，比如奶茶、娱乐、喜欢的东西。',
+      '管钱不是不花「想要」，而是心里清楚哪些是想要，给它们一个固定的额度（就是你的自由钱和心愿基金）。',
+      `这个预算月到现在：必要（吃饭 + 日常）${money(st.spent.food + st.spent.daily)}，想要（自由钱 + 心愿）${money(st.spent.free + (st.byCat['c-wish'] || 0))}。`,
+    ] },
+    { id: 'cushion', title: '安全垫和应急钱', sub: '为什么手里要留一笔不动的钱', body: [
+      '安全垫 = 手里的钱能撑几个月的正常开销。应急钱是其中专门不动的一块，用来应付意外：生病、电脑坏了、补助晚发。',
+      '上班的人一般建议留 3～6 个月；学生有稳定的补助，2～3 个月就够。有了它，意外来的时候你不会慌，也不用借钱。',
+      `你现在：安全垫 ${hl.items.find((x) => x.key === 'cushion')?.value || ''}，${floorAcc ? `${floorAcc.name}里留着不动的底线是 ${money(d.settings.emergencyFloor)}` : ''}。已经够了，接下来只要别动它。`,
+    ] },
+    { id: 'fixed', title: '固定支出', sub: '每月自动扣的钱最容易被忘掉', body: [
+      '订阅、会员这种每月自动扣的钱，单看一个月不多，但一年加起来很可观，而且因为是自动扣的，很容易忘了自己还订着。',
+      '一个好习惯：每隔几个月把订阅过一遍，问自己「这个月真的用了吗」。不用的就停掉，想用了再开。',
+      d.recurring.length ? `你现在的固定扣费一年大约 ${money(subsYear)}：${d.recurring.map((r) => r.name).join('、')}。` : '你现在还没有记录固定扣费。',
+    ] },
+    { id: 'where', title: '钱放在哪', sub: '活期、定期、货币基金是什么', body: [
+      '活期：银行卡里的钱默认就是活期，随时能用，但利息很低。定期：存进去一段时间（比如 3 个月、1 年）不能动，利息高一些，提前取出来利息会少。',
+      '货币基金：银行 App、支付宝里那种「随时能取」的理财，比活期利息略高一点，风险很低，但不是零风险、收益也不保证。不管选哪种，利率都以 App 上实际显示的为准。',
+      `一个稳妥的思路：应急钱放随时能取的地方；确定一段时间内用不到的存款，可以考虑定期。这里只讲道理，不推荐具体产品。${floorAcc ? `你的${floorAcc.name}现在是 ${money(balance(d, floorAcc.id))}。` : ''}`,
+    ] },
+    { id: 'impulse', title: '冲动消费', sub: '为什么要先冷静几天', body: [
+      '很多「想要」只是一时的：看到别人有、刷到广告、心情不好。过几天这股劲过去了，你会发现其实没那么需要。',
+      `所以我们定了规则：${money(d.settings.wishBigFrom)} 以上的东西先放进心愿单，冷静 ${d.settings.coolDays} 天，还想要再考虑买。`,
+      dropped.length ? `到现在你放弃了 ${dropped.length} 个心愿，省下 ${money(dropped.reduce((s, w) => s + Number(w.price), 0))}。` : '以后放弃的心愿，会在心愿单底部记着省下了多少钱。',
+    ] },
+    { id: 'credit', title: '花呗、信用卡和分期', sub: '为什么容易越花越多', body: [
+      '它们让你「现在不用掏钱」，花钱的痛感变小，人就容易多花。等账单来的时候，钱已经花出去了。',
+      '分期最需要小心：「每期手续费 0.6%」听起来很少，但因为你每个月都在还本金、手里的欠款越来越少，折算成实际的年利率差不多要翻一倍，比存款利息高得多。',
+      '你的条件很好，有稳定的补助和存款，完全不需要用它们。想买的东西就按心愿单慢慢攒，攒够了再买。',
+    ] },
+  ];
+}
+
+function openLesson(ls) {
+  openSheet({
+    title: ls.title,
+    body: h('div', { class: 'explain' }, ls.body.map((p) => h('p', {}, p))),
+    confirmText: '问问 DeepSeek',
+    cancelText: '知道了',
+    onConfirm: () => {
+      const input = document.querySelector('.chat-input textarea');
+      chatState.draft = `关于「${ls.title}」，我想问：`;
+      if (input) { input.value = chatState.draft; input.focus(); }
+    },
+  });
+}
+
+const askHelp = () => [
+  ['能问什么', ['想买个东西：比如「想买个 1200 的机械键盘」。它会先问你一两个问题，再给建议：可以买、等等再说、或者不建议。', '问花钱的情况：比如「这个月花得怎么样？」「我钱都花哪了？」「下周想出去吃顿好的，预算够吗？」']],
+  ['网站帮你算的', ['只要话里有价格，网站会换算成你有感觉的说法：相当于几天的饭钱、几个月的自由钱、存钱目标晚几天。', `两条规则不靠 AI：会动到应急钱的一定「不建议」；${money(store.data.settings.wishBigFrom)} 以上的建议先放进心愿单冷静几天。`]],
+  ['决定还是你做', ['给了建议以后，下面有「决定买」「放进心愿单」「不买了」。决定买会带你去记一笔。买了的东西一个月后会问你「值不值」，下次判断会参考。']],
+  ['隐私', ['发给 DeepSeek 的只有汇总数字（各类花了多少、余额、预算剩多少、心愿单），不发每一笔的明细。聊天记录不保存，关掉页面就没了。']],
+  ['理财小课堂', ['上面那排卡片，每张讲一个概念，用你自己的数字举例。看完有问题，点「问问 DeepSeek」接着聊。']],
+];
+
+function askView() {
+  const d = store.data;
+  const box = h('div', { class: 'chat' });
+  const input = h('textarea', { rows: 1, placeholder: '比如：想买个 1200 的机械键盘', 'aria-label': '想问什么', value: chatState.draft,
+    oninput: (e) => { chatState.draft = e.target.value; } });
+  const draw = () => {
+    box.replaceChildren(...chatState.messages.map((m) => {
+      if (m.role === 'me') return h('div', { class: 'msg me' }, m.text);
+      if (m.pending) return h('div', { class: 'msg ai thinking' }, '正在看你的账……');
+      if (m.error) return h('div', { class: 'msg ai error-msg' }, m.text);
+      const f = m.facts;
+      return h('div', { class: 'msg ai' },
+        m.verdict ? h('div', { class: `verdict ${m.verdict}` }, VERDICT[m.verdict]) : null,
+        h('div', {}, m.text),
+        f && m.verdict ? h('div', { class: 'facts' },
+          h('b', {}, `${money(f.price)}：`), f.facts.map((x) => h('div', {}, `· ${x}`)),
+          f.floorBreak ? h('div', { class: 'warn-text' }, '· 会动到应急钱') : null,
+          f.cool && !f.floorBreak ? h('div', {}, `· 超过 ${money(d.settings.wishBigFrom)}，先冷静 ${d.settings.coolDays} 天比较好`) : null) : null,
+        m.item && m.verdict && !m.decided ? h('div', { class: 'decide' },
+          h('button', { class: 'small', onclick: () => decide(m, 'buy') }, '决定买'),
+          h('button', { class: 'small secondary', onclick: () => decide(m, 'wish') }, '放进心愿单'),
+          h('button', { class: 'small secondary', onclick: () => decide(m, 'skip') }, '不买了')) : null,
+        m.decided ? h('div', { class: 'muted small' }, `你的决定：${{ buy: '买', wish: '放进心愿单', skip: '不买' }[m.decided]}`) : null);
+    }));
+  };
+  const send = async (text) => {
+    const q = (text ?? input.value).trim();
+    if (!q || chatState.busy) return;
+    input.value = '';
+    chatState.draft = '';
+    chatState.busy = true;
+    chatState.messages.push({ role: 'me', text: q }, { role: 'ai', pending: true });
+    draw();
+    try {
+      const r = await askMoney(q);
+      chatState.messages[chatState.messages.length - 1] = { role: 'ai', ...r };
+    } catch (e) {
+      chatState.messages[chatState.messages.length - 1] = { role: 'ai', error: true, text: e.message };
+    } finally {
+      chatState.busy = false;
+    }
+    if (currentPath() === '/ask') { render(); window.scrollTo(0, document.body.scrollHeight); }
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+  draw();
+  const ideas = ['想买个 1200 的机械键盘', '这个月花得怎么样？', '我钱都花哪了？', '下周想出去吃顿好的，预算够吗？'];
+  return h('div', {},
+    headerSub('买不买', '想买东西、或者想知道自己花得怎么样，都可以问', chatState.messages.length ? h('button', { class: 'link small', onclick: () => { chatState.messages = []; render(); } }, '清空') : null, helpButton('买不买怎么用', askHelp())),
+    h('div', { class: 'section-title' }, '理财小课堂'),
+    h('div', { class: 'lesson-scroll' }, lessons(d).map((ls) => h('button', { class: 'lesson', type: 'button', onclick: () => openLesson(ls) },
+      h('b', {}, ls.title), h('span', {}, ls.sub)))),
+    reviewCard(),
+    chatState.messages.length ? null : h('div', { class: 'chips' }, ideas.map((x) => h('button', { type: 'button', class: 'chip', onclick: () => send(x) }, x))),
+    box,
+    h('div', { class: 'chat-input' }, input, h('button', { onclick: () => send(), 'aria-label': '发送' }, '发送')));
+}
+
 // ---------- 我们的花钱方式 ----------
 
 // 一年的账：收入 × 发钱的月数 − 预算 × 12
@@ -1791,6 +2065,38 @@ function setupView() {
 
 // ---------- 设置 ----------
 
+// 手机推送：每晚 9 点没记账提醒；周日、预算月最后一天发总结（账本仓库的定时任务发）
+function pushCard() {
+  const status = h('p', { class: 'muted small' }, '检查中……');
+  const sup = pushSupport();
+  const enable = async () => {
+    try {
+      await saving('正在开启……', async () => {
+        const sub = await subscribe();
+        await store.saveJson(PUSH_FILE, (cfg) => {
+          const subs = (cfg.subscriptions || []).filter((x) => x.endpoint !== sub.endpoint);
+          return { ...cfg, subscriptions: [...subs, { ...sub, device: deviceName(), added: today() }] };
+        }, `开启推送：${deviceName()}`);
+      });
+      toast('已开启，应该马上收到一条「提醒已开启」');
+      render();
+    } catch { /* saving 已提示 */ }
+  };
+  if (sup.ok) {
+    currentSubscription().then((sub) => {
+      status.textContent = sub ? `✓ 这台设备已开启（${Notification.permission === 'granted' ? '通知已允许' : '通知没允许'}）` : '这台设备还没开启';
+    }).catch(() => { status.textContent = '这台设备还没开启'; });
+  } else {
+    status.textContent = sup.why;
+  }
+  return h('div', { class: 'card' },
+    h('h3', {}, '手机提醒'),
+    h('p', { class: 'small' }, '每晚 9 点左右：当天还没记账就提醒你；周日加一句这周的总结，预算月最后一天加一句这个月的总结，合成一条，不多打扰。由 GitHub 定时发送，可能晚几分钟到半小时。'),
+    h('p', { class: 'small muted' }, 'iPhone 上要先「分享 → 添加到主屏幕」，从主屏幕的「账本」打开再点开启。和物品档案的提醒是分开的。'),
+    status,
+    sup.ok ? h('button', { class: 'secondary', onclick: enable }, '在这台设备上开启') : null);
+}
+
 function settingsView() {
   const repo = h('input', { value: settings.repo || DEFAULT_REPO, 'aria-label': '数据仓库' });
   const token = h('input', { type: 'password', value: settings.shared ? '' : settings.token || '', placeholder: settings.shared ? '正在用物品档案的令牌' : 'github_pat_…', 'aria-label': '令牌' });
@@ -1828,6 +2134,7 @@ function settingsView() {
         h('label', {}, '数据仓库', repo),
         h('label', {}, settings.shared ? '令牌（留空 = 用物品档案的）' : '令牌', token)),
       h('button', { class: 'wide', onclick: saveSettings }, '保存并连接')),
+    settings.token && store?.data ? pushCard() : null,
     settings.token ? h('div', { class: 'card' },
       h('p', { class: 'small' }, '数据仓库：', settings.repo || DEFAULT_REPO, '（每次记账都是一次提交，可以在 GitHub 上查看历史）'),
       h('button', { class: 'danger', onclick: logout }, '退出这台设备')) : null);

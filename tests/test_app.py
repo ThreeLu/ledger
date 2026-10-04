@@ -31,6 +31,7 @@ REPO = "test/finance-data"
 TODAY = date.today().isoformat()
 
 STEPS = []
+LAST_AI = []  # 最近一次发给 DeepSeek 的请求（检查有没有发不该发的东西）
 
 
 def step(name):
@@ -597,6 +598,60 @@ def _(c):
     c.go("#/rules")
     expect(p.locator(".rule", has_text="心愿单")).to_contain_text("每月合计最多 ¥400")
 
+@step("买不买：先问问题再给建议、价格换算、硬规则（动应急钱一定不建议）、放进心愿单、决定买去记账、只发汇总、小课堂、回访")
+def _(c):
+    p = c.page
+    c.go("#/")
+    p.get_by_role("link", name="想买个东西？问问买不买……").click()
+    p.wait_for_function("location.hash === '#/ask'")
+    # 小课堂
+    p.get_by_role("button", name=re.compile("^储蓄率")).click()
+    expect(p.locator(".sheet")).to_contain_text("储蓄率 = 存下的钱 ÷ 收入")
+    p.locator(".sheet").get_by_role("button", name="问问 DeepSeek").click()
+    expect(p.get_by_label("想问什么")).to_have_value("关于「储蓄率」，我想问：")
+    p.get_by_label("想问什么").fill("")
+    p.get_by_label("想问什么").dispatch_event("input")
+    # 先问问题
+    p.get_by_role("button", name="想买个 1200 的机械键盘").click()
+    expect(p.locator(".msg.ai").last).to_contain_text("现在用的键盘坏了吗")
+    sent = json.dumps(LAST_AI[0], ensure_ascii=False)
+    assert "食堂午饭" not in sent and "老账" not in sent, "流水明细不该发给 DeepSeek"
+    assert "相当于" in sent and "天的饭钱" in sent and "冷静" in sent, "网站算好的换算和规则要发过去"
+    p.get_by_label("想问什么").fill("坏了，每天都用")
+    p.get_by_role("button", name="发送").click()
+    last = p.locator(".msg.ai").last
+    expect(last.locator(".verdict")).to_have_text("等等再说")
+    expect(last.locator(".facts")).to_contain_text("天的饭钱")
+    expect(last.locator(".facts")).to_contain_text("先冷静")
+    n = len(c.data().get("wishes", []))
+    last.get_by_role("button", name="放进心愿单").click()
+    expect(last).to_contain_text("你的决定：放进心愿单")
+    d = c.data()
+    assert len(d["wishes"]) == n + 1 and d["wishes"][-1]["name"] == "机械键盘" and d["decisions"][-1]["choice"] == "wish"
+    # 硬规则：动到应急钱的，就算 AI 说可以也显示不建议
+    p.get_by_label("想问什么").fill("想买个 99999 的电脑")
+    p.get_by_role("button", name="发送").click()
+    last = p.locator(".msg.ai").last
+    expect(last.locator(".verdict")).to_have_text("不建议")
+    expect(last.locator(".facts")).to_contain_text("会动到应急钱")
+    last.get_by_role("button", name="决定买").click()
+    p.wait_for_function("location.hash.startsWith('#/add')")
+    expect(p.get_by_label("金额", exact=True)).to_have_value("99999")
+    expect(p.get_by_label("备注")).to_have_value("顶配电脑")
+    # 回访：一个多月前决定买的东西
+    d = c.data()
+    d["decisions"].append({"id": "old", "at": (date.today() - timedelta(days=40)).isoformat(), "item": "台灯", "price": 120, "verdict": "buy", "choice": "buy"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/ask")
+    p.reload()
+    expect(p.locator(".review")).to_contain_text("「台灯」买了一个多月了")
+    p.locator(".review").get_by_role("button", name="值").click()
+    expect(p.locator(".review")).to_have_count(0)
+    assert next(x for x in c.data()["decisions"] if x["id"] == "old")["review"] == "worth"
+    # 设置里有手机提醒
+    c.go("#/settings")
+    expect(p.locator(".card", has_text="手机提醒")).to_contain_text("每晚 9 点")
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page
@@ -616,6 +671,19 @@ def fake_externals(page):
     def deepseek(route):
         body = json.loads(route.request.post_data)
         user = body["messages"][-1]["content"]
+        system = body["messages"][0]["content"]
+        LAST_AI.clear()
+        LAST_AI.append(body)
+        if "理财小助手" in system:
+            if "99999" in user:
+                ans = {"answer": "这个太贵了，不过你想买的话也行。", "verdict": "buy", "item": {"name": "顶配电脑", "price": 99999}}
+            elif "键盘" in user:
+                ans = {"answer": "现在用的键盘坏了吗？多久用一次？", "verdict": None, "item": {"name": "机械键盘", "price": 1200}}
+            elif "坏了" in user:
+                ans = {"answer": "每天都用、旧的坏了，值得买；不过 1200 不少，先冷静几天、等双十一看看。", "verdict": "wait", "item": {"name": "机械键盘", "price": 1200}}
+            else:
+                ans = {"answer": "这个月吃饭花得最多，整体在预算内。", "verdict": None, "item": None}
+            return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
         ids = {line.split(" | ")[1]: line.split(" | ")[0] for line in user.splitlines() if line.count(" | ") >= 5}
         ans = {"summary": "先买闲书，耳机等攒够再说。", "order": [ids.get("一本闲书"), ids.get("机械键盘"), ids.get("降噪耳机")],
                "items": [{"id": ids.get("一本闲书"), "when": "心愿基金够了，冷静期过了就买", "need": "想要", "comment": "想想会不会真的读完？"}]}
