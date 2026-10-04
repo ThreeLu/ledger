@@ -384,5 +384,13 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .sync-pill.offline { background: color-mix(in srgb, var(--amber) 18%, var(--card)); color: var(--amber); }
 .sync-pill.error { background: color-mix(in srgb, var(--danger) 16%, var(--card)); color: var(--danger); }
 
+/* 预算建议 */
+.advice-item { padding: 10px 0; border-bottom: 0.5px solid var(--line); }
+.advice-item:last-of-type { border-bottom: 0; }
+.advice-item p { margin: 6px 0; line-height: 1.6; }
+.advice-card .link { padding-left: 0; }
+.link-card { display: block; color: var(--accent); font-weight: 600; }
+.token-banner { display: block; }
+
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }

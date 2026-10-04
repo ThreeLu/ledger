@@ -138,4 +138,37 @@ export function monthSummary(data, day, rate) {
   };
 }
 
+// 一年的总结（自然年 1 月 1 日到 12 月 31 日；开始记账那年从开始记账那天算）
+export function yearSummary(data, year, rate = data.settings.usdRate) {
+  const from = data.openingDate && data.openingDate > `${year}-01-01` ? data.openingDate : `${year}-01-01`;
+  const to = `${year}-12-31`;
+  const st = rangeStats(data, from, to);
+  const byCat = {};
+  for (const t of st.tx) if (isSpend(t)) byCat[t.category] = (byCat[t.category] || 0) + cny(t);
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const m = `${year}-${String(i + 1).padStart(2, '0')}`;
+    const ms = rangeStats(data, `${m}-01`, `${m}-31`);
+    return { m: i + 1, income: ms.income, total: ms.total, saved: ms.income - ms.total, active: `${m}-31` >= from };
+  });
+  const days = new Set(data.tx.filter((t) => t.date >= from && t.date <= to && !t.auto && t.type !== 'adjust').map((t) => t.date));
+  const span = Math.max(1, Math.round((Math.min(new Date(to.replace(/-/g, '/')), new Date()) - new Date(from.replace(/-/g, '/'))) / 86400000) + 1);
+  const inYear = (d0) => d0 && d0 >= from && d0 <= to;
+  const subs = ['c-ai', 'c-soft', 'c-member'].reduce((a, id) => a + (byCat[id] || 0), 0);
+  const dayBefore = addDays(from, -1);
+  return {
+    year, from, to, st, byCat, months,
+    saved: st.income - st.total,
+    rate: st.income ? Math.round(((st.income - st.total) / st.income) * 100) : null,
+    top: topSpends(data, from, to, 5),
+    cats: Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8),
+    days: days.size, span,
+    wishesBought: data.wishes.filter((w) => w.status === 'bought' && inYear(w.boughtAt)),
+    wishesDropped: data.wishes.filter((w) => w.status === 'dropped' && inYear(w.droppedAt)),
+    taxRefund: data.tx.filter((t) => t.category === 'i-tax' && inYear(t.date)).reduce((a, t) => a + cny(t), 0),
+    subs,
+    assetsStart: totalAssets(data, rate, dayBefore),
+    assetsEnd: totalAssets(data, rate, to),
+  };
+}
+
 export { ymd };

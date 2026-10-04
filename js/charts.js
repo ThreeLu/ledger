@@ -35,7 +35,8 @@ export function barChart(bars, { line = null, lineLabel = '', height = 150, colo
     const y0 = y(Math.max(0, b.v));
     const hgt = Math.max(b.v ? 1.5 : 0, Math.abs(y(b.v) - y(0)));
     svg.append(s('rect', { x, y: y0, width: bw, height: hgt, rx: 3, style: `fill:${b.color || color}` }));
-    if (b.v) svg.append(s('text', { x: x + bw / 2, y: b.v >= 0 ? y0 - 4 : y0 + hgt + 11, 'text-anchor': 'middle', class: 'chart-num', text: short(b.v) }));
+    // 负数的数字写在 0 线上方，免得和底下的月份挤在一起
+    if (b.v) svg.append(s('text', { x: x + bw / 2, y: b.v >= 0 ? y0 - 4 : y(0) - 4, 'text-anchor': 'middle', class: 'chart-num', text: short(b.v) }));
     svg.append(s('text', { x: slot * i + slot / 2, y: height - 6, 'text-anchor': 'middle', class: 'chart-label', text: b.label }));
   });
   if (line) {

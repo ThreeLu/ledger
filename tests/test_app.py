@@ -600,7 +600,7 @@ def _(c):
     expect(p.locator(".done-wishes")).to_contain_text("省下 ¥600")
     # 「我们的花钱方式」里有心愿单的规则
     c.go("#/rules")
-    expect(p.locator(".rule", has_text="心愿单")).to_contain_text("每月合计最多 ¥400")
+    expect(p.locator(".rule", has_text="心愿单：有闲钱再买")).to_contain_text("每月合计最多 ¥400")
 
 @step("买不买：先问问题再给建议、价格换算、硬规则（动应急钱一定不建议）、放进心愿单、决定买去记账、只发汇总、小课堂、回访")
 def _(c):
@@ -778,6 +778,63 @@ def _(c):
     c.go("#/list")
     expect(p.locator(".tx", has_text="另一台设备")).to_be_visible()
     expect(p.locator(".tx", has_text="离线记的")).to_be_visible()
+
+@step("暑假生活费自动目标、兼职三成进心愿基金、令牌到期提醒、预算调整建议（采用后改预算）、年度总结")
+def _(c):
+    p = c.page
+    # 令牌还有 5 天过期
+    exp = (date.today() + timedelta(days=5)).isoformat()
+    p.evaluate(f"""() => {{ const s = JSON.parse(localStorage.getItem('inventory-settings')); s.tokenExpires = '{exp}'; localStorage.setItem('inventory-settings', JSON.stringify(s)); }}""")
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".token-banner")).to_contain_text("还有 5 天过期")
+    # 暑假生活费
+    c.go("#/goals")
+    card = p.locator(".card.goal", has_text="暑假生活费")
+    expect(card).to_contain_text("自动")
+    expect(card.get_by_role("button", name="删掉")).to_have_count(0)
+    # 兼职三成：前面记过 1600 + 去年 800 的兼职
+    c.go("#/wishes")
+    expect(p.get_by_text("其中兼职收入的三成进来了 ¥720")).to_be_visible()
+    # 预算建议：挑最近 3 个完整、非暑假的预算月，日常每月只花 300
+    d = c.data()
+    cur = period_start(date.today())
+    periods = []
+    s0 = cur
+    while len(periods) < 3:
+        prev = period_start(s0 - timedelta(days=1))
+        if prev.month not in (7, 8):
+            periods.append((prev, s0))
+        s0 = prev
+    d["openingDate"] = period_start(s0 - timedelta(days=1)).isoformat()
+    inside = lambda t: any(a.isoformat() <= t["date"] < b.isoformat() for a, b in periods)  # noqa: E731
+    d["tx"] = [t for t in d["tx"] if not (inside(t) and t["type"] in ("expense", "writeoff"))]
+    for a, _ in periods:
+        d["tx"].append({"id": f"tissue{a}", "type": "expense", "date": a.isoformat(), "account": "a-live", "amount": 300, "category": "c-tissue", "note": "", "createdAt": "2020-01-01T00:00:00Z"})
+        d["tx"].append({"id": f"lunch{a}", "type": "expense", "date": a.isoformat(), "account": "a-live", "amount": 1900, "category": "c-lunch", "note": "", "createdAt": "2020-01-01T00:00:00Z"})
+        d["tx"].append({"id": f"fun{a}", "type": "expense", "date": a.isoformat(), "account": "a-live", "amount": 280, "category": "c-fun", "note": "", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".cell", has_text="条调整建议")).to_be_visible()
+    c.go("#/budget")
+    adv = p.locator(".advice-card")
+    daily = adv.locator(".advice-item", has_text="日常")
+    expect(daily).to_contain_text("¥700 → ¥350")
+    expect(daily).to_contain_text("纸巾清洁 月均 ¥300")
+    expect(daily).to_contain_text("每月多存 ¥350")
+    expect(adv.locator(".advice-item", has_text="订阅")).to_contain_text("¥900 → ¥150")
+    expect(adv.locator(".advice-item", has_text="吃饭")).to_have_count(0)  # 吃饭花得和预算差不多，不用调
+    adv.get_by_role("button", name=re.compile("^全部采用")).click()
+    expect(adv).to_contain_text("不用调")
+    b = c.data()["budget"]
+    assert (b["daily"], b["sub"], b["food"]) == (350, 150, 2000), b
+    assert len(c.data()["budgetHistory"]) == 2
+    # 年度总结
+    c.go("#/summary?mode=year")
+    expect(p.locator(".summary-head")).to_contain_text(f"{date.today().year} 年收入")
+    expect(p.get_by_role("img", name="每月存下")).to_be_visible()
+    expect(p.get_by_text("花得最多的类别")).to_be_visible()
 
 @step("导出全部账目 Excel")
 def _(c):

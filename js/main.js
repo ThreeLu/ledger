@@ -3,13 +3,13 @@ import { Store, newId } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays,
-  receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS,
+  receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus,
 } from './money.js';
 import { askJson } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
-import { weekOf, weekSummary, monthSummary } from './summary.js';
+import { weekOf, weekSummary, monthSummary, yearSummary } from './summary.js';
 import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
@@ -345,6 +345,11 @@ const EXPLAIN = {
     '漏记、记错几笔很正常。每个预算月对一次，账就不会越积越乱，网站上的数字才可信。',
     `${x.text}。到「更多 → 对账」，对得上的不用填，对不上的填实际余额就行，1 分钟就好。`,
   ],
+  summer: (x) => [
+    '暑假那两个预算月没有收入，生活费要从存钱卡里拿出来。',
+    '这笔钱是平时每月一点点留好的（「存款目标」里的暑假生活费），花它是计划内的，不是在「吃老本」。',
+    `${x.action}`,
+  ],
   tax: (x) => [
     '兼职发钱时，单位一般会先预扣 20% 左右的个税。但个税按一整年算，学生一年的应税收入通常不高，多扣的可以在第二年 3 月 1 日到 6 月 30 日申请退回。',
     '这是你自己的钱，不办就白白放弃了；整个过程在手机上十几分钟就能办完。',
@@ -420,6 +425,17 @@ function budgetCard(st, part) {
     st.spent.none ? h('p', { class: 'muted small' }, `另有不占预算的花销 ${money(st.spent.none)}（手续费、出差自付等）`) : null);
 }
 
+// 令牌到期：账本和物品档案共用一个令牌，到期日填在物品档案的设置里
+function tokenNotice() {
+  let exp = '';
+  try { exp = (JSON.parse(localStorage.getItem('inventory-settings')) || {}).tokenExpires || ''; } catch { /* 没有 */ }
+  if (!exp) return null;
+  const left = Math.round((new Date(exp.replace(/-/g, '/')) - new Date(today().replace(/-/g, '/'))) / 86400000);
+  if (left > 14) return null;
+  return h('a', { class: 'banner warn token-banner', href: '/inventory/#/settings' },
+    left < 0 ? 'GitHub 令牌已经过期了，账本和物品档案都打不开，点这里去换新的' : `GitHub 令牌还有 ${left} 天过期（账本和物品档案共用），点这里去续期`);
+}
+
 function homeView() {
   const d = store.data;
   const hl = health(d, today(), usdRate());
@@ -431,6 +447,7 @@ function homeView() {
   const recent = [...d.tx].sort(txOrder).slice(0, 5);
   return h('div', {},
     headerSub('账本', `${p.label} · 第 ${p.dayIndex} 天`, helpButton('首页怎么看', HOME_HELP)),
+    tokenNotice(),
     h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '这个月还能花'),
@@ -443,6 +460,8 @@ function homeView() {
       h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, x.text)),
       h('span', { class: 'meta' }, x.value), icon('chev', 'i chev')))),
     summaryLinks(p),
+    budgetAdvice(d, today(), usdRate()).items.length ? h('div', { class: 'group' }, cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)',
+      title: `预算有 ${budgetAdvice(d, today(), usdRate()).items.length} 条调整建议`, sub: '根据你最近几个月实际的花销' })) : null,
     flowCard(st, part),
     budgetCard(st, part),
     recent.length ? [h('div', { class: 'section-title' }, '最近记的'), h('div', { class: 'card tx-list' }, recent.map((t) => txRow(t))),
@@ -814,7 +833,8 @@ function addView(q) {
         }
       });
       if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' || paidBy ? last.account : st.account });
-      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}`);
+      const jobShare = !editing && st.type === 'income' && st.category === 'i-job' && d.settings.sideIncomeSave != null ? round2(n * (1 - d.settings.sideIncomeSave)) : 0;
+      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}${jobShare ? `，其中 ${money(jobShare)} 进了心愿基金` : ''}`);
       if (editing) history.back(); else go('#/', true);
     } catch { /* 已提示 */ }
   };
@@ -1355,16 +1375,17 @@ function reconcileView() {
 const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月总结', ['按预算月算（和发钱对齐）。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
+  ['年总结', ['按自然年：一年存了多少、储蓄率、总资产多了多少、每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
 ];
 const WEEKDAYS = '一二三四五六日';
 
 function summaryView(q) {
   const d = store.data;
-  const mode = q.mode === 'month' ? 'month' : 'week';
+  const mode = ['month', 'year'].includes(q.mode) ? q.mode : 'week';
   const day = q.day || today();
   const link = (m, dd) => `#/summary?mode=${m}&day=${dd}`;
-  const seg = h('div', { class: 'segmented' }, [['week', '周'], ['month', '月']].map(([k, t]) =>
+  const seg = h('div', { class: 'segmented' }, [['week', '周'], ['month', '月'], ['year', '年']].map(([k, t]) =>
     h('a', { class: `seg${mode === k ? ' on' : ''}`, href: link(k, today()) }, t)));
   const navRow = (label, sub, prev, next) => h('div', { class: 'period-nav' },
     h('a', { class: 'icon-btn', href: link(mode, prev), 'aria-label': '上一个' }, '‹'),
@@ -1395,6 +1416,8 @@ function summaryView(q) {
       ws.top.length ? h('div', { class: 'card tx-list' }, h('h3', {}, '这周最大的几笔'), ws.top.map((t) => txRow(t))) : null);
   }
 
+  if (mode === 'year') return yearView(d, Number(day.slice(0, 4)), head, seg, navRow);
+
   const ms = monthSummary(d, day, usdRate());
   const p = ms.p;
   const upto = ms.curve.filter((x) => x.day <= today());
@@ -1405,6 +1428,7 @@ function summaryView(q) {
     h('div', { class: 'card summary-head' }, h('p', {}, ms.headline),
       h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), ms.advice)),
     flowCard(ms.st, ms.part, '钱怎么分的'),
+    budgetAdvice(d, today(), usdRate()).items.length ? h('a', { class: 'card link-card', href: '#/budget' }, `预算有调整建议，去看看 →`) : null,
     h('div', { class: 'card' }, h('h3', {}, '花钱曲线（生活花销）'),
       lineChart([
         { values: ms.curve.map((x) => x.planned), color: 'var(--muted)', dashed: true },
@@ -1423,10 +1447,47 @@ function summaryView(q) {
       h('p', {}, `月初 ${money(ms.owedStart)} → 月底 ${money(ms.owedEnd)}`)) : null);
 }
 
+// 年度总结
+function yearView(d, year, head, seg, navRow) {
+  const ys = yearSummary(d, year, usdRate());
+  const started = !d.openingDate || d.openingDate <= ys.to;
+  const nav = navRow(`${year} 年`, ys.from > `${year}-01-01` ? `从 ${md(ys.from)}开始记账` : null, `${year - 1}-12-31`, `${year + 1}-01-01`);
+  if (!started || (!ys.st.tx.length)) return h('div', {}, head, seg, nav, h('div', { class: 'card' }, h('p', { class: 'muted' }, '这一年还没有记录。')));
+  const groups = GROUPS.filter((g) => ys.st.byGroup[g.id]);
+  const maxCat = Math.max(1, ...ys.cats.map(([, v]) => v));
+  const dropSaved = ys.wishesDropped.reduce((a, w) => a + Number(w.price), 0);
+  return h('div', {}, head, seg, nav,
+    h('div', { class: 'card summary-head' },
+      h('p', {}, `${year} 年收入 ${money(ys.st.income)}，花了 ${money(ys.st.total)}，存下 ${money(ys.saved)}${ys.rate != null ? `，储蓄率 ${ys.rate}%` : ''}。`),
+      h('p', { class: 'muted small' }, `总资产 ${money(ys.assetsStart)} → ${money(ys.assetsEnd)}（${ys.assetsEnd >= ys.assetsStart ? '多了' : '少了'} ${money(Math.abs(ys.assetsEnd - ys.assetsStart))}）· 记了 ${ys.days} 天账`)),
+    h('div', { class: 'card' }, h('h3', {}, '每月存下'),
+      barChart(ys.months.filter((m) => m.active).map((m) => ({ label: `${m.m}月`, v: Math.round(m.saved), color: m.saved >= 0 ? 'var(--sage)' : 'var(--danger)' })), { title: '每月存下' }),
+      h('p', { class: 'muted small' }, '按自然月算；7、8 月没有收入，是负的很正常。')),
+    h('div', { class: 'card' }, h('h3', {}, '钱花在哪了'),
+      h('div', { class: 'donut-row' },
+        donut(GROUPS.map((g) => ({ name: g.name, v: ys.st.byGroup[g.id], color: g.color })), { center: money(ys.st.total), sub: '这一年', title: '钱花在哪了' }),
+        h('div', { class: 'donut-legend' }, groups.map((g) => h('div', {}, h('span', {}, h('i', { style: `background:${g.color}` }), g.name), h('b', {}, money(ys.st.byGroup[g.id]))))))),
+    ys.cats.length ? h('div', { class: 'card' }, h('h3', {}, '花得最多的类别'),
+      ys.cats.map(([id, v]) => h('div', { class: 'budget-row' },
+        h('div', { class: 'budget-top' }, h('span', {}, catName(id)), h('span', { class: 'muted' }, money(v))),
+        bar(v / maxCat, GROUPS.find((g) => g.id === (category(d, id)?.group || 'daily'))?.color)))) : null,
+    ys.top.length ? h('div', { class: 'card tx-list' }, h('h3', {}, '最大的几笔'), ys.top.map((t) => txRow(t))) : null,
+    h('div', { class: 'card' }, h('h3', {}, '这一年还有'),
+      h('div', { class: 'tax-grid' },
+        h('span', {}, '实现的心愿'), h('b', {}, ys.wishesBought.length ? `${ys.wishesBought.length} 个` : '—'),
+        h('span', {}, '放弃的心愿'), h('b', {}, ys.wishesDropped.length ? `${ys.wishesDropped.length} 个，省下 ${money(dropSaved)}` : '—'),
+        h('span', {}, '订阅一共'), h('b', {}, money(ys.subs)),
+        h('span', {}, '个税退回'), h('b', {}, ys.taxRefund ? money(ys.taxRefund) : '—')),
+      ys.wishesBought.length ? h('p', { class: 'muted small' }, `实现了：${ys.wishesBought.map((w) => w.name).join('、')}`) : null));
+}
+
 // 首页上的总结入口：周一、周二提醒看上周；预算月头三天提醒看上个月
 function summaryLinks(p) {
   const wd = new Date().getDay();
   const out = [];
+  if (today().slice(5) <= '01-07' && store.data.openingDate < today().slice(0, 4)) {
+    out.push(cell({ href: `#/summary?mode=year&day=${Number(today().slice(0, 4)) - 1}-12-31`, ic: 'chart', color: 'var(--sage)', title: '去年的年度总结出来了' }));
+  }
   if (wd === 1 || wd === 2) out.push(cell({ href: `#/summary?mode=week&day=${addDays(weekOf(today()).start, -1)}`, ic: 'chart', color: 'var(--blue)', title: '上周总结出来了' }));
   if (p.dayIndex <= 3 && !(store.data.openingDate > addDays(p.start, -1))) {
     out.push(cell({ href: `#/summary?mode=month&day=${addDays(p.start, -1)}`, ic: 'chart', color: 'var(--accent)', title: '上个预算月的总结出来了' }));
@@ -1457,7 +1518,9 @@ function wishHelp(d) {
   const big = money(d.settings.wishBigFrom);
   return [
     ['心愿单是什么', ['想买、但不急，有闲钱才买的东西。先放进来，冷静几天再决定。', `${big} 以内是小额心愿，超过 ${big} 是大额心愿。`]],
-    ['小额心愿的钱', ['心愿基金：每个预算月结束时，吃饭 + 日常 + 自由钱没花完的，自动进心愿基金；哪个月超了，从基金里扣回来（扣到 0 为止）。', '省下来的钱就能拿去买想要的小东西，存款一分不动。']],
+    ['小额心愿的钱', ['心愿基金：每个预算月结束时，吃饭 + 日常 + 自由钱没花完的，自动进心愿基金；哪个月超了，从基金里扣回来（扣到 0 为止）。',
+      d.settings.sideIncomeSave != null ? `兼职收入的 ${Math.round((1 - d.settings.sideIncomeSave) * 100)}% 也自动进心愿基金（记兼职收入时就算进来）。` : '',
+      '省下来的钱就能拿去买想要的小东西，存款一分不动。'].filter(Boolean)],
     ['大额心愿的钱', [`从每月存下的钱里给大额心愿攒，所有大额心愿加起来每月最多 ${money(d.settings.wishMonthlyCap)}。`, '按心愿单的顺序一个一个攒，攒够一个再攒下一个。用 ↑↓ 调顺序。']],
     ['冷静期', [`新加的心愿先冷静 ${d.settings.coolDays} 天。过了几天还想要，再考虑买。`]],
     ['买了以后', ['点「买了」，钱从心愿基金或攒好的那份里出，记一笔「心愿」花销，不占当月预算。', '钱一直在你的卡里，网站只是记着这里面有多少是给心愿的，不用转账。']],
@@ -1676,6 +1739,7 @@ function wishesView() {
       h('div', { class: 'big-num' }, money(f.small)),
       h('div', { class: 'muted small' }, last ? `${last.p.label}${last.leftover >= 0 ? `省下 ${money(last.leftover)}，进来了` : `超了 ${money(-last.leftover)}，从基金里扣了 ${money(-last.change)}`}`
         : '每个预算月结束时，生活预算没花完的会进来。'),
+      f.fromJobs ? h('div', { class: 'muted small' }, `其中兼职收入的三成进来了 ${money(f.fromJobs)}`) : null,
       h('div', { class: 'muted small' }, `大额心愿每月最多攒 ${money(f.cap)}`)),
     open.length ? h('div', { class: 'card' },
       adv ? [h('h3', {}, `DeepSeek 的建议（${md(adv.at)}）`), h('p', { class: 'ai-summary' }, adv.summary)] : h('p', { class: 'muted small' }, 'DeepSeek 可以帮你看：先买哪个、什么时候买、真需要还是一时想要。'),
@@ -2144,17 +2208,20 @@ function goalsView() {
   return h('div', {},
     headerSub('存款目标', '给以后一定会用到的大钱提前留好', h('button', { class: 'icon-btn', 'aria-label': '加一个存款目标', onclick: () => edit() }, icon('plus')), helpButton('存款目标怎么算', [
       ['是什么', ['以后一定会用到的一大笔钱，比如毕业到第一笔工资之间的过渡金。和心愿不一样：心愿是「想要」，这是「到时候必须有」。']],
-      ['进度怎么算', [`不用另外存，就看${floorName}：扣掉应急钱底线 ${money(d.settings.emergencyFloor)} 和大额心愿已经攒的，剩下的算进目标。`, '每月按计划存钱，进度会自己往上走。旁边的「每月要留」是还差的钱平均到剩下的月份。']],
+      ['进度怎么算', [`不用另外存，就看${floorName}：扣掉应急钱底线 ${money(d.settings.emergencyFloor)} 和大额心愿已经攒的，剩下的按顺序算进目标（排前面的先算）。`, '每月按计划存钱，进度会自己往上走。旁边的「每月要留」是还差的钱平均到剩下的月份。']],
+      ['暑假生活费', ['没有收入的那几个月（暑假）的生活费，网站自动算成一个目标，排在最前面。到了暑假，首页会提醒你从存钱卡转生活费出来。']],
     ])),
     list.length ? list.map(({ g, have, need, months, perMonth }) => h('div', { class: 'card goal' },
       h('div', { class: 'wish-top' },
-        h('div', { class: 'grow' }, h('div', { class: 'wish-name' }, g.name), h('div', { class: 'muted small' }, `${md(g.by)}（${g.by.slice(0, 4)} 年）前${g.note ? ` · ${g.note}` : ''}`)),
+        h('div', { class: 'grow' }, h('div', { class: 'wish-name' }, g.name, g.auto ? h('span', { class: 'badge' }, '自动') : null),
+          h('div', { class: 'muted small' }, `${md(g.by)}（${g.by.slice(0, 4)} 年）前${g.note ? ` · ${g.note}` : ''}`)),
         h('div', { class: 'wish-price' }, money(g.target))),
       bar(g.target ? have / g.target : 0, 'var(--sage)'),
       h('div', { class: 'muted small wish-progress' }, need > 0 ? `已经有 ${money(have)}，还差 ${money(need)}；还有 ${months} 个月，平均每月留 ${money(perMonth)} 就够` : `已经够了 ✓（${money(have)}）`),
-      h('div', { class: 'wish-actions' }, h('span', { class: 'grow' }),
-        h('button', { class: 'link', onclick: () => edit(g) }, '改'),
-        h('button', { class: 'link danger-text', onclick: () => remove(g) }, '删掉'))))
+      g.auto ? h('p', { class: 'muted small' }, '按每月预算和没有收入的月份自动算，改预算它会跟着变。排在最前面，因为它最先用到。')
+        : h('div', { class: 'wish-actions' }, h('span', { class: 'grow' }),
+          h('button', { class: 'link', onclick: () => edit(g) }, '改'),
+          h('button', { class: 'link danger-text', onclick: () => remove(g) }, '删掉'))))
       : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有目标。点右上角 ＋ 加，比如「毕业过渡金」。')));
 }
 
@@ -2193,11 +2260,11 @@ function rulesView() {
     R(`应急钱不低于 ${money(d.settings.emergencyFloor)}`, `${floorName}里至少留 ${money(d.settings.emergencyFloor)}，专门应付意外（生病、电脑坏了、收入晚到）。买东西不能动它。`, '有这笔钱在，意外来了也不会慌，不用借钱。');
   }
   if (months.length) {
-    R(`${months.join('、')} 月没有收入`, `一年只有 ${plan.paidMonths} 个月有收入，但 12 个月都要花钱。所以有收入的月份每月要多留约 ${money(reserve)}，到时候从存钱卡转生活费出来。`, '不提前留，到时候会觉得存款在「变少」，其实是计划内的。');
+    R(`${months.join('、')} 月没有收入`, `一年只有 ${plan.paidMonths} 个月有收入，但 12 个月都要花钱。所以有收入的月份每月要多留约 ${money(reserve)}，到时候从存钱卡转生活费出来。「存款目标」里自动有一个「暑假生活费」，能看到留够了没有。`, '不提前留，到时候会觉得存款在「变少」，其实是计划内的。');
   }
   if (d.settings.sideIncomeSave != null) {
     const k = Math.round(d.settings.sideIncomeSave * 100);
-    R('兼职的钱', `${k}% 存下，${100 - k}% 当额外的自由钱。`, '既能多存，又不会觉得「赚了钱却花不到」。');
+    R('兼职的钱', `${k}% 存下，${100 - k}% 自动进心愿基金，可以拿去买心愿单上的东西。`, '既能多存，又不会觉得「赚了钱却花不到」。');
   }
   R('转账不算花钱', '充校园卡、充值美元账户、存钱卡转生活费卡，都只是把钱从一个口袋换到另一个口袋，记「转账」。真正刷卡、扣费的时候才算花销。', '这样每个月花了多少、花在哪才准；每个账户的余额也能和实际对上。');
   if (d.accounts.some((a) => a.currency === 'USD')) {
@@ -2223,6 +2290,48 @@ function rulesView() {
 
 // ---------- 预算 ----------
 
+// 预算调整建议卡片（预算页最上面）
+function adviceCard() {
+  const d = store.data;
+  const t = today();
+  const adv = budgetAdvice(d, t, usdRate());
+  const plan = yearPlan(d);
+  const applyOne = (items) => save(`采用预算建议：${items.map((x) => `${x.name} ${x.from}→${x.to}`).join('，')}`, (data) => {
+    for (const x of items) {
+      data.budgetHistory ||= [];
+      data.budgetHistory.push({ at: today(), group: x.group, from: data.budget[x.group], to: x.to });
+      data.budget[x.group] = x.to;
+    }
+  }).then(() => { toast('预算改好了，从现在起按新的算'); render(); }).catch(() => {});
+  const dismiss = (x) => save(`暂不采用预算建议：${x.name}`, (data) => {
+    data.budgetAdviceDismissed = { ...(data.budgetAdviceDismissed || {}), [x.group]: periodFor(data, today()).start };
+  }).then(render).catch(() => {});
+  const effect = (x) => {
+    const yearly = -x.delta * 12;
+    const parts = [x.delta < 0 ? `每月多存 ${money(-x.delta)}，一年 ${money(yearly)}` : `每月少存 ${money(x.delta)}，一年 ${money(-yearly)}`];
+    if (x.delta < 0 && x.group !== 'sub') parts.push('每月月底进心愿基金的结余会少一些');
+    if (x.delta > 0 && plan.yearIn) parts.push(`一年还能存约 ${money(plan.yearIn - plan.yearOut - x.delta * 12)}`);
+    return parts.join('；');
+  };
+  const askAi = () => { chatState.draft = '我的预算该怎么调？哪些地方花得多了？'; go('#/ask'); };
+  return h('div', { class: 'card advice-card' },
+    h('h3', {}, '预算调整建议'),
+    adv.items.length ? [
+      adv.items.map((x) => h('div', { class: 'advice-item' },
+        h('div', { class: 'budget-top' }, h('b', {}, x.name), h('span', {}, `${money(x.from)} → `, h('b', { class: x.delta < 0 ? 'good-text' : 'soon' }, money(x.to)))),
+        h('p', { class: 'small' }, x.why),
+        x.top.length ? h('p', { class: 'muted small' }, `花得多的：${x.top.join('、')}`) : null,
+        h('p', { class: 'muted small' }, effect(x)),
+        h('div', { class: 'row-btns' },
+          h('button', { class: 'small', onclick: () => applyOne([x]) }, '采用'),
+          h('button', { class: 'small secondary', onclick: () => dismiss(x) }, '这个月先不改')))),
+      adv.items.length > 1 ? h('button', { class: 'secondary wide', onclick: () => applyOne(adv.items) }, `全部采用（每月预算 ${money(budgetTotal(d))} → ${money(budgetTotal(d) + adv.items.reduce((a, x) => a + x.delta, 0))}）`) : null,
+    ] : h('p', { class: 'muted small' }, adv.waiting
+      ? `吃饭、日常、自由钱的建议要等记满 ${adv.waiting === 2 ? '两' : '一'}个完整的预算月（开始记账那个月和暑假不算），到时候这里会根据你实际的花销给建议。`
+      : '最近几个月的花销和预算很贴合，不用调。'),
+    h('button', { class: 'link small', onclick: askAi }, '想聊聊怎么调？问问 DeepSeek →'));
+}
+
 function budgetView() {
   const d = store.data;
   const inputs = {};
@@ -2247,9 +2356,11 @@ function budgetView() {
   };
   return h('div', { class: 'form' },
     headerSub('预算', '每个预算月（15 号到下个月 14 号）的计划', helpButton('预算怎么定', [
+      ['调整建议', ['网站看最近 3 个完整的预算月（开始记账那个月和暑假不算）：一直有富余的建议调低（多出来的进存款），总是超的建议调高（定得太紧容易放弃）。订阅按登记的实际金额算。', '调低预算 = 多存钱，但每月进心愿基金的结余会少一些。要不要采用你来定，「这个月先不改」下个预算月会再看一次。']],
       ['怎么定的', ['这些数是我们按你的饮食习惯和固定扣费一起估的。第一两个月照常花、照实记，再按真实数据调。']],
       ['改了会怎样', ['首页的「还能花」「花钱节奏」「本月存钱」都会按新数字算。以前的流水不受影响。']],
     ])),
+    adviceCard(),
     h('div', { class: 'card' },
       field('吃饭', 'food', d.budget.food, catList('food')),
       field('日常', 'daily', d.budget.daily, catList('daily')),

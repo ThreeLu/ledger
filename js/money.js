@@ -355,10 +355,15 @@ export function wishFunds(data, today) {
   const events = [
     ...periods.map((p) => ({ date: p.end, v: livingBudget(data) * partial(data, p).factor - periodStats(data, p).living, p })),
     ...data.tx.filter((t) => t.category === 'c-wish' && t.wishKind === 'small' && t.date <= today).map((t) => ({ date: t.date, v: -cny(t) })),
+    // 兼职收入：存下 sideIncomeSave（七成），剩下的（三成）进心愿基金
+    ...(data.settings.sideIncomeSave != null ? data.tx.filter((t) => t.type === 'income' && t.category === 'i-job' && t.date <= today)
+      .map((t) => ({ date: t.date, v: r2(cny(t) * (1 - data.settings.sideIncomeSave)), job: true })) : []),
   ].sort((a, b) => a.date.localeCompare(b.date) || (a.p ? 1 : -1));
   let small = 0;
+  let fromJobs = 0;
   const log = [];
   for (const e of events) {
+    if (e.job) fromJobs += e.v;
     if (!e.p) { small += e.v; continue; }
     const before = small;
     small = Math.max(0, small + e.v);
@@ -376,7 +381,7 @@ export function wishFunds(data, today) {
       if (add > 0) { saved[w.id] += add; left -= add; }
     }
   }
-  return { small: r2(small), log, saved, cap };
+  return { small: r2(small), log, saved, cap, fromJobs: r2(fromJobs) };
 }
 
 // 还没买的大额心愿：按现在的顺序、每月上限，大概哪个预算月能攒够
@@ -442,18 +447,92 @@ export function yearlyCost(data, r, rate = data.settings.usdRate) {
 
 // ---------- 存款目标（比如毕业过渡金）----------
 // 不另外挪钱：存钱卡里扣掉应急钱底线、大额心愿已攒的，剩下的按目标顺序算进度。
+// 暑假生活费：summerMonths 没有收入，自动成为最前面的存款目标（7 月发钱日的前一天存够那几个月的预算）
+export function summerGoal(data, today) {
+  const months = data.settings.summerMonths || [];
+  if (!months.length || !data.settings.expectedIncome) return null;
+  const first = Math.min(...months);
+  const sd = data.settings.periodStartDay || 1;
+  let y = Number(today.slice(0, 4));
+  const startOf = (yy) => `${yy}-${String(first).padStart(2, '0')}-${String(sd).padStart(2, '0')}`;
+  if (today >= startOf(y)) y += 1;
+  return { id: 'auto-summer', auto: true, name: `${y} 年暑假生活费`, target: budgetTotal(data) * months.length, by: addDays(startOf(y), -1),
+    note: `${months.join('、')} 月没有收入，这两个月的生活费要提前留好` };
+}
+
+// 暑假里（没有收入的预算月）开头几天：提醒从存钱卡转生活费出来
+export function summerTransfer(data, today) {
+  const p = periodFor(data, today);
+  if (!p.summer || p.dayIndex > 5) return null;
+  return { amount: livingBudget(data), period: p };
+}
+
 export function goalStatus(data, today) {
   const floorAcc = data.settings.floorAccount;
   const big = wishFunds(data, today);
   const bigSaved = data.wishes.filter((w) => w.status === 'open').reduce((s, w) => s + (big.saved[w.id] || 0), 0);
   let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0) - bigSaved);
-  return data.goals.map((g) => {
+  const sg = summerGoal(data, today);
+  return [...(sg ? [sg] : []), ...data.goals].map((g) => {
     const have = Math.min(pool, Number(g.target) || 0);
     pool -= have;
     const months = g.by ? Math.max(1, Math.round(daysBetween(today, g.by) / 30.4)) : null;
     const need = Math.max(0, (Number(g.target) || 0) - have);
     return { g, have: r2(have), need: r2(need), months, perMonth: months ? Math.ceil(need / months) : null };
   });
+}
+
+// ---------- 预算调整建议 ----------
+// 只看完整的、有收入的预算月（开始记账那个不完整的月、暑假不算），最近 3 个；至少 2 个才给吃饭 / 日常 / 自由钱的建议。
+// 订阅按现在登记的固定扣费算，马上就能给。建议只是建议，用户点「采用」才改。
+
+export const ADVICE_MONTHS = 3;
+const roundUp = (n, step = 50) => Math.ceil(n / step) * step;
+export const FREE_MIN = 200; // 自由钱不建议低于这个数：留一点余地，预算才坚持得下去
+
+export function budgetAdvice(data, today, rate = data.settings.usdRate) {
+  const full = closedPeriods(data, today).filter((p) => !partial(data, p).isPartial && !p.summer).slice(-ADVICE_MONTHS);
+  const out = [];
+  const dismissed = data.budgetAdviceDismissed || {};
+  const cur = periodFor(data, today).start;
+  const label = (g) => GROUPS.find((x) => x.id === g).name;
+  if (full.length >= 2) {
+    for (const g of LIVING) {
+      const b = Number(data.budget[g]) || 0;
+      if (!b) continue;
+      const stats = full.map((p) => periodStats(data, p));
+      const spent = stats.map((st) => st.spent[g]);
+      const avg = spent.reduce((a, x) => a + x, 0) / spent.length;
+      const max = Math.max(...spent);
+      // 这几个月这一组里花得最多的类别
+      const cats = {};
+      for (const st of stats) for (const [id, v] of Object.entries(st.byCat)) if (category(data, id)?.group === g) cats[id] = (cats[id] || 0) + v;
+      const top = Object.entries(cats).sort((a, b2) => b2[1] - a[1]).slice(0, 3).map(([id, v]) => `${category(data, id)?.name || '其他'} 月均 ${money(v / full.length)}`);
+      const over = spent.filter((x) => x > b * 1.05).length;
+      let to = null;
+      let why = '';
+      if (spent.every((x) => x <= b * 0.85)) {
+        to = Math.max(roundUp(Math.max(avg * 1.1, max)), g === 'free' ? FREE_MIN : 0);
+        if (to > b - 50) to = null;
+        else why = `最近 ${full.length} 个月平均花 ${money(avg)}，最多的一个月 ${money(max)}，预算 ${money(b)} 一直有富余。调到 ${money(to)} 仍然比花得最多的那个月宽松。`;
+      } else if (over >= 2) {
+        to = roundUp(avg);
+        if (to <= b) to = null;
+        else why = `最近 ${full.length} 个月有 ${over} 个月超了，平均花 ${money(avg)}。预算定得太紧总是超，就容易「反正都超了」不管了。也可以不调，下个月留意花得多的几类。`;
+      }
+      if (!to || dismissed[g] === cur) continue;
+      out.push({ group: g, name: label(g), from: b, to, why, top, delta: to - b });
+    }
+  }
+  // 订阅：按登记的固定扣费算每月实际要多少
+  const subs = data.recurring.reduce((sum, r) => sum + yearlyCost(data, r, rate), 0) / 12;
+  const b = Number(data.budget.sub) || 0;
+  if (data.recurring.length && Math.abs(roundUp(subs) - b) >= 50 && dismissed.sub !== cur) {
+    const to = roundUp(subs);
+    out.push({ group: 'sub', name: '订阅', from: b, to, delta: to - b, top: [],
+      why: `现在登记的订阅（${data.recurring.map((r) => r.name).join('、')}）按今天的汇率每月大约 ${money(subs)}。预算跟着实际走，「还能花」和「存钱」才算得准。` });
+  }
+  return { periods: full, items: out, waiting: full.length < 2 ? 2 - full.length : 0 };
 }
 
 // ---------- 健康指标 ----------
@@ -584,6 +663,16 @@ export function health(data, today, rate = data.settings.usdRate) {
       key: 'reconcile', name: '对账', value: '还没对',
       level: 'warn', text: '新的预算月开始了，花 1 分钟对一下各账户余额',
       action: '新的预算月开始了，到「更多 → 对账」看一眼各账户的实际余额，对不上的填一下。',
+    });
+  }
+
+  // 暑假：提醒从存钱卡转生活费
+  const stf = summerTransfer(data, today);
+  if (stf) {
+    out.push({
+      key: 'summer', name: '暑假生活费', value: money(stf.amount),
+      level: 'warn', text: '这个预算月没有收入，从存钱卡转生活费出来',
+      action: `暑假没有收入：从${account(data, data.settings.floorAccount)?.name || '存钱卡'}转这个月的生活费 ${money(stf.amount)} 到平时花钱的卡上（记一笔转账）。这是早就留好的钱，放心用。`,
     });
   }
 

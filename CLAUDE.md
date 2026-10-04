@@ -37,6 +37,11 @@
 - 买不买（`#/ask`）：话里有价格时网站先算 `priceFacts`（几天饭钱、几个月自由钱、存钱目标晚几天、大额要攒几个月）和硬规则（价格 > 总资产 − 应急底线 − 本月还要花的生活费 → 一定「不建议」，前端强制；大额建议先冷静），连同 `moneyContext`（只有汇总数字，不发流水明细和备注）给 DeepSeek。聊天只在内存，决定存 `decisions`，买了的 30 天后回访。理财小课堂（`lessons()`）是写死的大白话 + 他自己的数字，不推荐具体产品。
 - 个税退税：兼职收入（`i-job`）可填 `tax`（被预扣的个税），`taxYear()` 按年汇总；每年 3/1–6/30（`taxSeason`）上一年有预扣且没办（`taxYears[年].done`）就首页提醒、推送（3/1、3/15、4/15、5/15、6/15、6/25）；办好后记一笔 `i-tax` 收入。
 - 订阅体检：`subReview.last` 起满 90 天提醒（首页 + 推送：当天、之后每 14 天），`#/subs` 可改金额、加每月 / 每年的订阅、停掉（只停自动记账，订阅本身要去 App Store 取消）。
+- 暑假生活费：`summerGoal()` 自动生成（预算 × 没收入的月数，第一个没收入的预算月开始前一天存够），排在存款目标最前面；暑假预算月头 5 天首页提醒转生活费，推送在那几个月的发钱日。
+- 兼职收入的 `1 − sideIncomeSave`（三成）自动进心愿基金（`wishFunds` 里算）。
+- 预算调整建议 `budgetAdvice()`：最近 3 个完整、非暑假的预算月（至少 2 个）；一直 ≤ 85% 建议调低到 max(平均 × 1.1, 最多那个月)（自由钱不低于 200），≥ 2 个月超 5% 建议调高到平均；订阅按登记的实际金额。采用记 `budgetHistory`，「这个月先不改」记 `budgetAdviceDismissed[组] = 预算月开始日`。
+- 年度总结 `yearSummary()`（自然年），总结页「年」；1 月 1 日推送、1 月头一周首页提醒。
+- 令牌到期：读物品档案设置里的 `tokenExpires`，14 天内首页提示。
 - 存款目标 `goals`（比如毕业过渡金）：不另外挪钱，存钱卡余额 − 应急底线 − 大额心愿已攒的，按顺序算进度和每月要留多少（`goalStatus`）。
 - 推送：`js/push.js`（账本自己的 VAPID 公钥，和物品档案不是一对）+ `sw.js`，订阅存账本仓库 `config/push.json`；账本仓库 `.github/workflows/push.yml` 每天 13:00 UTC（北京 21 点）跑 `.github/ledger_push.py`：没记账提醒、周日加周总结、预算月最后一天加月总结，合成一条。私钥只在账本仓库 secret `VAPID_PRIVATE_KEY`。
 - 发票存私有仓库 `claims/<claimId>/<随机>.pdf|jpg`（照片压缩），删除时一起删文件。
@@ -50,7 +55,7 @@
 ## 代码
 
 - **先存手机、后台上传**（`js/store.js`）：`save()` 在本地数据上改、算 patch（带 id 的列表按 id 增改删和顺序，普通对象按字段，其他整个替换）进 localStorage 队列 `ledger-queue`，页面立刻更新；`sync()` 在 GitHub 最新数据上套 patch 提交，没网 20 秒后重试、`online` 事件马上重试。页面顶部的 `.sync-pill` 只在没网 / 失败 / 上传超过 1.5 秒时出现。上传发票、删文件、自动记固定扣费走 `online`（直接提交）。测试里 `Ctx.data()` 会先等队列清空。
-- `js/money.js` 纯计算（可以用 node 直接测）；`js/summary.js` 周 / 月总结的数（一周从周一开始，月总结按预算月，`advice()` 只给一条建议）；`js/charts.js` SVG 图表（柱状、环形、折线，颜色用 CSS 变量）；`js/store.js` 读写（422 冲突重试）；`js/github.js` API；`js/util.js` DOM（只用 textContent，不用 innerHTML 拼数据，令牌在 localStorage）；`js/main.js` 路由和页面。没有构建步骤。
+- `js/money.js` 纯计算（可以用 node 直接测）；`js/summary.js` 周 / 月总结的数（一周从周一开始，月总结按预算月，`advice()` 只给一条建议）；`js/charts.js` SVG 图表（柱状、环形、折线，颜色用 CSS 变量）；`js/store.js` 读写（422 冲突重试）；`js/github.js` API；`js/util.js` DOM（只用 textContent，不用 innerHTML 拼数据，令牌在 localStorage）；`js/main.js` 路由和页面。没有构建步骤。语法检查用 `node --input-type=module --check < js/main.js`（直接 `node --check 文件` 漏过过括号错误）。
 - 外观和物品档案一致：无印良品底色 + 苹果风，主色藤紫，颜色在 `css/app.css` 的 `:root`。
 
 ## 测试
