@@ -15,8 +15,31 @@ export const GROUPS = [
 ];
 export const LIVING = ['food', 'daily', 'free']; // 每天都在花的几组，「花钱节奏」只看这些（订阅是固定日子扣的）
 
-const C = (id, name, group) => ({ id, name, kind: 'expense', group });
+const C = (id, name, group, sub) => ({ id, name, kind: 'expense', group, ...(sub ? { sub } : {}) });
 const I = (id, name) => ({ id, name, kind: 'income' });
+
+// 支出类别：大组（管预算）→ 小组 sub（只是为了好找）→ 类别。改这里，migrate() 会把新类别补进老账本。
+export const EXPENSE_CATEGORIES = [
+  C('c-breakfast', '早餐', 'food'), C('c-lunch', '午餐', 'food'), C('c-dinner', '晚餐', 'food'), C('c-latenight', '夜宵', 'food'),
+  C('c-snack', '零食', 'food'), C('c-drink', '饮料奶茶', 'food'), C('c-fruit', '水果', 'food'),
+  C('c-takeout', '外卖', 'food'), C('c-eatout', '出去吃', 'food'),
+  C('c-toiletry', '洗护用品', 'daily', '日用消耗'), C('c-tissue', '纸巾清洁', 'daily', '日用消耗'), C('c-care', '个人护理', 'daily', '日用消耗'),
+  C('c-storage', '收纳整理', 'daily', '家居用品'), C('c-bedding', '床品', 'daily', '家居用品'), C('c-dorm', '宿舍小物件', 'daily', '家居用品'),
+  C('c-stationery', '文具', 'daily', '耗材'), C('c-print', '打印复印', 'daily', '耗材'), C('c-gadget', '电子耗材', 'daily', '耗材'),
+  C('c-books', '书籍资料', 'daily', '学习'), C('c-exam', '考试报名', 'daily', '学习'), C('c-course', '课程', 'daily', '学习'),
+  C('c-bus', '公交地铁', 'daily', '交通'), C('c-taxi', '打车', 'daily', '交通'), C('c-bike', '共享单车', 'daily', '交通'), C('c-train', '火车飞机', 'daily', '交通'),
+  C('c-clothes', '衣服', 'daily', '穿着'), C('c-shoes', '鞋子', 'daily', '穿着'), C('c-accessory', '配饰', 'daily', '穿着'),
+  C('c-hair', '理发', 'daily', '生活服务'), C('c-bath', '洗澡水费', 'daily', '生活服务'), C('c-laundry', '洗衣机', 'daily', '生活服务'), C('c-express', '快递', 'daily', '生活服务'),
+  C('c-social', '聚餐请客', 'daily', '人情社交'), C('c-gift', '礼物', 'daily', '人情社交'), C('c-hongbao', '红包', 'daily', '人情社交'),
+  C('c-doctor', '看病', 'daily', '医疗'), C('c-medical', '买药', 'daily', '医疗'),
+  C('c-other', '其他', 'daily', '其他'),
+  C('c-fun', '娱乐', 'free'), C('c-hobby', '爱好', 'free'), C('c-like', '喜欢的小东西', 'free'),
+  C('c-ai', 'AI 订阅', 'sub'), C('c-soft', '软件订阅', 'sub'), C('c-member', '会员', 'sub'),
+  C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'), C('c-wish', '心愿', 'none'),
+];
+// 老版本的类别：以前记的账还显示原来的名字，但记新账时不再出现
+const RETIRED = { 'c-meal': '三餐', 'c-daily': '日用品', 'c-transport': '交通', 'c-study': '学习' };
+export const CATEGORY_VERSION = 2;
 
 // 第一次使用时的默认账本。这里的代码是公开的，所以只放通用的东西；
 // 具体的账户名、收入、固定扣费、规则说明都写在私有仓库的 finance.json 里，在网页上改。
@@ -35,14 +58,9 @@ export function defaultData(today) {
       { id: 'a-wechat', name: '微信', currency: 'CNY', opening: 0, note: '' },
       { id: 'a-campus', name: '校园卡', currency: 'CNY', opening: 0, note: '' },
     ],
+    categoryVersion: CATEGORY_VERSION,
     categories: [
-      C('c-meal', '三餐', 'food'), C('c-snack', '零食饮料水果', 'food'), C('c-eatout', '出去吃', 'food'),
-      C('c-daily', '日用品', 'daily'), C('c-transport', '交通', 'daily'), C('c-hair', '理发', 'daily'),
-      C('c-clothes', '衣服鞋子', 'daily'), C('c-study', '学习', 'daily'), C('c-social', '聚餐请客', 'daily'),
-      C('c-medical', '医药', 'daily'), C('c-other', '其他', 'daily'),
-      C('c-fun', '娱乐', 'free'), C('c-like', '喜欢的东西', 'free'),
-      C('c-ai', 'AI 订阅', 'sub'), C('c-soft', '软件订阅', 'sub'),
-      C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'),
+      ...EXPENSE_CATEGORIES.map((c) => ({ ...c })),
       I('i-salary', '生活费'), I('i-job', '兼职'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
@@ -77,7 +95,28 @@ export function migrate(data) {
   data.claims ||= []; // 垫付报销：{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind, submitted }] }
   data.people ||= []; // 人情账：{ id, name }
   data.reconciled ||= {}; // 每个预算月对过账没有：{ 预算月开始日: 对账日 }
-  if (!data.categories.some((c) => c.id === 'c-trip')) data.categories.push({ id: 'c-trip', name: '出差自付', kind: 'expense', group: 'none' });
+  // 类别升级：按 EXPENSE_CATEGORIES 改名、分小组、补新的；老类别藏起来（以前的账照样显示）
+  if ((data.categoryVersion || 1) < CATEGORY_VERSION) {
+    for (const def of EXPENSE_CATEGORIES) {
+      const have = data.categories.find((c) => c.id === def.id);
+      if (have) Object.assign(have, { name: def.name, group: def.group, sub: def.sub, hidden: false });
+      else data.categories.push({ ...def });
+    }
+    for (const [id, name] of Object.entries(RETIRED)) {
+      const have = data.categories.find((c) => c.id === id);
+      if (have) Object.assign(have, { name, hidden: true });
+    }
+    // 按默认顺序排（早餐、午餐、晚餐……），自己加的类别、收入类别放在后面，顺序不变
+    const rank = (c) => { const i = EXPENSE_CATEGORIES.findIndex((x) => x.id === c.id); return i < 0 ? EXPENSE_CATEGORIES.length : i; };
+    data.categories = data.categories.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i).map((x) => x.c);
+    data.categoryVersion = CATEGORY_VERSION;
+  }
+  for (const c of data.categories) if (!c.sub) delete c.sub;
+  // 心愿单
+  data.wishes ||= []; // { id, name, price, want: 'very'|'nice', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
+  data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
+  data.settings.wishMonthlyCap ??= 400; // 每月最多给大额心愿攒多少
+  data.settings.coolDays ??= 3; // 新心愿冷静几天
   return data;
 }
 
@@ -286,6 +325,75 @@ export function needsReconcile(data, today) {
   if (data.openingDate && data.openingDate > p.start) return false;
   return !data.reconciled?.[p.start];
 }
+
+// ---------- 心愿单 ----------
+// 钱不挪地方，只是记着「这里面有多少是给心愿的」。
+// 小额心愿：心愿基金 = 每个结束的预算月，生活预算（吃饭 + 日常 + 自由钱）没花完的进来，超了从里面扣（扣到 0 为止）；买小额心愿从这里出。
+// 大额心愿：每个结束的预算月，按心愿单的顺序给还没攒够的大额心愿攒，合计不超过 wishMonthlyCap；攒够一个再攒下一个。
+
+const r2 = (n) => Math.round(n * 100) / 100;
+export const isBigWish = (data, w) => Number(w.price) > (data.settings.wishBigFrom ?? 300);
+
+// 已经结束的预算月：从开始记账那个月，到上个预算月
+export function closedPeriods(data, today) {
+  const out = [];
+  if (!data.openingDate) return out;
+  const cur = periodFor(data, today);
+  for (let p = periodFor(data, data.openingDate); p.start < cur.start; p = shiftPeriod(data, p, 1)) out.push(p);
+  return out;
+}
+
+export function wishFunds(data, today) {
+  const periods = closedPeriods(data, today);
+  const events = [
+    ...periods.map((p) => ({ date: p.end, v: livingBudget(data) * partial(data, p).factor - periodStats(data, p).living, p })),
+    ...data.tx.filter((t) => t.category === 'c-wish' && t.wishKind === 'small' && t.date <= today).map((t) => ({ date: t.date, v: -cny(t) })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || (a.p ? 1 : -1));
+  let small = 0;
+  const log = [];
+  for (const e of events) {
+    if (!e.p) { small += e.v; continue; }
+    const before = small;
+    small = Math.max(0, small + e.v);
+    log.push({ p: e.p, leftover: r2(e.v), change: r2(small - before) });
+  }
+  const cap = Number(data.settings.wishMonthlyCap) || 0;
+  const big = data.wishes.filter((w) => isBigWish(data, w) && w.status !== 'dropped');
+  const saved = Object.fromEntries(big.map((w) => [w.id, 0]));
+  for (const p of periods) {
+    let left = cap;
+    for (const w of big) {
+      if (left <= 0) break;
+      if (w.createdAt > p.end || (w.status === 'bought' && w.boughtAt <= p.end)) continue;
+      const add = Math.min(left, Number(w.price) - saved[w.id]);
+      if (add > 0) { saved[w.id] += add; left -= add; }
+    }
+  }
+  return { small: r2(small), log, saved, cap };
+}
+
+// 还没买的大额心愿：按现在的顺序、每月上限，大概哪个预算月能攒够
+export function bigWishPlan(data, today) {
+  const f = wishFunds(data, today);
+  const open = data.wishes.filter((w) => w.status === 'open' && isBigWish(data, w));
+  const left = open.map((w) => Math.max(0, Number(w.price) - (f.saved[w.id] || 0)));
+  const done = open.map((w, i) => (left[i] <= 0 ? periodFor(data, today).start : null));
+  let p = periodFor(data, today);
+  for (let m = 0; m < 120 && done.some((x) => !x) && f.cap > 0; m++) {
+    let cap = f.cap;
+    for (let i = 0; i < open.length && cap > 0; i++) {
+      if (done[i]) continue;
+      const add = Math.min(cap, left[i]);
+      left[i] -= add;
+      cap -= add;
+      if (left[i] <= 0) done[i] = p.end; // 这个预算月结束时攒够
+    }
+    p = shiftPeriod(data, p, 1);
+  }
+  return open.map((w, i) => ({ w, saved: r2(f.saved[w.id] || 0), ready: done[i] }));
+}
+
+export const coolingLeft = (data, w, today) => Math.max(0, (data.settings.coolDays ?? 3) - daysBetween(w.createdAt, today));
 
 // ---------- 健康指标 ----------
 // level: good 绿 / warn 黄 / bad 红。每个都带一句大白话 text，红黄的带 action（该做什么）。

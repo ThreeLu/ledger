@@ -82,7 +82,7 @@ class Ctx:
         p.locator(".segmented").get_by_role("button", name=kind, exact=True).click()
         p.get_by_label("金额", exact=True).fill(str(amount))
         if cat:
-            p.get_by_role("button", name=cat, exact=True).click()
+            p.get_by_role("button", name=cat, exact=True).first.click()  # 「最近用过」里可能也有
         if acc:
             group = {"支出": "账户", "收入": "账户", "转账": "转出账户"}[kind]
             p.get_by_role("group", name=group).get_by_role("button", name=acc, exact=True).click()
@@ -142,11 +142,11 @@ def _(c):
     p = c.page
     c.go("#/add")
     expect(p.get_by_text("测试：支付宝记在生活费卡")).to_be_visible()
-    c.add(15, cat="三餐", acc="校园卡", note="食堂午饭", quick=True)
-    expect(p.locator(".tx", has_text="三餐").first).to_be_visible()
+    c.add(15, cat="午餐", acc="校园卡", note="食堂午饭", quick=True)
+    expect(p.locator(".tx", has_text="午餐").first).to_be_visible()
     d = c.data()
     t = d["tx"][-1]
-    assert (t["type"], t["amount"], t["category"], t["account"], t["note"]) == ("expense", 15, "c-meal", "a-campus", "食堂午饭"), t
+    assert (t["type"], t["amount"], t["category"], t["account"], t["note"]) == ("expense", 15, "c-lunch", "a-campus", "食堂午饭"), t
     assert d["quick"][0]["name"] == "食堂午饭"
     c.go("#/add")
     p.get_by_role("button", name="食堂午饭 ¥15").click()
@@ -212,7 +212,7 @@ def _(c):
     # 只看一个账户
     p.locator(".chip-scroll").get_by_role("link", name="校园卡").click()
     expect(p.locator(".tx", has_text="存钱卡")).to_have_count(0)
-    expect(p.locator(".tx", has_text="三餐").first).to_be_visible()
+    expect(p.locator(".tx", has_text="午餐").first).to_be_visible()
 
 
 @step("账户：总资产、校准（差额记对账差额）")
@@ -315,7 +315,7 @@ def _(c):
     p = c.page
     c.go("#/add")
     p.get_by_label("金额", exact=True).fill("200")
-    p.get_by_role("button", name="出去吃", exact=True).click()
+    p.get_by_role("button", name="出去吃", exact=True).first.click()
     p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
     p.get_by_role("group", name="和别人有关").get_by_role("button", name="AA / 帮人付").click()
     for name in ("小甲", "小乙"):
@@ -336,7 +336,7 @@ def _(c):
     wechat = c.balance("a-wechat")
     c.go("#/add")
     p.get_by_label("金额", exact=True).fill("30")
-    p.get_by_role("button", name="三餐", exact=True).click()
+    p.get_by_role("button", name="午餐", exact=True).first.click()
     p.get_by_role("group", name="和别人有关").get_by_role("button", name="别人帮我付的").click()
     expect(p.get_by_role("group", name="账户")).to_have_count(0)
     p.get_by_role("group", name="谁帮我付的").get_by_role("button", name="小乙").click()
@@ -468,6 +468,120 @@ def _(c):
     expect(p.locator(".sheet")).to_contain_text("花钱曲线")
 
 
+def period_start(day, start=15):
+    """预算月开始那天（和网页 periodOf 一样，startDay=15）"""
+    if day.day >= start:
+        return day.replace(day=start)
+    first = day.replace(day=1) - timedelta(days=1)
+    return first.replace(day=start)
+
+
+@step("分类：老账本自动升级（三餐藏起来但老账照样显示）、日常先点小组再点类别、最近用过")
+def _(c):
+    p = c.page
+    d = c.data()
+    for x in d["categories"]:
+        if x["id"] == "c-lunch":
+            x.update(id="c-meal", name="三餐")  # 假装是老版本的账本
+    d["categories"] = [x for x in d["categories"] if x["id"] not in ("c-breakfast", "c-dinner")]
+    d.pop("categoryVersion", None)
+    d["tx"].append({"id": "old1", "type": "expense", "date": TODAY, "account": "a-campus", "amount": 9, "category": "c-meal", "note": "老账", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/list")
+    p.reload()
+    expect(p.locator(".tx", has_text="老账")).to_contain_text("三餐")
+    c.go("#/add")
+    expect(p.get_by_role("button", name="早餐", exact=True)).to_be_visible()
+    expect(p.get_by_role("button", name="三餐", exact=True)).to_have_count(0)
+    expect(p.get_by_role("button", name="收纳整理")).to_have_count(0)
+    p.get_by_role("group", name="日常小组").get_by_role("button", name="家居用品").click()
+    p.get_by_role("button", name="收纳整理").click()
+    p.get_by_label("金额", exact=True).fill("25")
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    assert c.tx()[-1]["category"] == "c-storage"
+    c.go("#/add")
+    expect(p.get_by_role("group", name="最近用过的类别").get_by_role("button", name="收纳整理")).to_be_visible()
+
+
+@step("心愿单：小额用心愿基金（省下的预算）、大额按顺序每月最多 400 攒、冷静期、DeepSeek 建议、买了、放弃")
+def _(c):
+    p = c.page
+    c.go("#/more")
+    p.get_by_role("link", name="心愿单").click()
+    for name, price, want in (("一本闲书", "80", "有了更好"), ("降噪耳机", "1200", "很想要"), ("机械键盘", "600", "有了更好")):
+        p.get_by_role("button", name="加一个心愿").click()
+        sheet = p.locator(".sheet")
+        sheet.get_by_label("想要什么").fill(name)
+        sheet.get_by_label("价格").fill(price)
+        sheet.get_by_role("button", name=want).click()
+        sheet.get_by_role("button", name="加进心愿单").click()
+        expect(p.locator(".wish", has_text=name)).to_be_visible()
+    expect(p.locator(".wish", has_text="一本闲书")).to_contain_text("冷静中，还剩 3 天")
+    expect(p.locator(".section-title", has_text="小额心愿")).to_be_visible()
+    # 上个预算月：生活预算 3000，花了 2800 → 省下 200 进心愿基金；耳机早就加进来了，攒了 400
+    cur = period_start(date.today())
+    prev = period_start(cur - timedelta(days=1))
+    d = c.data()
+    d["openingDate"] = prev.isoformat()
+    d["tx"].append({"id": "lastmonth", "type": "expense", "date": prev.isoformat(), "account": "a-live", "amount": 2800, "category": "c-lunch", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
+    for w in d["wishes"]:
+        if w["name"] == "降噪耳机":
+            w["createdAt"] = prev.isoformat()
+    living_before = sum(t["amount"] for t in d["tx"] if prev.isoformat() <= t["date"] < cur.isoformat() and t["type"] == "expense"
+                        and t["category"] not in ("c-ai", "c-soft", "c-member", "c-fee", "c-trip", "c-wish"))
+    d["config_note"] = "test"
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
+    p.reload()
+    fund = 3000 - living_before
+    expect(p.locator(".big-num")).to_have_text(f"¥{fund:,}")
+    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("已攒 ¥400 / ¥1,200")
+    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("预计")
+    # 调顺序：键盘往前排
+    p.get_by_role("button", name="机械键盘 往前排").click()
+    order = lambda: [w["name"] for w in c.data()["wishes"] if float(w["price"]) > 300 and w["status"] == "open"]  # noqa: E731
+    for _ in range(50):
+        if order()[0] == "机械键盘":
+            break
+        p.wait_for_timeout(200)
+    big_order = order()
+    assert big_order == ["机械键盘", "降噪耳机"], big_order
+    # DeepSeek
+    p.get_by_role("button", name="问问 DeepSeek").click()
+    expect(p.locator(".ai-summary")).to_contain_text("先买闲书")
+    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-ai")).to_contain_text("想要")
+    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-rank")).to_have_text("1")
+    assert "sk-test" not in json.dumps(c.data())  # 密钥不会写进账本
+    # 买闲书：从心愿基金出
+    n = len(c.tx())
+    p.locator(".wish", has_text="一本闲书").get_by_role("button", name="买了").click()
+    expect(p.locator(".sheet")).to_contain_text("还在冷静期")
+    p.locator(".sheet").get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert (t["category"], t["amount"], t["wishKind"]) == ("c-wish", 80, "small"), t
+    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 80:,}")
+    # 再加一个 250 的小额心愿，基金不够：差的算自由钱
+    p.get_by_role("button", name="加一个心愿").click()
+    p.locator(".sheet").get_by_label("想要什么").fill("台灯")
+    p.locator(".sheet").get_by_label("价格").fill("250")
+    p.locator(".sheet").get_by_role("button", name="加进心愿单").click()
+    p.locator(".wish", has_text="台灯").get_by_role("button", name="买了").click()
+    expect(p.locator(".sheet")).to_contain_text("差的")
+    p.locator(".sheet").get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 3)
+    split = sorted((x["category"], x["amount"]) for x in c.tx()[-2:])
+    assert split == sorted([("c-wish", fund - 80), ("c-like", 250 - (fund - 80))]), split
+    expect(p.locator(".big-num")).to_have_text("¥0")
+    # 放弃键盘
+    p.locator(".wish", has_text="机械键盘").get_by_role("button", name="不想要了").click()
+    expect(p.locator(".done-wishes")).to_contain_text("省下 ¥600")
+    # 「我们的花钱方式」里有心愿单的规则
+    c.go("#/rules")
+    expect(p.locator(".rule", has_text="心愿单")).to_contain_text("每月合计最多 ¥400")
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page
@@ -483,6 +597,15 @@ def _(c):
 
 def fake_externals(page):
     page.route("https://api.frankfurter.dev/**", lambda r: r.fulfill(json={"base": "USD", "rates": {"CNY": 7.0}}))
+
+    def deepseek(route):
+        body = json.loads(route.request.post_data)
+        user = body["messages"][-1]["content"]
+        ids = {line.split(" | ")[1]: line.split(" | ")[0] for line in user.splitlines() if line.count(" | ") >= 5}
+        ans = {"summary": "先买闲书，耳机等攒够再说。", "order": [ids.get("一本闲书"), ids.get("机械键盘"), ids.get("降噪耳机")],
+               "items": [{"id": ids.get("一本闲书"), "when": "心愿基金够了，冷静期过了就买", "need": "想要", "comment": "想想会不会真的读完？"}]}
+        route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
+    page.route("https://api.deepseek.com/**", deepseek)
 
 
 def main():

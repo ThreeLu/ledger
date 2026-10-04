@@ -4,7 +4,9 @@ import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
   periodStats, budgetTotal, livingBudget, duePostings, health, headline, money, md, addDays,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS,
+  isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
 } from './money.js';
+import { askJson } from './ai.js';
 import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
@@ -143,6 +145,7 @@ const routes = [
   [/^\/people$/, () => peopleView()],
   [/^\/person\/([^/]+)$/, (id) => personView(id)],
   [/^\/reconcile$/, () => reconcileView()],
+  [/^\/wishes$/, () => wishesView()],
   [/^\/budget$/, () => budgetView()],
   [/^\/rules$/, () => rulesView()],
   [/^\/quick$/, () => quickView()],
@@ -152,7 +155,7 @@ const NAV_GROUPS = {
   '/': [/^\/?$/],
   '/list': [/^\/list/],
   '/summary': [/^\/summary/],
-  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/],
+  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/],
 };
 
 function setupNav() {
@@ -444,6 +447,20 @@ function txRow(t, onclick = null) {
 
 // ---------- 记一笔 ----------
 
+const AUTO_CATEGORIES = ['c-wish', 'c-trip'];
+
+// 最近记过的几个支出类别（记账页最上面一排）
+function recentCategories(d, usable, n = 6) {
+  const ok = new Set(usable.map((c) => c.id));
+  const out = [];
+  for (const t of [...d.tx].sort(txOrder)) {
+    if (t.type !== 'expense' || !ok.has(t.category) || out.includes(t.category)) continue;
+    out.push(t.category);
+    if (out.length >= n) break;
+  }
+  return out.map((id) => category(d, id));
+}
+
 const ADD_HELP = [
   ['三种账', ['支出：花出去的钱，算进预算。', '收入：生活费、补助、兼职、红包。', '转账：自己的账户之间倒钱（充校园卡、充 Apple ID、存钱卡转生活费卡），不算收入也不算花销，只是换了个口袋。']],
   ['怎么记', ['填金额 → 点类别 → 点账户 → 记好了。账户默认是你上次用的。', '用支付宝、微信绑卡付的钱，记在实际扣钱的那张卡上。', '常记的（比如食堂午饭 15）勾上「存成快捷」，以后在上面一点就记好。']],
@@ -462,9 +479,10 @@ function addView(q) {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
+    sub: category(d, editing.category)?.sub || null,
   } : {
     type: q.type || 'expense', amount: '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: '', split: 'none', person: '',
+    category: '', date: today(), note: '', split: 'none', person: '', sub: null,
   };
   if (!account(d, st.account)) st.account = firstCny;
   // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
@@ -531,11 +549,28 @@ function addView(q) {
     if (st.type === 'expense' || st.type === 'income') {
       const cats = d.categories.filter((c) => c.kind === st.type);
       if (st.type === 'expense') {
+        // 心愿、出差自付由心愿单和垫付自动记，不在这里选；老版本的类别不再出现（正在改的那笔除外）
+        const usable = cats.filter((c) => (!c.hidden && !AUTO_CATEGORIES.includes(c.id)) || c.id === st.category);
+        const pickCat = (id) => { st.category = id; st.sub = category(d, id)?.sub || st.sub; draw(); };
+        const recent = recentCategories(d, usable);
+        if (recent.length) parts.push(h('div', { class: 'label-sm' }, '最近用过'), chips(recent, st.category, pickCat, '最近用过的类别'));
         parts.push(h('div', { class: 'label-sm' }, '类别'));
         for (const g of GROUPS) {
-          const list = cats.filter((c) => c.group === g.id);
-          if (list.length) parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name', style: `color:${g.color}` }, g.name),
-            chips(list, st.category, (id) => { st.category = id; draw(); }, `${g.name}类别`)));
+          const list = usable.filter((c) => c.group === g.id);
+          if (!list.length) continue;
+          const subs = [...new Set(list.map((c) => c.sub).filter(Boolean))];
+          let body;
+          if (subs.length > 1) {
+            // 日常类别多：先点小组（日用消耗、家居用品、耗材……），再点具体的
+            const open = subs.includes(st.sub) ? st.sub : null;
+            body = h('div', { class: 'grow' },
+              h('div', { class: 'chips subs', role: 'group', 'aria-label': `${g.name}小组` }, subs.map((x) => h('button', {
+                type: 'button', class: `chip sub-chip${x === open ? ' on' : ''}${category(d, st.category)?.sub === x ? ' has' : ''}`, 'aria-pressed': String(x === open),
+                onclick: () => { st.sub = st.sub === x ? null : x; draw(); },
+              }, x))),
+              open ? chips(list.filter((c) => c.sub === open), st.category, pickCat, `${open}类别`) : null);
+          } else body = chips(list, st.category, pickCat, `${g.name}类别`);
+          parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name', style: `color:${g.color}` }, g.name), body));
         }
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
@@ -874,6 +909,9 @@ function moreView() {
       cell({ href: '#/claims', ic: 'suitcase', color: 'var(--blue)', title: '垫付报销', meta: store.data.claims.filter((c) => c.status !== 'settled').length ? `${store.data.claims.filter((c) => c.status !== 'settled').length} 件在报` : '' }),
       cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : '' }),
       cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' })),
+    h('div', { class: 'group' },
+      cell({ href: '#/wishes', ic: 'sparkle', color: 'var(--accent)', title: '心愿单', sub: '想买但不急的东西，有闲钱再买',
+        meta: `基金 ${money(wishFunds(store.data, today()).small)}` })),
     h('div', { class: 'group' },
       cell({ href: '#/rules', ic: 'book', color: 'var(--sage)', title: '我们的花钱方式', sub: '定下来的规则，和为什么这样做' }),
       cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)', title: '预算', meta: money(budgetTotal(store.data)) }),
@@ -1307,6 +1345,261 @@ function summaryLinks(p) {
   return out.length ? h('div', { class: 'group' }, out) : null;
 }
 
+// ---------- DeepSeek 密钥 ----------
+// 先找账本仓库的 config/ai.json；没有就用物品档案仓库里的（同一个令牌能读两个仓库）
+let aiCache = null;
+async function aiConfig() {
+  if (aiCache) return aiCache;
+  const read = async (g) => {
+    try { return JSON.parse(await g.readText('config/ai.json', 'main'))?.deepseek || null; } catch { return null; }
+  };
+  let inv = {};
+  try { inv = JSON.parse(localStorage.getItem('inventory-settings')) || {}; } catch { /* 没有物品档案 */ }
+  aiCache = (await read(gh)) || (await read(new GitHub({ token: settings.token, repo: inv.repo || 'ThreeLu/inventory-data' }))) || {};
+  return aiCache;
+}
+
+// ---------- 心愿单 ----------
+
+const WANT = { very: '很想要', nice: '有了更好' };
+const NEED_CLASS = { 需要: 'good-text', 想要: 'soon', 说不准: 'muted' };
+
+function wishHelp(d) {
+  const big = money(d.settings.wishBigFrom);
+  return [
+    ['心愿单是什么', ['想买、但不急，有闲钱才买的东西。先放进来，冷静几天再决定。', `${big} 以内是小额心愿，超过 ${big} 是大额心愿。`]],
+    ['小额心愿的钱', ['心愿基金：每个预算月结束时，吃饭 + 日常 + 自由钱没花完的，自动进心愿基金；哪个月超了，从基金里扣回来（扣到 0 为止）。', '省下来的钱就能拿去买想要的小东西，存款一分不动。']],
+    ['大额心愿的钱', [`从每月存下的钱里给大额心愿攒，所有大额心愿加起来每月最多 ${money(d.settings.wishMonthlyCap)}。`, '按心愿单的顺序一个一个攒，攒够一个再攒下一个。用 ↑↓ 调顺序。']],
+    ['冷静期', [`新加的心愿先冷静 ${d.settings.coolDays} 天。过了几天还想要，再考虑买。`]],
+    ['买了以后', ['点「买了」，钱从心愿基金或攒好的那份里出，记一笔「心愿」花销，不占当月预算。', '钱一直在你的卡里，网站只是记着这里面有多少是给心愿的，不用转账。']],
+    ['DeepSeek', ['点「问问 DeepSeek」：先买哪个、什么时候买、真需要还是一时想要。它查不到实时价格，价格以你填的为准。']],
+  ];
+}
+
+function wishForm(w = null) {
+  const d = store.data;
+  const name = h('input', { value: w?.name || '', placeholder: '比如 降噪耳机', 'aria-label': '想要什么' });
+  const price = h('input', { inputmode: 'decimal', value: w?.price != null ? String(w.price) : '', placeholder: '大概多少钱', 'aria-label': '价格' });
+  let want = w?.want || 'very';
+  const wantBox = h('div', { class: 'chips', role: 'group', 'aria-label': '想要的程度' });
+  const drawWant = () => wantBox.replaceChildren(...Object.entries(WANT).map(([k, t]) => h('button', {
+    type: 'button', class: `chip${want === k ? ' on' : ''}`, 'aria-pressed': String(want === k), onclick: () => { want = k; drawWant(); },
+  }, t)));
+  drawWant();
+  const reason = h('input', { value: w?.reason || '', placeholder: '为什么想要（选填）', 'aria-label': '为什么想要' });
+  const link = h('input', { value: w?.link || '', placeholder: '链接或备注（选填）', 'aria-label': '链接或备注' });
+  const target = h('input', { type: 'date', value: w?.targetDate || '', 'aria-label': '想在什么时候前买到' });
+  openSheet({
+    title: w ? '改心愿' : '加一个心愿',
+    body: h('div', { class: 'form' }, name, price, h('div', { class: 'label-sm' }, '想要的程度'), wantBox, reason, link,
+      h('label', {}, `想在什么时候前买到（大额心愿才用，选填）`, target),
+      h('p', { class: 'muted small' }, `${money(d.settings.wishBigFrom)} 以内是小额心愿，用心愿基金买；超过的是大额心愿，每月慢慢攒。`)),
+    confirmText: w ? '保存' : '加进心愿单',
+    onConfirm: async () => {
+      const n = Number(price.value.replace(/[，,\s¥]/g, ''));
+      if (!name.value.trim()) { toast('写一下想要什么', 'error'); return false; }
+      if (!(n > 0)) { toast('填一个大概的价格', 'error'); return false; }
+      const fields = { name: name.value.trim(), price: round2(n), want, reason: reason.value.trim(), link: link.value.trim(), targetDate: target.value || '' };
+      try {
+        await save(`${w ? '改心愿' : '新心愿'}：${fields.name}`, (data) => {
+          if (w) Object.assign(data.wishes.find((x) => x.id === w.id), fields);
+          else data.wishes.push({ id: newId('w'), ...fields, createdAt: today(), status: 'open' });
+        });
+        render();
+      } catch { return false; }
+      return true;
+    },
+  });
+}
+
+function buyWish(w, fundLeft) {
+  const d = store.data;
+  const big = isBigWish(d, w);
+  const price = h('input', { inputmode: 'decimal', value: String(w.price), 'aria-label': '实际花了多少' });
+  let acc = readJson(LAST_KEY).account;
+  if (!account(d, acc)) acc = d.accounts[0]?.id;
+  const accBox = h('div', { class: 'chips', role: 'group', 'aria-label': '从哪个账户付' });
+  const drawAcc = () => accBox.replaceChildren(...d.accounts.map((a) => h('button', {
+    type: 'button', class: `chip${a.id === acc ? ' on' : ''}`, 'aria-pressed': String(a.id === acc), onclick: () => { acc = a.id; drawAcc(); },
+  }, a.name)));
+  drawAcc();
+  const hint = h('p', { class: 'small muted' });
+  const drawHint = () => {
+    const n = Number(price.value.replace(/[，,\s]/g, '')) || 0;
+    hint.textContent = big
+      ? (n > fundLeft ? `给它攒了 ${money(fundLeft)}，还差 ${money(n - fundLeft)}，差的部分直接用存款。` : `给它攒的 ${money(fundLeft)} 够了。`)
+      : (n > fundLeft ? `心愿基金只有 ${money(fundLeft)}，差的 ${money(n - fundLeft)} 算进这个月的自由钱。` : `从心愿基金出，还剩 ${money(fundLeft - n)}。`);
+  };
+  price.addEventListener('input', drawHint);
+  drawHint();
+  const cooling = coolingLeft(d, w, today());
+  openSheet({
+    title: `买了「${w.name}」`,
+    body: h('div', { class: 'form' },
+      cooling ? h('p', { class: 'small soon' }, `还在冷静期（还剩 ${cooling} 天）。确定现在就买吗？`) : null,
+      h('label', {}, '实际花了多少', price), hint, h('div', { class: 'label-sm' }, '从哪个账户付'), accBox),
+    confirmText: '记好了',
+    onConfirm: async () => {
+      const n = round2(Number(price.value.replace(/[，,\s]/g, '')));
+      if (!(n > 0)) { toast('填一下花了多少', 'error'); return false; }
+      const usd = isUsd(d, acc);
+      const rate = usdRate();
+      // 小额心愿超出基金的部分算自由钱；大额心愿全部算「心愿」（钱是存款里攒的）
+      const fromFund = big ? n : Math.min(n, Math.max(0, fundLeft));
+      const rest = round2(n - fromFund);
+      try {
+        await save(`买了心愿：${w.name} ${n}`, (data) => {
+          const now = new Date().toISOString();
+          const mk = (amount, cat) => ({ id: newId('t'), type: 'expense', date: today(), account: acc, amount, category: cat, note: w.name,
+            wish: w.id, wishKind: big ? 'big' : 'small', createdAt: now, ...(usd ? { cny: round2(amount * rate) } : {}) });
+          if (fromFund > 0) data.tx.push(mk(round2(fromFund), 'c-wish'));
+          if (rest > 0) data.tx.push(mk(rest, 'c-like'));
+          Object.assign(data.wishes.find((x) => x.id === w.id), { status: 'bought', boughtAt: today(), boughtPrice: n });
+        });
+        toast(`恭喜，「${w.name}」到手了`);
+        render();
+      } catch { return false; }
+      return true;
+    },
+  });
+}
+
+async function askWishAdvice(btn) {
+  const d = store.data;
+  const ai = await aiConfig();
+  const t = today();
+  const f = wishFunds(d, t);
+  const plan = bigWishPlan(d, t);
+  const hl = health(d, t, usdRate());
+  const open = d.wishes.filter((w) => w.status === 'open');
+  if (!open.length) return toast('心愿单是空的', 'error');
+  const recent = closedPeriods(d, t).slice(-3).map((p) => {
+    const st = periodStats(d, p);
+    return `${p.label}：生活花了 ${Math.round(st.living)} / 预算 ${Math.round(livingBudget(d) * partial(d, p).factor)}`;
+  });
+  const system = [
+    '你是一个大学生的理财助手。他对理财不太懂，有点焦虑，想稳定地存钱。说话温和、简短、具体，不说教。',
+    '他有一个心愿单：想买但不急、有闲钱才买的东西。小额心愿用「心愿基金」（每月生活预算省下来的钱）买；大额心愿按顺序每月慢慢攒，所有大额心愿每月合计有上限。',
+    '请看心愿单给建议：',
+    '1. 先买哪个：给出顺序（order，id 列表）。考虑想要的程度、价格、钱够不够、是不是刚加进来还在冷静期。',
+    '2. 什么时候买（when，一句话）：结合心愿基金、已攒的钱和预计攒够的时间；只在相关时提一下常见的大促（比如双十一、618）或教育优惠，不要每条都提。',
+    '3. 真需要还是一时想要（need：需要 / 想要 / 说不准），comment 用一两句话说理由，可以提一个值得想想的问题。',
+    '你查不到实时价格，不要编价格。不要建议动应急钱或存款，不要推荐分期、花呗、信用卡。',
+    '只输出 JSON：{"summary":"一两句话总的建议","order":["id"],"items":[{"id":"","when":"","need":"需要","comment":""}]}',
+  ].join('\n');
+  const user = [
+    `今天 ${t}。`,
+    `心愿基金（小额用）：${money(f.small)}。大额心愿每月最多攒 ${money(f.cap)}，按顺序一个一个攒。小额 / 大额的分界：${money(d.settings.wishBigFrom)}。`,
+    `这个预算月生活预算还剩 ${money(Math.max(0, hl.left))}，还有 ${hl.daysLeft} 天。安全垫 ${hl.items.find((x) => x.key === 'cushion')?.value || ''}。`,
+    recent.length ? `最近几个预算月：${recent.join('；')}` : '刚开始记账，还没有完整的预算月。',
+    d.settings.summerMonths?.length ? `${d.settings.summerMonths.join('、')} 月没有收入。` : '',
+    '心愿单（id | 名称 | 价格 | 小额/大额 | 想要程度 | 为什么想要 | 加进来几天 | 已攒 | 预计攒够 | 想在什么时候前买到）：',
+    ...open.map((w) => {
+      const big = isBigWish(d, w);
+      const pl = plan.find((x) => x.w.id === w.id);
+      return [w.id, w.name, w.price, big ? '大额' : '小额', WANT[w.want] || '', w.reason || '-', daysSince(w.createdAt),
+        big ? pl?.saved ?? 0 : '-', big ? pl?.ready || '很久以后' : '-', w.targetDate || '-'].map((x) => String(x).replace(/\|/g, '/')).join(' | ');
+    }),
+  ].filter(Boolean).join('\n');
+  btn.disabled = true;
+  btn.textContent = 'DeepSeek 正在想……';
+  try {
+    const out = await askJson(ai, system, user, { maxTokens: 6000, timeout: 120000 });
+    const ids = new Set(open.map((w) => w.id));
+    const advice = {
+      at: t, summary: String(out.summary || ''),
+      order: (out.order || []).filter((id) => ids.has(id)),
+      items: Object.fromEntries((out.items || []).filter((x) => ids.has(x.id)).map((x) => [x.id, { when: String(x.when || ''), need: String(x.need || ''), comment: String(x.comment || '') }])),
+    };
+    await save('心愿单：DeepSeek 的建议', (data) => { data.wishAdvice = advice; });
+    render();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '问问 DeepSeek';
+  }
+}
+
+function wishesView() {
+  const d = store.data;
+  const t = today();
+  const f = wishFunds(d, t);
+  const plan = bigWishPlan(d, t);
+  const adv = d.wishAdvice;
+  const open = d.wishes.filter((w) => w.status === 'open');
+  const small = open.filter((w) => !isBigWish(d, w));
+  const big = open.filter((w) => isBigWish(d, w));
+  const done = d.wishes.filter((w) => w.status !== 'open').reverse();
+  const last = f.log.at(-1);
+  const upd = (message, fn) => save(message, fn).then(render).catch(() => {});
+
+  const move = (id, dir) => upd('调整心愿顺序', (data) => {
+    const list = data.wishes;
+    const bigIds = list.filter((w) => w.status === 'open' && isBigWish(data, w)).map((w) => w.id);
+    const i = bigIds.indexOf(id);
+    const j = i + dir;
+    if (j < 0 || j >= bigIds.length) return false;
+    const a = list.findIndex((w) => w.id === bigIds[i]);
+    const b = list.findIndex((w) => w.id === bigIds[j]);
+    [list[a], list[b]] = [list[b], list[a]];
+  });
+  const drop = (w) => confirm(`不想要「${w.name}」了？\n会挪到「放弃的心愿」里，省下 ${money(w.price)}。`)
+    && upd(`放弃心愿：${w.name}`, (data) => { Object.assign(data.wishes.find((x) => x.id === w.id), { status: 'dropped', droppedAt: today() }); });
+
+  const card = (w, bigIndex = -1) => {
+    const isBig = bigIndex >= 0;
+    const pl = isBig ? plan.find((x) => x.w.id === w.id) : null;
+    const cooling = coolingLeft(d, w, t);
+    const a = adv?.items?.[w.id];
+    const rank = adv?.order?.indexOf(w.id);
+    const ready = isBig ? pl.saved >= w.price : f.small >= w.price;
+    return h('div', { class: 'card wish' },
+      h('div', { class: 'wish-top' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'wish-name' }, rank >= 0 ? h('span', { class: 'wish-rank' }, `${rank + 1}`) : null, w.name),
+          h('div', { class: 'muted small' }, [WANT[w.want], w.reason, w.link].filter(Boolean).join(' · '))),
+        h('div', { class: 'wish-price' }, money(w.price))),
+      h('div', { class: 'wish-tags' },
+        cooling ? h('span', { class: 'badge' }, `冷静中，还剩 ${cooling} 天`) : null,
+        ready ? h('span', { class: 'badge good' }, isBig ? '攒够了' : '心愿基金够了') : null,
+        w.targetDate && isBig && pl.ready && pl.ready > w.targetDate ? h('span', { class: 'badge warn' }, `${md(w.targetDate)}前攒不够`) : null),
+      isBig ? [bar(pl.saved / w.price, 'var(--accent)'),
+        h('div', { class: 'muted small wish-progress' }, `已攒 ${money(pl.saved)} / ${money(w.price)}${pl.ready && !ready ? ` · 按现在的顺序，预计 ${md(pl.ready)}攒够` : !pl.ready ? ' · 排在后面，要等前面的攒完' : ''}`)] : null,
+      a ? h('div', { class: 'wish-ai' },
+        a.need ? h('span', { class: `need ${NEED_CLASS[a.need] || ''}` }, a.need) : null,
+        a.when ? h('div', {}, h('b', {}, '什么时候买：'), a.when) : null,
+        a.comment ? h('div', {}, a.comment) : null) : null,
+      h('div', { class: 'wish-actions' },
+        isBig ? [h('button', { class: 'link', 'aria-label': `${w.name} 往前排`, disabled: bigIndex === 0, onclick: () => move(w.id, -1) }, '↑'),
+          h('button', { class: 'link', 'aria-label': `${w.name} 往后排`, disabled: bigIndex === big.length - 1, onclick: () => move(w.id, 1) }, '↓')] : null,
+        h('span', { class: 'grow' }),
+        h('button', { class: 'link', onclick: () => wishForm(w) }, '改'),
+        h('button', { class: 'link', onclick: () => drop(w) }, '不想要了'),
+        h('button', { class: 'small', onclick: () => buyWish(w, isBig ? pl.saved : f.small) }, '买了')));
+  };
+
+  const savedByDrop = done.filter((w) => w.status === 'dropped').reduce((s2, w) => s2 + Number(w.price), 0);
+  const aiBtn = h('button', { class: 'secondary wide', onclick: (e) => askWishAdvice(e.currentTarget) }, icon('sparkle'), adv ? '再问一次 DeepSeek' : '问问 DeepSeek');
+  return h('div', {},
+    header('心愿单', h('button', { class: 'icon-btn', 'aria-label': '加一个心愿', onclick: () => wishForm() }, icon('plus')), helpButton('心愿单怎么用', wishHelp(d))),
+    h('div', { class: 'card spend-left' },
+      h('div', { class: 'muted small' }, '心愿基金（买小额心愿用）'),
+      h('div', { class: 'big-num' }, money(f.small)),
+      h('div', { class: 'muted small' }, last ? `${last.p.label}${last.leftover >= 0 ? `省下 ${money(last.leftover)}，进来了` : `超了 ${money(-last.leftover)}，从基金里扣了 ${money(-last.change)}`}`
+        : '每个预算月结束时，生活预算没花完的会进来。'),
+      h('div', { class: 'muted small' }, `大额心愿每月最多攒 ${money(f.cap)}`)),
+    open.length ? h('div', { class: 'card' },
+      adv ? [h('h3', {}, `DeepSeek 的建议（${md(adv.at)}）`), h('p', { class: 'ai-summary' }, adv.summary)] : h('p', { class: 'muted small' }, 'DeepSeek 可以帮你看：先买哪个、什么时候买、真需要还是一时想要。'),
+      aiBtn) : null,
+    small.length ? [h('div', { class: 'section-title' }, `小额心愿（${money(d.settings.wishBigFrom)} 以内，用心愿基金）`), small.map((w) => card(w))] : null,
+    big.length ? [h('div', { class: 'section-title' }, `大额心愿（按顺序攒，每月最多 ${money(f.cap)}）`), big.map((w, i) => card(w, i))] : null,
+    !open.length ? h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有心愿。想买但不急的东西，点右上角 ＋ 放进来。')) : null,
+    done.length ? h('details', { class: 'card done-wishes' }, h('summary', {}, `实现了 ${done.filter((w) => w.status === 'bought').length} 个 · 放弃了 ${done.filter((w) => w.status === 'dropped').length} 个${savedByDrop ? `（省下 ${money(savedByDrop)}）` : ''}`),
+      done.map((w) => h('div', { class: 'manage-row' },
+        h('span', { class: 'grow' }, w.name, h('span', { class: 'muted small block' }, w.status === 'bought' ? `${md(w.boughtAt)}买的 · ${money(w.boughtPrice)}` : `${md(w.droppedAt || w.createdAt)}放弃`)),
+        w.status === 'dropped' ? h('button', { class: 'link', onclick: () => upd(`重新想要：${w.name}`, (data) => { const x = data.wishes.find((y) => y.id === w.id); x.status = 'open'; delete x.droppedAt; }) }, '又想要了') : null))) : null);
+}
+
 // ---------- 我们的花钱方式 ----------
 
 // 一年的账：收入 × 发钱的月数 − 预算 × 12
@@ -1336,6 +1629,8 @@ function rulesView() {
   }
   rules.push(['__budget']);
   if (b.free) R('自由钱', `每月 ${money(b.free)}，想喝杯奶茶、买点小东西，花了就花了，不用想。`, '一点余地都不留的预算很难坚持，一旦超了就容易破罐破摔。留一小块不用记挂的钱，反而能长期存下去。');
+  R('心愿单：有闲钱再买', `想买但不急的东西先放进心愿单，冷静 ${d.settings.coolDays} 天。${money(d.settings.wishBigFrom)} 以内的小额心愿用「心愿基金」买：每个预算月生活预算没花完的进基金，超了从基金扣回来。超过 ${money(d.settings.wishBigFrom)} 的大额心愿从每月存下的钱里按顺序攒，每月合计最多 ${money(d.settings.wishMonthlyCap)}。`,
+    '省下来的钱有了用处，省钱更有动力；大件慢慢攒，不会一下子打乱存钱计划。');
   if (d.settings.emergencyFloor > 0) {
     R(`应急钱不低于 ${money(d.settings.emergencyFloor)}`, `${floorName}里至少留 ${money(d.settings.emergencyFloor)}，专门应付意外（生病、电脑坏了、收入晚到）。买东西不能动它。`, '有这笔钱在，意外来了也不会慌，不用借钱。');
   }
@@ -1354,7 +1649,7 @@ function rulesView() {
 
   const card = (n, [title, text, why]) => h('div', { class: 'card rule' }, h('h2', {}, `${n}. ${title}`),
     text.split('\n').map((t) => h('p', {}, t)), why ? h('p', { class: 'why' }, `为什么：${why}`) : null);
-  const catList = (g) => d.categories.filter((c) => c.group === g).map((c) => c.name).join('、');
+  const catList = (g) => d.categories.filter((c) => c.group === g && !c.hidden).map((c) => c.name).join('、');
   const budgetCard = (n) => h('div', { class: 'card rule' }, h('h2', {}, `${n}. 每月预算 ${money(budgetTotal(d))}`),
     h('table', { class: 'rule-table' }, h('tbody', {}, GROUPS.filter((g) => b[g.id]).map((g) =>
       h('tr', {}, h('td', {}, g.name), h('td', {}, money(b[g.id])), h('td', {}, [catList(g.id), d.notes[g.id]].filter(Boolean).join('。')))))),
@@ -1377,7 +1672,7 @@ function budgetView() {
     inputs[key] = h('input', { inputmode: 'decimal', value: String(value ?? ''), 'aria-label': label });
     return h('label', {}, label, inputs[key], hint ? h('div', { class: 'hint' }, hint) : null);
   };
-  const catList = (g) => d.categories.filter((c) => c.group === g).map((c) => c.name).join('、');
+  const catList = (g) => d.categories.filter((c) => c.group === g && !c.hidden).map((c) => c.name).join('、');
   const submit = async () => {
     const val = (k) => Number(inputs[k].value.replace(/[，,\s]/g, ''));
     const keys = Object.keys(inputs);

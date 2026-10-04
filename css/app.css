@@ -108,9 +108,6 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
 
 /* 列表 */
-  display: flex; align-items: center; gap: 12px; padding: 10px;
-  background: var(--card); border-radius: 14px; color: var(--text); box-shadow: var(--shadow);
-}
 .badge { font-size: 12px; background: var(--chip); padding: 0 7px; border-radius: 6px; line-height: 1.8; color: var(--muted); }
 .badge.warn { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 
@@ -325,6 +322,28 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .split-hint { margin: -6px 2px 6px; line-height: 1.55; }
 .overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.92); display: flex; align-items: center; justify-content: center; }
 .overlay img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* 类别小组 */
+.chips.subs { margin-bottom: 0; }
+.sub-chip.has:not(.on) { box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* 心愿单 */
+.wish { padding: 14px 16px; }
+.wish-top { display: flex; gap: 12px; align-items: flex-start; }
+.wish-name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.wish-rank { flex: none; width: 22px; height: 22px; border-radius: 11px; background: var(--accent); color: var(--accent-text); font-size: 12px; display: grid; place-items: center; }
+.wish-price { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+.wish-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.wish-tags:empty { display: none; }
+.badge.good { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.wish .bar-track { margin-top: 8px; }
+.wish-progress { margin-top: 6px; }
+.wish-ai { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); font-size: 14px; line-height: 1.6; display: flex; flex-direction: column; gap: 4px; }
+.need { font-weight: 700; font-size: 13px; }
+.wish-actions { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.wish-actions .link { min-height: 34px; }
+.ai-summary { margin: 0 0 10px; line-height: 1.65; }
+.done-wishes summary { font-size: 15px; }
 
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }
