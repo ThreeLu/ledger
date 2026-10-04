@@ -26,7 +26,7 @@
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
-  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, note, auto?, createdAt }] }
+  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, note, auto?, receipt?, from?, createdAt }] }
 ```
 
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
@@ -56,6 +56,10 @@
 - 健康指标（`health()`）：安全垫（总资产 ÷ 月预算）、应急钱底线、花钱节奏（只看 food/daily/free）、本月存钱、即将扣款（美元账户够不够付接下来 35 天的订阅）、待收回（垫付超过 30 天、人情超过 14 天提醒）、对账（完整预算月还没对）、年费提醒。每项 level good/warn/bad + 大白话 text + 该做什么 action；`headline()` 是首页最上面那句。解释文字在 `main.js` 的 `EXPLAIN`。
 - 固定扣费到日子自动记（`duePostings`，`lastPosted` 防重复；在 `store.save` 的修改函数里重新算，两台设备同时打开也不会重复）。
 - `migrate()` 给旧数据补字段，加功能时在这里补。
+- 导入小票（`#/receipt`，`js/receipt.js` 纯计算 + `main.js` 页面）：用户把小票照片和「复制提示词」（`receiptPrompt`，类别名从数据里取）发给手机上的 AI，回答贴回来（或快捷指令带 `?text=`，用完从网址去掉）。`parseReceipt` 先找 JSON，不是就按行认「名称 数量 价格 / 合计」。一样一样确认：名称、数量、实付、类别（`guessCategory`：AI 给的类别名 → 以前同名的 → 关键词 `BY_WORD` → 宿舍小物件）、物品档案怎么处理（`matchInventory` 同名 / 包含，消耗品优先；默认 `defaultInventoryAction`：消耗品补货、耐用的不动、没有的吃喝不进档案其他进待建档）。可以「这样不记」「剩下的都按推荐」。**按类别合并成几笔**（用户选的），整单优惠并进最大那笔，备注「店名：名称×数量、…」，每笔带 `receipt` 指纹（日期 + 名称价格），同一张再导时提醒。记账走本地队列；物品档案（`js/bridge.js`，同一个令牌直接提交 inventory.json，`applyToInventory`）要联网，失败了可以「再试一次」，账不受影响。
+- 物品档案那边「买回来了」、新建物品填了价格时也会直接往 `tx` 加支出（带 `from: 'inventory'`），见 inventory/CLAUDE.md。
+- Siri（`#/siri` 有做快捷指令的步骤）：快捷指令打开 `#/add?text=一句话`，`parseSpoken` 认金额（「18块5」= 18.5）、类别（快捷记账名 → 类别名 → 常说的叫法 `SPOKEN` → 以前的备注 → 关键词），预填后还是要点「记好了」；`#/receipt?text=` 打开导入小票。快捷指令打开的是 Safari（和主屏幕图标各存各的），没令牌时记下要去的页面（`ledger-after-login`），填好令牌再跳过去。
+- 撤销代替确认：`saveUndoable(message, fn, doneText)` 先做，底部 `undoToast`「…  撤销」6 秒，撤销 = 把 `diff(改后, 改前)` 套回去。用在删一笔、放弃心愿、停订阅、删存款目标；删垫付（连发票文件）、退出仍然 `confirm`。
 
 ## 代码
 
@@ -65,7 +69,7 @@
 
 ## 测试
 
-- `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`），汇率用假数据。推送后 GitHub Actions 自动跑。**改了功能就加对应步骤。**
+- `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`，同时开账本和编的物品档案 `x/inventory-data` 两个仓库），汇率用假数据。推送后 GitHub Actions 自动跑。**改了功能就加对应步骤。**
 - 网页通过 `localStorage['ledger-api-base']` 接到假 GitHub。
 - **绝不拿真实数据仓库做写入测试。**
 

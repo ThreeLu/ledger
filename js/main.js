@@ -1,5 +1,5 @@
 import { GitHub } from './github.js';
-import { Store, newId } from './store.js';
+import { Store, newId, diff, apply as applyPatch } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
@@ -14,12 +14,14 @@ import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
+import { receiptPrompt, parseReceipt, guessCategory, groupByCategory, matchInventory, defaultInventoryAction, restockQty, applyToInventory, parseSpoken } from './receipt.js';
+import { inventoryGitHub, readInventory, updateInventory } from './bridge.js';
 
 const SETTINGS_KEY = 'ledger-settings';
 const DEFAULT_REPO = 'ThreeLu/finance-data';
 const RATE_KEY = 'ledger-usd-rate';
 const LAST_KEY = 'ledger-last'; // 上次用的账户和类别，记账时默认选上
-const EDITING_ROUTES = /^\/(add|reconcile)/;
+const EDITING_ROUTES = /^\/(add|reconcile|receipt)/;
 
 const view = document.getElementById('view');
 const nav = document.getElementById('nav');
@@ -168,6 +170,8 @@ function boot() {
     render();
     refresh();
   } else {
+    // 还没登录：记住要去的页面（比如快捷指令带来的小票），填好令牌后再跳过去
+    if (window.location.hash && window.location.hash !== '#/settings') sessionStorage.setItem('ledger-after-login', window.location.hash);
     go('#/settings', true);
   }
   updateRate();
@@ -185,6 +189,8 @@ function go(hash, replace = false) {
 const routes = [
   [/^\/?$/, () => homeView()],
   [/^\/add$/, (_, q) => addView(q)],
+  [/^\/receipt$/, (_, q) => receiptView(q)],
+  [/^\/siri$/, () => siriView()],
   [/^\/list$/, (_, q) => listView(q)],
   [/^\/accounts$/, () => accountsView()],
   [/^\/account\/([^/]+)$/, (id) => accountView(id)],
@@ -209,7 +215,7 @@ const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/list': [/^\/list/],
   '/summary': [/^\/summary/],
-  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/],
+  '/more': [/^\/more/, /^\/receipt/, /^\/siri/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/],
 };
 
 function setupNav() {
@@ -276,6 +282,25 @@ async function save(message, fn, opts) {
     toast(e.message, 'error');
     throw e;
   }
+}
+
+// 常用的操作不先问「确定吗」：直接做，底部提示几秒，点「撤销」改回去
+function undoToast(text, onUndo) {
+  for (const el of document.querySelectorAll('.toast.undo')) el.remove();
+  const el = h('div', { class: 'toast undo', role: 'status' }, h('span', {}, text),
+    h('button', { type: 'button', class: 'toast-undo', onclick: () => { el.remove(); onUndo(); } }, '撤销'));
+  document.body.append(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+// 能撤销的修改：撤销时只把这次改到的东西改回去，这期间别的修改不受影响
+async function saveUndoable(message, fn, doneText) {
+  const before = structuredClone(store.data);
+  const result = await save(message, fn);
+  if (result === false) return result;
+  const back = diff(store.data, before);
+  undoToast(doneText, () => save(`撤销：${message}`, (data) => { applyPatch(data, back); }).then(() => { toast('已撤销'); render(); }).catch(() => {}));
+  return result;
 }
 
 function errorView(e) {
@@ -642,6 +667,14 @@ function addView(q) {
     category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '',
   };
   if (!account(d, st.account)) st.account = firstCny;
+  // Siri / 快捷指令带来的一句话：「午饭 18」→ 金额、类别、备注先填好，还是要点「记好了」
+  const heard = !editing && q.text ? q.text.trim() : '';
+  if (heard) {
+    const sp = parseSpoken(heard, d.categories.filter((c) => c.kind === 'expense' && !c.hidden && !AUTO_CATEGORIES.includes(c.id)), { quick: d.quick, tx: d.tx });
+    if (sp.amount) st.amount = String(sp.amount);
+    if (sp.category) { st.category = sp.category; st.sub = category(d, sp.category)?.sub || null; }
+    if (sp.note && sp.note !== catName(sp.category)) st.note = sp.note;
+  }
   // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
   const aa = { people: new Set(), newPeople: [], my: '', myTouched: false };
   const splitHint = h('div', { class: 'muted small split-hint' });
@@ -944,20 +977,21 @@ function addView(q) {
 
   const remove = async () => {
     const group = editing.group ? d.tx.filter((t) => t.group === editing.group) : [];
-    const extra = group.length > 1 ? `\n（这是一次 AA，连同记给别人的 ${group.length - 1} 笔一起删）` : '';
-    if (!confirm(`删掉这一笔？\n${txTitle(editing)} ${exact(editing.amount, curOf(editing.account))}（${editing.date}）${extra}`)) return;
+    const extra = group.length > 1;
     try {
-      await save(`删除：${txTitle(editing)} ${editing.amount}`, (data) => {
+      await saveUndoable(`删除：${txTitle(editing)} ${editing.amount}`, (data) => {
         data.tx = data.tx.filter((t) => t.id !== editing.id && !(editing.group && t.group === editing.group));
-      });
-      toast('已删除');
+      }, `删掉了：${txTitle(editing)} ${exact(editing.amount, curOf(editing.account))}${extra ? `（连同 AA 的 ${group.length - 1} 笔）` : ''}`);
       history.back();
     } catch { /* 已提示 */ }
   };
 
   draw();
-  setTimeout(() => { if (!editing) amountInput.focus(); });
-  return h('div', {}, header(editing ? '改一笔' : '记一笔', helpButton('怎么记账', ADD_HELP)), box);
+  setTimeout(() => { if (!editing && !heard) amountInput.focus(); });
+  return h('div', {}, header(editing ? '改一笔' : '记一笔', helpButton('怎么记账', ADD_HELP)),
+    heard ? h('p', { class: 'muted small heard' }, `听到：「${heard}」${st.amount && st.category ? '，看一眼对不对，点「记好了」' : '，没填上的补一下'}`) : null,
+    !editing && !heard ? h('a', { class: 'receipt-link', href: '#/receipt' }, icon('receipt'), ' 有小票？一次导入一整张') : null,
+    box);
 }
 
 // ---------- 流水 ----------
@@ -1172,7 +1206,9 @@ function moreView() {
     h('div', { class: 'group' },
       cell({ href: '#/rules', ic: 'book', color: 'var(--sage)', title: '我们的花钱方式', sub: '定下来的规则，和为什么这样做' }),
       cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)', title: '预算', meta: money(budgetTotal(store.data)) }),
-      cell({ href: '#/quick', ic: 'bolt', color: 'var(--blue)', title: '快捷记账', meta: store.data.quick.length ? `${store.data.quick.length} 个` : '' })),
+      cell({ href: '#/quick', ic: 'bolt', color: 'var(--blue)', title: '快捷记账', meta: store.data.quick.length ? `${store.data.quick.length} 个` : '' }),
+      cell({ href: '#/receipt', ic: 'receipt', color: 'var(--sage)', title: '导入小票', sub: '购物回来，一整张小票一次记完' }),
+      cell({ href: '#/siri', ic: 'mic', color: 'var(--accent)', title: 'Siri 和快捷指令', sub: '说一句话记账、AI 的回答一步发过来' })),
     h('div', { class: 'group' },
       cell({ href: '#/settings', ic: 'gear', color: '#8a8680', title: '设置' })),
     h('p', { class: 'center' }, h('button', { class: 'link small', onclick: exportExcel }, '导出全部账目（Excel）')));
@@ -1222,8 +1258,8 @@ const moveTx = (type, f, extra) => ({
 function txActions(t) {
   if (t.type === 'expense' || t.type === 'income') return () => go(`#/add?edit=${t.id}`);
   return () => {
-    if (!confirm(`删掉这一笔？\n${txTitle(t)} ${exact(t.amount, curOf(t.account))}（${t.date}）`)) return;
-    save(`删除：${txTitle(t)} ${t.amount}`, (data) => { data.tx = data.tx.filter((x) => x.id !== t.id); }).then(render).catch(() => {});
+    saveUndoable(`删除：${txTitle(t)} ${t.amount}`, (data) => { data.tx = data.tx.filter((x) => x.id !== t.id); },
+      `删掉了：${txTitle(t)} ${exact(t.amount, curOf(t.account))}`).then(render).catch(() => {});
   };
 }
 
@@ -1705,6 +1741,316 @@ function summaryLinks(p) {
   return out.length ? h('div', { class: 'group' }, out) : null;
 }
 
+// ---------- 导入小票 ----------
+// 购物回来：小票拍照发给手机上的 AI（按提示词整理成 JSON）→ 复制回答贴到这里 → 一样一样确认 → 一次保存。
+// 记账按类别合并（同一张小票同一类合成一笔）；物品档案里有的消耗品补数量，新东西进「买回来还没建档」。
+// 从快捷指令进来是 #/receipt?text=<AI 的回答>。
+
+const RECEIPT_HELP = [
+  ['整个流程', ['1. 小票拍照，发给手机上能看图的 AI（豆包、ChatGPT、Kimi 都行），连同下面「复制提示词」复制的那段话。', '2. 把 AI 的回答整段复制，回到这里贴进去（或者用快捷指令「发到账本」一步打开）。', '3. 一样一样看：类别对不对、物品档案要不要补货。不对就改，不想记就点「这样不记」。', '4. 最后看一眼合计，点「全部保存」。']],
+  ['会记成什么', ['同一张小票里同一个类别的合成一笔，比如「零食 ¥23.5（薯片、饼干）」，商品名写在备注里，流水里能搜到。', '整单优惠并进金额最多的那一笔。']],
+  ['物品档案', ['档案里有的消耗品（比如抽纸）：自动加上买的数量，从购物清单上划掉。', '新东西：放进物品档案的「买回来还没建档」，有空再去拍照、选柜子；那边建档时不会再问记账。', '吃的喝的默认不进档案，可以改。']],
+  ['没有 AI 也行', ['一行写一样：名称 数量 价格，比如「可乐 2 6」「抽纸 19.9」，最后一行可以写「合计 25.9」。']],
+];
+
+let receipt = null; // 导入到一半的小票（换页回来还在；保存完清掉）
+
+// 小票的指纹（日期 + 每样的名称和价格）：同一张导入两次时提醒，AI 回答前后多几句话也认得出
+function receiptKey(parsed) {
+  let x = 0;
+  const text = JSON.stringify([parsed.date, parsed.items.map((i) => [i.name, i.price])]);
+  for (const ch of text) x = (x * 31 + ch.codePointAt(0)) >>> 0;
+  return `r${x.toString(36)}`;
+}
+
+function startReceipt(text) {
+  const d = store.data;
+  const parsed = parseReceipt(text);
+  const cats = d.categories.filter((c) => c.kind === 'expense' && !c.hidden && !AUTO_CATEGORIES.includes(c.id));
+  const last = readJson(LAST_KEY).account;
+  const cnyAccounts = d.accounts.filter((a) => a.currency !== 'USD');
+  receipt = {
+    text, key: receiptKey(parsed), step: 0, stage: 'check',
+    shop: parsed.shop, date: parsed.date || today(), total: parsed.total,
+    account: cnyAccounts.some((a) => a.id === last) ? last : cnyAccounts[0]?.id,
+    lines: parsed.items.map((x) => ({ ...x, category: guessCategory(cats, d.tx, x.name, x.hint), action: null, skip: false })),
+    inv: undefined, igh: inventoryGitHub(settings),
+  };
+  const r = receipt;
+  readInventory(r.igh).then((inv) => { r.inv = inv; }).catch(() => { r.inv = null; })
+    .finally(() => { if (receipt === r && currentPath() === '/receipt') render(); });
+}
+
+// 物品档案读到以后，给每样东西对上档案、定默认怎么处理（只做一次，用户改过的不动）
+function matchReceiptLines() {
+  const r = receipt;
+  if (!r.inv) return;
+  const cats = store.data.categories;
+  for (const l of r.lines) {
+    if (l.action) continue;
+    if (l.price < 0) { l.action = 'none'; continue; }
+    const m = matchInventory(r.inv, l.name);
+    l.itemId = m.item?.id || null;
+    l.extraId = m.extra?.id || null;
+    l.action = defaultInventoryAction(m, l.category, cats);
+    if (m.item) l.newQty = restockQty(m.item, l.qty);
+  }
+}
+
+function receiptView(q) {
+  if (q.text && (!receipt || receipt.text !== q.text)) {
+    try { startReceipt(q.text); } catch (e) { receipt = { stage: 'paste', text: q.text, error: e.message }; }
+    history.replaceState(null, '', '#/receipt'); // 网址里的小票内容用完就去掉，刷新不会重新开始
+  }
+  if (!receipt) receipt = { stage: 'paste', text: '' };
+  const r = receipt;
+  const head = (sub) => headerSub('导入小票', sub, helpButton('导入小票怎么用', RECEIPT_HELP));
+  if (r.stage === 'paste') return receiptPaste(head);
+  if (r.inv) matchReceiptLines();
+  if (r.stage === 'check') return receiptCheck(head);
+  if (r.stage === 'summary') return receiptSummary(head);
+  return receiptDone(head);
+}
+
+function receiptPaste(head) {
+  const r = receipt;
+  const box = h('textarea', { rows: 10, placeholder: '把 AI 整理好的小票贴在这里\n\n没有 AI 也行，一行一样：\n可乐 2 6\n抽纸 19.9\n合计 25.9', 'aria-label': '小票内容',
+    value: r.text, oninput: (e) => { r.text = e.target.value; } });
+  const cats = store.data.categories.filter((c) => c.kind === 'expense' && !c.hidden && !AUTO_CATEGORIES.includes(c.id));
+  const copyPrompt = async () => {
+    const text = receiptPrompt(cats, today());
+    try { await navigator.clipboard.writeText(text); toast('提示词复制好了，连同小票照片一起发给 AI'); } catch { openSheet({ title: '提示词', body: h('textarea', { rows: 12, value: text, readonly: true }), confirmText: '好', cancelText: null, onConfirm: () => {} }); }
+  };
+  const paste = async () => {
+    try { r.text = await navigator.clipboard.readText(); box.value = r.text; } catch { toast('读不了剪贴板，长按输入框粘贴', 'error'); }
+  };
+  const next = () => {
+    try { startReceipt(box.value); render(); } catch (e) { toast(e.message, 'error'); }
+  };
+  return h('div', {},
+    head('购物回来，一次记完'),
+    h('div', { class: 'card' },
+      h('p', { class: 'small' }, '小票拍照发给手机上的 AI，连同这段提示词，它会整理成网站能读的样子：'),
+      h('button', { class: 'secondary wide', onclick: copyPrompt }, '复制提示词')),
+    r.error ? h('p', { class: 'hint error' }, r.error) : null,
+    box,
+    h('div', { class: 'actions sticky' },
+      h('button', { class: 'secondary', onclick: paste }, '粘贴'),
+      h('button', { onclick: next }, '下一步')));
+}
+
+// 类别下拉：按预算大组分开
+function categorySelect(value, onChange, label) {
+  const cats = store.data.categories.filter((c) => c.kind === 'expense' && (!c.hidden || c.id === value) && !AUTO_CATEGORIES.includes(c.id));
+  return h('select', { 'aria-label': label, value, onchange: (e) => onChange(e.target.value) },
+    GROUPS.map((g) => {
+      const list = cats.filter((c) => c.group === g.id);
+      return list.length ? h('optgroup', { label: g.name }, list.map((c) => h('option', { value: c.id }, c.name))) : null;
+    }));
+}
+
+function receiptCheck(head) {
+  const r = receipt;
+  const n = r.lines.length;
+  const l = r.lines[r.step];
+  const go2 = (step) => { r.step = step; if (step >= n) r.stage = 'summary'; render(); window.scrollTo(0, 0); };
+  const item = l.itemId && r.inv ? r.inv.items.find((i) => i.id === l.itemId) : null;
+  const extra = l.extraId && r.inv ? (r.inv.shopping?.extra || []).find((e) => e.id === l.extraId) : null;
+  const dup = r.step === 0 && store.data.tx.find((t) => t.receipt === r.key);
+
+  const qtyInput = h('input', { type: 'number', min: 1, inputmode: 'numeric', value: l.qty, 'aria-label': '数量',
+    onchange: (e) => { const v = Math.max(1, Math.round(Number(e.target.value)) || 1); if (item) l.newQty += v - l.qty; l.qty = v; render(); } });
+  const fields = h('div', { class: 'receipt-fields' },
+    h('label', { class: 'form-label' }, '名称', h('input', { value: l.name, 'aria-label': '名称', oninput: (e) => { l.name = e.target.value; } })),
+    h('div', { class: 'row-2' },
+      h('label', { class: 'form-label' }, '数量', qtyInput),
+      h('label', { class: 'form-label' }, '实付（元）', h('input', { inputmode: 'decimal', value: String(l.price), 'aria-label': '实付',
+        oninput: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) l.price = Math.round(v * 100) / 100; } }))));
+
+  let invPart;
+  if (l.price < 0) invPart = h('p', { class: 'muted small' }, '优惠会并进金额最多的那一笔。');
+  else if (r.inv === undefined) invPart = h('p', { class: 'muted small' }, '正在看物品档案……');
+  else if (!r.inv) invPart = h('p', { class: 'muted small' }, '读不到物品档案（令牌没授权 inventory-data？），这次只记账。');
+  else {
+    const opts = item
+      ? [['restock', `补货：现在 ×${Number(item.quantity) || 0} → ×${l.newQty}`], ['file', '是新的一件，去建档'], ['none', '不动档案']]
+      : [['file', '放进「买回来还没建档」'], ['none', '不进档案']];
+    invPart = h('div', {},
+      item ? h('p', { class: 'small' }, '档案里有：', h('b', {}, item.name), item.consumable ? '' : '（不是消耗品）') : h('p', { class: 'muted small' }, '档案里没有同名的东西。'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '物品档案' }, opts.map(([k, t]) => h('button', {
+        type: 'button', class: `chip${l.action === k ? ' on' : ''}`, 'aria-pressed': String(l.action === k), onclick: () => { l.action = k; render(); },
+      }, t))),
+      l.action === 'restock' ? h('label', { class: 'form-label' }, '买回来后一共有几个',
+        h('input', { type: 'number', min: 1, inputmode: 'numeric', value: l.newQty, 'aria-label': '一共有几个', onchange: (e) => { l.newQty = Math.max(1, Math.round(Number(e.target.value)) || 1); } })) : null,
+      extra ? h('p', { class: 'muted small' }, `购物清单上的「${extra.name}」会划掉。`) : null);
+  }
+
+  return h('div', {},
+    head(`第 ${r.step + 1} / ${n} 样`),
+    dup ? h('div', { class: 'banner soon' }, `这张小票 ${dup.date} 好像已经导入过了，看看流水，别记重了。`) : null,
+    h('div', { class: 'card receipt-card' },
+      fields,
+      l.price > 0 ? h('label', { class: 'form-label' }, '记成', categorySelect(l.category, (v) => { l.category = v; }, '类别')) : null,
+      h('div', { class: 'label-sm' }, '物品档案'),
+      invPart),
+    h('div', { class: 'actions sticky' },
+      r.step > 0 ? h('button', { class: 'secondary', onclick: () => go2(r.step - 1) }, '上一样') : null,
+      h('button', { class: 'secondary', onclick: () => { l.skip = true; go2(r.step + 1); } }, '这样不记'),
+      h('button', { onclick: () => { l.skip = false; go2(r.step + 1); } }, r.step + 1 < n ? '对，下一样' : '对，看合计')),
+    r.step + 1 < n ? h('p', { class: 'center' }, h('button', { class: 'link small', onclick: () => go2(n) }, '剩下的都按推荐，直接看合计')) : null,
+    h('p', { class: 'center' }, h('button', { class: 'link small muted', onclick: () => { receipt = { stage: 'paste', text: r.text }; render(); } }, '重新贴')));
+}
+
+const receiptLines = () => receipt.lines.filter((l) => !l.skip && l.name.trim());
+
+function receiptSummary(head) {
+  const r = receipt;
+  const d = store.data;
+  const lines = receiptLines();
+  const groups = groupByCategory(lines);
+  const sum = Math.round(lines.reduce((a, l) => a + l.price, 0) * 100) / 100;
+  const skipped = r.lines.filter((l) => l.skip);
+  const restock = lines.filter((l) => l.action === 'restock');
+  const toFile = lines.filter((l) => l.action === 'file');
+  const crossed = lines.filter((l) => l.extraId && r.inv);
+  const accounts = d.accounts.filter((a) => a.currency !== 'USD');
+  const totalNote = r.total == null ? `一共 ${exact(sum)}`
+    : Math.abs(r.total - sum) < 0.01 ? `一共 ${exact(sum)}，和小票实付对得上 ✓`
+      : `加起来 ${exact(sum)}，小票实付 ${exact(r.total)}，差 ${exact(Math.round((r.total - sum) * 100) / 100)}——回去看看哪样价格不对，或者是没记的那几样`;
+  return h('div', {},
+    head('最后看一眼'),
+    h('div', { class: 'card' },
+      h('div', { class: 'row-2' },
+        h('input', { type: 'date', value: r.date, 'aria-label': '日期', onchange: (e) => { r.date = e.target.value || today(); } }),
+        h('input', { value: r.shop, placeholder: '店名（选填）', 'aria-label': '店名', oninput: (e) => { r.shop = e.target.value; } })),
+      h('div', { class: 'label-sm' }, '从哪个账户付'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '账户' }, accounts.map((a) => h('button', {
+        type: 'button', class: `chip${a.id === r.account ? ' on' : ''}`, 'aria-pressed': String(a.id === r.account), onclick: () => { r.account = a.id; render(); },
+      }, a.name))),
+      d.settings.payNote ? h('p', { class: 'muted small' }, d.settings.payNote) : null),
+    h('div', { class: 'section-title' }, `记账 ${groups.length} 笔`),
+    h('div', { class: 'card' },
+      groups.map((g) => h('div', { class: 'receipt-row' },
+        h('span', { class: 'grow' }, catName(g.category), h('span', { class: 'muted small block' }, g.names.join('、'))),
+        h('b', {}, exact(g.amount)))),
+      h('p', { class: `small ${r.total != null && Math.abs(r.total - sum) >= 0.01 ? 'warn-text' : 'muted'}` }, totalNote)),
+    r.inv ? [h('div', { class: 'section-title' }, '物品档案'),
+      h('div', { class: 'card small' },
+        restock.length ? h('p', {}, '补货：', restock.map((l) => `${l.name} → ×${l.newQty}`).join('、')) : null,
+        toFile.length ? h('p', {}, '放进「买回来还没建档」：', toFile.map((l) => l.name).join('、')) : null,
+        crossed.length ? h('p', {}, '购物清单划掉：', crossed.map((l) => l.name).join('、')) : null,
+        !restock.length && !toFile.length && !crossed.length ? h('p', { class: 'muted' }, '这张小票不动物品档案。') : null)] : null,
+    skipped.length ? h('p', { class: 'muted small' }, `不记：${skipped.map((l) => l.name).join('、')}`) : null,
+    h('div', { class: 'actions sticky' },
+      h('button', { class: 'secondary', onclick: () => { r.stage = 'check'; r.step = 0; render(); } }, '回去改'),
+      h('button', { onclick: saveReceipt }, '全部保存')));
+}
+
+async function saveReceipt() {
+  const r = receipt;
+  const lines = receiptLines();
+  const groups = groupByCategory(lines);
+  if (!groups.length) return toast('没有要记的', 'error');
+  if (!r.account) return toast('选一下从哪个账户付', 'error');
+  const shop = r.shop.trim();
+  const now = new Date().toISOString();
+  try {
+    await save(`导入小票：${shop || '购物'} ${groups.reduce((a, g) => a + g.amount, 0).toFixed(2)}`, (data) => {
+      for (const g of groups) {
+        data.tx.push({
+          id: newId('t'), type: 'expense', date: r.date, account: r.account, amount: g.amount, category: g.category,
+          note: `${shop ? `${shop}：` : ''}${g.names.join('、')}`, ...(FREEFORM.includes(g.category) ? { what: g.names.join('、') } : {}),
+          receipt: r.key, createdAt: now,
+        });
+      }
+    });
+  } catch { return; }
+  writeJson(LAST_KEY, { account: r.account });
+  r.saved = groups;
+  r.stage = 'done';
+  r.invState = r.inv ? 'saving' : 'skip';
+  render();
+  if (r.inv) saveReceiptInventory();
+}
+
+// 物品档案要联网直接提交；失败了账已经记好了，可以再试
+async function saveReceiptInventory() {
+  const r = receipt;
+  const lines = receiptLines().filter((l) => l.action !== 'none' || l.extraId);
+  if (!lines.length) { r.invState = 'skip'; render(); return; }
+  r.invState = 'saving';
+  try {
+    await updateInventory(r.igh, (data) => applyToInventory(data, lines, { date: r.date, shop: r.shop.trim(), newId }),
+      `小票导入：${lines.map((l) => l.name).join('、')}`);
+    r.invState = 'ok';
+  } catch (e) {
+    r.invState = 'error';
+    r.invError = e.message;
+  }
+  if (receipt === r && currentPath() === '/receipt') render();
+}
+
+function receiptDone(head) {
+  const r = receipt;
+  const total = r.saved.reduce((a, g) => a + g.amount, 0);
+  const lines = receiptLines();
+  const inv = {
+    saving: h('p', { class: 'muted small' }, '正在更新物品档案……'),
+    ok: h('p', { class: 'small' }, `物品档案：${[
+      lines.filter((l) => l.action === 'restock').length ? `补货 ${lines.filter((l) => l.action === 'restock').length} 样` : '',
+      lines.filter((l) => l.action === 'file').length ? `${lines.filter((l) => l.action === 'file').length} 样等着建档` : '',
+      lines.filter((l) => l.extraId).length ? `购物清单划掉 ${lines.filter((l) => l.extraId).length} 样` : '',
+    ].filter(Boolean).join('，')}。`),
+    error: h('div', {}, h('p', { class: 'hint error' }, `物品档案没更新上：${r.invError}（账已经记好了）`),
+      h('button', { class: 'secondary', onclick: saveReceiptInventory }, '再试一次')),
+    skip: null,
+  }[r.invState];
+  const again = () => { receipt = { stage: 'paste', text: '' }; render(); };
+  return h('div', {},
+    head('记好了'),
+    h('div', { class: 'card' },
+      h('p', {}, `记了 ${r.saved.length} 笔，共 ${exact(Math.round(total * 100) / 100)}：`),
+      h('ul', { class: 'small' }, r.saved.map((g) => h('li', {}, `${catName(g.category)} ${exact(g.amount)}（${g.names.join('、')}）`))),
+      inv),
+    h('div', { class: 'actions' },
+      h('button', { onclick: () => { receipt = null; go('#/', true); } }, '回首页'),
+      h('button', { class: 'secondary', onclick: again }, '再导入一张')));
+}
+
+// ---------- Siri 和快捷指令 ----------
+
+function siriView() {
+  const base = window.location.origin + window.location.pathname;
+  const copy = async (text) => { try { await navigator.clipboard.writeText(text); toast('复制好了'); } catch { toast(text); } };
+  const urlRow = (text) => h('div', { class: 'url-row' }, h('code', {}, text), h('button', { class: 'small secondary', onclick: () => copy(text) }, '复制'));
+  return h('div', {},
+    headerSub('Siri 和快捷指令', '说一句话、分享一下，就打开填好的页面'),
+    h('div', { class: 'card' },
+      h('h3', {}, '「嘿 Siri，记账」'),
+      h('p', { class: 'small' }, '说「嘿 Siri，记账」→ 它问「记什么？」→ 你说「午饭 18」→ 账本打开，金额、类别、备注都填好了，点「记好了」。'),
+      h('ol', { class: 'small' },
+        h('li', {}, '打开 iPhone 自带的「快捷指令」App，右上角 ＋ 新建，名字改成「记账」（Siri 就是听这个名字）。'),
+        h('li', {}, '添加操作「要求输入」：类型选「文本」，提示写「记什么？」。'),
+        h('li', {}, '添加操作「URL 编码」：编码的内容选上一步的「提供的输入」。'),
+        h('li', {}, '添加操作「打开 URL」：网址填下面这一串，然后在最后插入变量「URL 编码文本」。')),
+      urlRow(`${base}#/add?text=`),
+      h('p', { class: 'muted small' }, '说的时候带上数字就行：「打车 23.5」「奶茶 18 块 5」「超市买抽纸 19.9」。认不出类别的会空着，点一下就好。')),
+    h('div', { class: 'card' },
+      h('h3', {}, '「发到账本」：小票一步导进来'),
+      h('p', { class: 'small' }, '在 AI 的回答上点分享，选「发到账本」，直接打开「导入小票」并贴好内容。'),
+      h('ol', { class: 'small' },
+        h('li', {}, '在「快捷指令」App 新建，名字「发到账本」。点下面的 ⓘ（详细信息）→ 打开「在共享表单中显示」，接收类型只留「文本」。'),
+        h('li', {}, '顶上会出现「接收 文本 输入，如果没有输入：」→ 选「获取剪贴板」。这样复制了 AI 的回答再直接运行（或者说「嘿 Siri，发到账本」）也行。'),
+        h('li', {}, '添加操作「URL 编码」：内容选「快捷指令输入」。'),
+        h('li', {}, '添加操作「打开 URL」：网址填下面这一串，最后插入变量「URL 编码文本」。')),
+      urlRow(`${base}#/receipt?text=`)),
+    h('div', { class: 'card' },
+      h('h3', {}, '第一次要注意'),
+      h('ul', { class: 'small' },
+        h('li', {}, '快捷指令打开的是 Safari，不是主屏幕上的账本图标。iPhone 上这两个各存各的，第一次在 Safari 打开会让你填一次令牌，填好以后就不用了。'),
+        h('li', {}, '不会自动保存：页面打开后还是要你点一下确认，说错了、认错了都来得及改。'))));
+}
+
 // ---------- DeepSeek 密钥 ----------
 // 先找账本仓库的 config/ai.json；没有就用物品档案仓库里的（同一个令牌能读两个仓库）
 let aiCache = null;
@@ -1905,8 +2251,8 @@ function wishesView() {
     const b = list.findIndex((w) => w.id === bigIds[j]);
     [list[a], list[b]] = [list[b], list[a]];
   });
-  const drop = (w) => confirm(`不想要「${w.name}」了？\n会挪到「放弃的心愿」里，省下 ${money(w.price)}。`)
-    && upd(`放弃心愿：${w.name}`, (data) => { Object.assign(data.wishes.find((x) => x.id === w.id), { status: 'dropped', droppedAt: today() }); });
+  const drop = (w) => saveUndoable(`放弃心愿：${w.name}`, (data) => { Object.assign(data.wishes.find((x) => x.id === w.id), { status: 'dropped', droppedAt: today() }); },
+    `「${w.name}」挪到放弃的心愿，省下 ${money(w.price)}`).then(render).catch(() => {});
 
   const card = (w, bigIndex = -1) => {
     const isBig = bigIndex >= 0;
@@ -2355,8 +2701,8 @@ function subsView() {
       },
     });
   };
-  const stop = (r) => confirm(`停掉「${r.name}」？\n以后不会再自动记账。记得也去 App Store 或对应的地方把订阅取消掉。`)
-    && upd(`停掉订阅：${r.name}`, (data) => { data.recurring = data.recurring.filter((x) => x.id !== r.id); });
+  const stop = (r) => saveUndoable(`停掉订阅：${r.name}`, (data) => { data.recurring = data.recurring.filter((x) => x.id !== r.id); },
+    `停掉了「${r.name}」，记得去 App Store 取消订阅`).then(render).catch(() => {});
   const mark = (r, v) => upd(`订阅体检：${r.name} ${SUB_NOTE[v]}`, (data) => {
     data.subReview = { ...(data.subReview || {}), notes: { ...(data.subReview?.notes || {}), [r.id]: v } };
   });
@@ -2413,8 +2759,8 @@ function goalsView() {
       },
     });
   };
-  const remove = (g) => confirm(`删掉目标「${g.name}」？钱不会动，只是不再显示进度。`)
-    && save(`删除存款目标：${g.name}`, (data) => { data.goals = data.goals.filter((x) => x.id !== g.id); }).then(render).catch(() => {});
+  const remove = (g) => saveUndoable(`删除存款目标：${g.name}`, (data) => { data.goals = data.goals.filter((x) => x.id !== g.id); },
+    `删掉了目标「${g.name}」（钱不动）`).then(render).catch(() => {});
   return h('div', {},
     headerSub('存款目标', '给以后一定会用到的大钱提前留好', h('button', { class: 'icon-btn', 'aria-label': '加一个存款目标', onclick: () => edit() }, icon('plus')), helpButton('存款目标怎么算', [
       ['是什么', ['以后一定会用到的一大笔钱，比如毕业到第一笔工资之间的过渡金。和心愿不一样：心愿是「想要」，这是「到时候必须有」。']],
@@ -2692,7 +3038,9 @@ function settingsView() {
     if (!settings.token) return toast('请填写令牌', 'error');
     connect();
     loadError = null;
-    go('#/', true);
+    const after = sessionStorage.getItem('ledger-after-login');
+    sessionStorage.removeItem('ledger-after-login');
+    go(after || '#/', true);
     refresh();
   };
   const logout = () => {

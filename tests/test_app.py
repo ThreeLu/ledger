@@ -14,6 +14,7 @@ import threading
 import traceback
 from datetime import date, timedelta
 from functools import partial
+from urllib.parse import quote
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -42,8 +43,8 @@ def step(name):
 
 
 class Ctx:
-    def __init__(self, page, repo):
-        self.page, self.repo = page, repo
+    def __init__(self, page, repo, inventory=None):
+        self.page, self.repo, self.inventory = page, repo, inventory
         self.prompt = ""  # 下一次 prompt() 弹窗填什么
 
     def data(self):
@@ -931,6 +932,116 @@ def _(c):
     p.reload()
     expect(p.locator(".letter-text")).to_contain_text("这个月你把吃饭控制得很好")
 
+RECEIPT = {"shop": "测试超市", "date": TODAY, "total": 47.4, "items": [
+    {"name": "可乐", "qty": 2, "price": 6, "category": "饮料奶茶"},
+    {"name": "抽纸", "qty": 1, "price": 19.9, "category": "纸巾清洁"},
+    {"name": "薯片", "qty": 1, "price": 8, "category": "零食"},
+    {"name": "收纳盒", "qty": 1, "price": 15, "category": "收纳整理"},
+    {"name": "优惠", "price": -1.5}]}
+
+
+@step("导入小票：一样一样确认（类别、补货、建档），按类别合成几笔；物品档案补数量、划掉购物清单、进待建档；同一张再导提醒")
+def _(c):
+    p = c.page
+    n = len(c.tx())
+    c.go("#/add")
+    p.get_by_role("link", name="有小票？一次导入一整张").click()
+    expect(p.get_by_role("heading", name="导入小票")).to_be_visible()
+    p.get_by_label("小票内容").fill("下面是整理好的：\n```json\n" + json.dumps(RECEIPT, ensure_ascii=False) + "\n```")
+    p.get_by_role("button", name="下一步").click()
+    expect(p.get_by_text("第 1 / 5 样")).to_be_visible()
+    # 可乐：AI 给的类别；吃的喝的默认不进档案
+    expect(p.get_by_label("类别")).to_have_value("c-drink")
+    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="不进档案")).to_have_attribute("aria-pressed", "true")
+    p.get_by_role("button", name="对，下一样").click()
+    # 抽纸：档案里用完了的消耗品 → 补货；数量改成 2
+    expect(p.get_by_text("第 2 / 5 样")).to_be_visible()
+    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="补货：现在 ×0 → ×1")).to_have_attribute("aria-pressed", "true")
+    p.get_by_label("数量").fill("2")
+    p.get_by_label("数量").blur()
+    expect(p.get_by_label("一共有几个")).to_have_value("2")
+    p.get_by_role("button", name="对，下一样").click()
+    # 薯片：购物清单上手动加的，会划掉
+    expect(p.get_by_text("购物清单上的「薯片」会划掉")).to_be_visible()
+    p.get_by_role("button", name="对，下一样").click()
+    # 收纳盒：档案里没有 → 放进待建档
+    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="放进「买回来还没建档」")).to_have_attribute("aria-pressed", "true")
+    p.get_by_role("button", name="对，下一样").click()
+    expect(p.get_by_text("优惠会并进金额最多的那一笔")).to_be_visible()
+    p.get_by_role("button", name="对，看合计").click()
+    expect(p.get_by_text("和小票实付对得上")).to_be_visible()
+    expect(p.get_by_text("记账 4 笔")).to_be_visible()
+    p.get_by_role("group", name="账户").get_by_role("button", name="生活费卡").click()
+    p.get_by_role("button", name="全部保存").click()
+    expect(p.get_by_text("记了 4 笔，共 ¥47.4")).to_be_visible()
+    expect(p.get_by_text("补货 1 样，1 样等着建档，购物清单划掉 1 样")).to_be_visible()
+    d = c.data()
+    new = d["tx"][n:]
+    assert sorted((t["category"], t["amount"]) for t in new) == [("c-drink", 6), ("c-snack", 8), ("c-storage", 15), ("c-tissue", 18.4)], new
+    assert all(t["account"] == "a-live" and t["date"] == TODAY and t["receipt"] for t in new)
+    assert next(t for t in new if t["category"] == "c-tissue")["note"] == "测试超市：抽纸×2、优惠 -1.5"
+    inv = json.loads(c.inventory.read("inventory.json"))
+    tissue = next(i for i in inv["items"] if i["name"] == "抽纸")
+    assert tissue["quantity"] == 2 and "runningLow" not in tissue and "小票导入" in tissue["notes"], tissue
+    sh = inv["shopping"]
+    assert [e["name"] for e in sh["extra"]] == ["电池"], sh["extra"]
+    assert [(e["name"], e["price"], e["paid"]) for e in sh["toFile"]] == [("收纳盒", 15, True)], sh["toFile"]
+    assert sorted(x["name"] for x in sh["history"]) == ["抽纸", "收纳盒", "薯片"], sh["history"]
+    # 同一张小票再导一次：提醒别记重了
+    p.get_by_role("button", name="再导入一张").click()
+    p.get_by_label("小票内容").fill(json.dumps(RECEIPT, ensure_ascii=False))
+    p.get_by_role("button", name="下一步").click()
+    expect(p.get_by_text("好像已经导入过了")).to_be_visible()
+
+
+@step("小票没有 AI 也能贴（一行一样）；快捷指令带内容打开；剩下的按推荐；物品档案写不上可以再试")
+def _(c):
+    p = c.page
+    n = len(c.tx())
+    text = "楼下便利店\n矿泉水 2 4\n电池 ×4 12.5\n合计 16.5"
+    c.go("#/receipt?text=" + quote(text))
+    expect(p.get_by_text("第 1 / 2 样")).to_be_visible()
+    assert p.evaluate("location.hash") == "#/receipt"  # 网址里的内容用完就去掉
+    expect(p.get_by_label("类别")).to_have_value("c-drink")
+    p.get_by_role("button", name="剩下的都按推荐，直接看合计").click()
+    expect(p.get_by_text("和小票实付对得上")).to_be_visible()
+    # 物品档案这时连不上：账照样记好，可以再试
+    p.route(f"{API}/repos/x/inventory-data/**", lambda r: r.abort())
+    p.get_by_role("button", name="全部保存").click()
+    expect(p.get_by_text("物品档案没更新上")).to_be_visible()
+    assert len(c.tx()) == n + 2
+    p.unroute(f"{API}/repos/x/inventory-data/**")
+    p.get_by_role("button", name="再试一次").click()
+    expect(p.get_by_text("购物清单划掉 1 样")).to_be_visible()
+    assert json.loads(c.inventory.read("inventory.json"))["shopping"]["extra"] == []
+
+
+@step("Siri 一句话记账：打开填好的记一笔；删一笔直接删、可以撤销")
+def _(c):
+    p = c.page
+    n = len(c.tx())
+    c.go("#/add?text=" + quote("午饭 18块5"))
+    expect(p.get_by_text("听到：「午饭 18块5」")).to_be_visible()
+    expect(p.get_by_label("金额", exact=True)).to_have_value("18.5")
+    expect(p.get_by_role("button", name="午餐", exact=True).first).to_have_attribute("aria-pressed", "true")
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert (t["amount"], t["category"], t["note"]) == (18.5, "c-lunch", "午饭"), t
+    c.go("#/siri")
+    expect(p.locator("code", has_text="#/add?text=")).to_be_visible()
+    # 删掉刚才那笔：不弹确认，底部可以撤销
+    c.go(f"#/add?edit={t['id']}")
+    p.get_by_role("button", name="删除").click()
+    toast = p.locator(".toast.undo")
+    expect(toast).to_contain_text("删掉了：午餐")
+    c.wait_saved(n)
+    toast.get_by_role("button", name="撤销").click()
+    expect(p.get_by_text("已撤销")).to_be_visible()
+    c.wait_saved(n + 1)
+    assert c.tx()[-1]["id"] == t["id"]
+
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page
@@ -942,6 +1053,16 @@ def _(c):
     import openpyxl
     rows = list(openpyxl.load_workbook(path).active.values)
     assert rows[0][0] == "日期" and len(rows) == len(c.tx()) + 1, rows[:2]
+
+
+# 物品档案（导入小票写进去）：抽纸用完了、购物清单上手动加了薯片和电池
+def inventory_seed():
+    I = lambda i, name, tag, **kw: {"id": i, "name": name, "assetId": None, "location": "L1", "tags": [tag], "quantity": 1, "fields": {},  # noqa: E731,E741
+                                    "photos": [], "receipts": [], "notes": "", "archived": False, "consumable": False, **kw}
+    data = {"version": 1, "tags": ["清洁用品", "电子产品"], "locations": [{"id": "L1", "name": "储物间", "parent": None, "assetId": None}],
+            "items": [I("i1", "抽纸", "清洁用品", quantity=0, consumable=True, runningLow="2026-10-01"), I("i2", "台灯", "电子产品")],
+            "shopping": {"extra": [{"id": "e1", "name": "薯片"}, {"id": "e2", "name": "电池"}], "skip": {}, "history": [], "toFile": []}}
+    return {"inventory.json": json.dumps(data, ensure_ascii=False).encode()}
 
 
 def fake_externals(page):
@@ -977,7 +1098,8 @@ def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)
     repo = FakeRepo({"README.md": b"# finance-data\n"})
-    serve(repo, API_PORT)
+    inventory = FakeRepo(inventory_seed())
+    serve({REPO: repo, "x/inventory-data": inventory}, API_PORT)
     handler = partial(SimpleHTTPRequestHandler, directory=str(ROOT))
     handler.log_message = lambda *a: None
     app = ThreadingHTTPServer(("127.0.0.1", APP_PORT), handler)
@@ -991,7 +1113,7 @@ def main():
         page = ctx.new_page()
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("dialog", lambda d: d.accept(c.prompt) if d.type == "prompt" else d.accept())
-        c = Ctx(page, repo)
+        c = Ctx(page, repo, inventory)
         fake_externals(page)
         for i, (name, fn) in enumerate(STEPS):
             if i and only and not any(k in name for k in only):
