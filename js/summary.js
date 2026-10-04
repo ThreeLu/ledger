@@ -55,7 +55,9 @@ export function weekSummary(data, day) {
   const prevW = weekOf(addDays(w.start, -1));
   const prev = rangeStats(data, prevW.start, prevW.end);
   const perDay = dailyBudget(data, periodFor(data, w.start));
-  const plan = perDay * 7;
+  // 开始记账之前的那几天不算计划（第一周只算记账以后的天数）
+  const tracked = Array.from({ length: 7 }, (_, i) => addDays(w.start, i)).filter((x) => !data.openingDate || x >= data.openingDate).length;
+  const plan = perDay * tracked;
   const diff = st.living - plan;
   const headline = !st.total ? '这周还没有花销记录。'
     : `这周生活花了 ${money(st.living)}，${Math.abs(diff) < plan * 0.05 ? '和计划差不多' : diff < 0 ? `比计划少 ${money(-diff)}` : `比计划多 ${money(diff)}`}${diff <= plan * 0.1 ? '，节奏正常' : '，下周稍微收一收'}。`;
