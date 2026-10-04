@@ -26,7 +26,7 @@
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
-  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, note, auto?, receipt?, from?, createdAt }] }
+  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
 ```
 
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
@@ -59,6 +59,10 @@
 - 导入小票（`#/receipt`，`js/receipt.js` 纯计算 + `main.js` 页面）：用户把小票照片和「复制提示词」（`receiptPrompt`，类别名从数据里取）发给手机上的 AI，回答贴回来（或快捷指令带 `?text=`，用完从网址去掉）。`parseReceipt` 先找 JSON，不是就按行认「名称 数量 价格 / 合计」。一样一样确认：名称、数量、实付、类别（`guessCategory`：AI 给的类别名 → 以前同名的 → 关键词 `BY_WORD` → 宿舍小物件）、物品档案怎么处理（`matchInventory` 同名 / 包含，消耗品优先；默认 `defaultInventoryAction`：消耗品补货、耐用的不动、没有的吃喝不进档案其他进待建档）。可以「这样不记」「剩下的都按推荐」。**按类别合并成几笔**（用户选的），整单优惠并进最大那笔，备注「店名：名称×数量、…」，每笔带 `receipt` 指纹（日期 + 名称价格），同一张再导时提醒。记账走本地队列；物品档案（`js/bridge.js`，同一个令牌直接提交 inventory.json，`applyToInventory`）要联网，失败了可以「再试一次」，账不受影响。
 - 物品档案那边「买回来了」、新建物品填了价格时也会直接往 `tx` 加支出（带 `from: 'inventory'`），见 inventory/CLAUDE.md。
 - Siri（`#/siri` 有做快捷指令的步骤）：快捷指令打开 `#/add?text=一句话`，`parseSpoken` 认金额（「18块5」= 18.5）、类别（快捷记账名 → 类别名 → 常说的叫法 `SPOKEN` → 以前的备注 → 关键词），预填后还是要点「记好了」；`#/receipt?text=` 打开导入小票。快捷指令打开的是 Safari（和主屏幕图标各存各的），没令牌时记下要去的页面（`ledger-after-login`），填好令牌再跳过去。
+- 账单查漏记（`#/bills`，「更多」和对账页有入口）：`js/sheet.js` 读 CSV（UTF-8 / GBK 自动认）和 xlsx（自己解 zip，`DecompressionStream`）；`js/bills.js` 的 `parseBill` 按「交易时间 / 金额」那一行找表头，按列名取（微信、支付宝列名不同），`matchBills`：只看「支出」，退款 / 关闭 / 不计收支不算，开始记账前的不算，`bill` 单号相同直接认，否则账本里有账户的支出、垫付、转出、还钱（AA 按 group 合计）金额相同、日期差 ≤2 天的配上（每笔只用一次）。没配上的一笔笔确认：类别 `guessBillCategory`（同一 `billParty` 上次的类别 → 商家表 `MERCHANTS` → 商品名关键词），账户 `guessAccount`（`settings.payMethods` 记住的「来源:付款方式」→ 微信零钱找名字带「微信」的 → 上次用的），转账 / 红包 `isPersonal` 默认不记。补记的 tx 带 `bill`、`billParty`。
+- 买不买、心愿单建议会带上物品档案里已有的东西（`inventoryContext()`：名称、类别、数量、部位颜色季节、穿了几次、价格；不发照片序列号备注；缓存 5 分钟），规则 `INVENTORY_RULE`：有类似的就点出来，买不买他自己定（用户 2026-10-04 要求）。
+- 推送脚本（数据仓库 `.github/ledger_push.py`）：一晚上错开整点排三次 cron，`once()` 用 `config/push-sent.json` 保证一天只发一次、23 点后不发（GitHub 定时整点常被跳过）。
+- 手机丢了（`#/lost`）：删令牌、换令牌的步骤 + 两个仓库最近的修改按设备统计（提交说明末尾「 · 设备」，`github.js` 的 `DEVICE` / `recentCommits`）。
 - 撤销代替确认：`saveUndoable(message, fn, doneText)` 先做，底部 `undoToast`「…  撤销」6 秒，撤销 = 把 `diff(改后, 改前)` 套回去。用在删一笔、放弃心愿、停订阅、删存款目标；删垫付（连发票文件）、退出仍然 `confirm`。
 
 ## 代码

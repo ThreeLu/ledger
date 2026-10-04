@@ -622,6 +622,7 @@ def _(c):
     sent = json.dumps(LAST_AI[0], ensure_ascii=False)
     assert "食堂午饭" not in sent and "老账" not in sent, "流水明细不该发给 DeepSeek"
     assert "相当于" in sent and "天的饭钱" in sent and "冷静" in sent, "网站算好的换算和规则要发过去"
+    assert "抽纸 | 清洁用品 | ×0" in sent and "有没有类似的" in sent, "物品档案里已有的东西要发过去（买前查重）"
     p.get_by_label("想问什么").fill("坏了，每天都用")
     p.get_by_role("button", name="发送").click()
     last = p.locator(".msg.ai").last
@@ -1040,6 +1041,55 @@ def _(c):
     expect(p.get_by_text("已撤销")).to_be_visible()
     c.wait_saved(n + 1)
     assert c.tx()[-1]["id"] == t["id"]
+
+
+@step("账单查漏记：微信 Excel + 支付宝 GBK CSV；记过的跳过、退款提现不算、转账默认不记；补记带单号，记住付款方式；再导一次都对上")
+def _(c):
+    p = c.page
+    c.add(15.03, cat="早餐", acc="微信", note="食堂")
+    n = len(c.tx())
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["微信支付账单明细"], ["微信昵称：[测试]"], ["----------------------微信支付账单明细列表--------------------"],
+                ["交易时间", "交易类型", "交易对方", "商品", "收/支", "金额(元)", "支付方式", "当前状态", "交易单号", "商户单号", "备注"],
+                [f"{TODAY} 08:00:00", "商户消费", "食堂", "早餐", "支出", "¥15.03", "零钱", "支付成功", "wx1", "/", "/"],
+                [f"{TODAY} 09:00:00", "商户消费", "瑞幸咖啡", "拿铁", "支出", "¥9.97", "零钱", "已全额退款", "wx2", "/", "/"],
+                [f"{TODAY} 10:00:00", "零钱提现", "招商银行", "/", "/", "¥100.00", "零钱", "提现已到账", "wx3", "/", "/"],
+                [f"{TODAY} 12:01:02", "商户消费", "美团外卖", "美团订单", "支出", "¥23.47", "零钱", "支付成功", "wx4", "/", "/"],
+                [f"{TODAY} 18:00:00", "转账", "小王", "/", "支出", "¥50.01", "零钱", "对方已收钱", "wx5", "/", "/"]]:
+        ws.append(row)
+    wx = ART / "微信账单.xlsx"
+    wb.save(wx)
+    ali = ART / "支付宝账单.csv"
+    ali.write_bytes(("支付宝交易明细\n交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商家订单号,备注,\n"
+                     f"{TODAY} 20:00:00,交通出行,滴滴出行,x@x.com,打车,支出,18.61,中国银行储蓄卡(1234),交易成功,ali1\t,T1\t,,\n").encode("gbk"))
+    c.go("#/more")
+    p.get_by_role("link", name=re.compile("^账单查漏记")).click()
+    p.get_by_label("选账单文件").set_input_files([str(wx), str(ali)])
+    expect(p.get_by_text("没记的第 1 / 3 笔")).to_be_visible()
+    expect(p.get_by_text("记过的 1 笔已经跳过")).to_be_visible()
+    expect(p.get_by_text("美团外卖")).to_be_visible()
+    expect(p.get_by_label("类别")).to_have_value("c-takeout")
+    expect(p.get_by_role("group", name="账户").get_by_role("button", name="微信")).to_have_attribute("aria-pressed", "true")
+    p.get_by_role("button", name="记上").click()
+    expect(p.get_by_text("这是转给个人的钱")).to_be_visible()
+    p.get_by_role("button", name="不记").click()
+    expect(p.get_by_text("滴滴出行")).to_be_visible()
+    expect(p.get_by_label("类别")).to_have_value("c-taxi")
+    p.get_by_role("group", name="账户").get_by_role("button", name="生活费卡").click()
+    p.get_by_role("button", name="记上").click()
+    expect(p.get_by_text("补记 2 笔，共 ¥42.08")).to_be_visible()
+    p.get_by_role("button", name="全部记上").click()
+    expect(p.get_by_text("补记了 2 笔")).to_be_visible()
+    d = c.data()
+    new = d["tx"][n:]
+    assert sorted((t["category"], t["amount"], t["account"], t["bill"]) for t in new) == [("c-takeout", 23.47, "a-wechat", "wx4"), ("c-taxi", 18.61, "a-live", "ali1")], new
+    assert d["settings"]["payMethods"]["alipay:中国银行储蓄卡(1234)"] == "a-live"
+    # 再导一次：都对上了
+    p.get_by_role("button", name="再对一份").click()
+    p.get_by_label("选账单文件").set_input_files([str(wx), str(ali)])
+    expect(p.get_by_text("没有漏记的")).to_be_visible()
 
 
 @step("导出全部账目 Excel")

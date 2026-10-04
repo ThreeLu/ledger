@@ -1,4 +1,4 @@
-import { GitHub } from './github.js';
+import { GitHub, DEVICE, recentCommits } from './github.js';
 import { Store, newId, diff, apply as applyPatch } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
@@ -16,12 +16,14 @@ import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
 import { receiptPrompt, parseReceipt, guessCategory, groupByCategory, matchInventory, defaultInventoryAction, restockQty, applyToInventory, parseSpoken } from './receipt.js';
 import { inventoryGitHub, readInventory, updateInventory } from './bridge.js';
+import { readTable } from './sheet.js';
+import { parseBill, matchBills, guessBillCategory, guessAccount, isPersonal, methodKey } from './bills.js';
 
 const SETTINGS_KEY = 'ledger-settings';
 const DEFAULT_REPO = 'ThreeLu/finance-data';
 const RATE_KEY = 'ledger-usd-rate';
 const LAST_KEY = 'ledger-last'; // 上次用的账户和类别，记账时默认选上
-const EDITING_ROUTES = /^\/(add|reconcile|receipt)/;
+const EDITING_ROUTES = /^\/(add|reconcile|receipt|bills)/;
 
 const view = document.getElementById('view');
 const nav = document.getElementById('nav');
@@ -191,6 +193,7 @@ const routes = [
   [/^\/add$/, (_, q) => addView(q)],
   [/^\/receipt$/, (_, q) => receiptView(q)],
   [/^\/siri$/, () => siriView()],
+  [/^\/bills$/, () => billsView()],
   [/^\/list$/, (_, q) => listView(q)],
   [/^\/accounts$/, () => accountsView()],
   [/^\/account\/([^/]+)$/, (id) => accountView(id)],
@@ -210,12 +213,13 @@ const routes = [
   [/^\/rules$/, () => rulesView()],
   [/^\/quick$/, () => quickView()],
   [/^\/settings$/, () => settingsView()],
+  [/^\/lost$/, () => lostView()],
 ];
 const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/list': [/^\/list/],
   '/summary': [/^\/summary/],
-  '/more': [/^\/more/, /^\/receipt/, /^\/siri/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/],
+  '/more': [/^\/more/, /^\/lost/, /^\/receipt/, /^\/siri/, /^\/bills/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/],
 };
 
 function setupNav() {
@@ -1193,7 +1197,8 @@ function moreView() {
       cell({ href: '#/accounts', ic: 'wallet', color: 'var(--accent)', title: '账户', meta: money(totalAssets(store.data, usdRate())) }),
       cell({ href: '#/claims', ic: 'suitcase', color: 'var(--blue)', title: '垫付报销', meta: store.data.claims.filter((c) => c.status !== 'settled').length ? `${store.data.claims.filter((c) => c.status !== 'settled').length} 件在报` : '' }),
       cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : '' }),
-      cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' })),
+      cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' }),
+      cell({ href: '#/bills', ic: 'search', color: 'var(--sage)', title: '账单查漏记', sub: '导入微信、支付宝账单，找出没记的' })),
     h('div', { class: 'group' },
       cell({ href: '#/wishes', ic: 'sparkle', color: 'var(--accent)', title: '心愿单', sub: '想买但不急的东西，有闲钱再买',
         meta: `基金 ${money(wishFunds(store.data, today()).small)}` }),
@@ -1545,6 +1550,7 @@ function reconcileView() {
       ['为什么', ['漏记、记错几笔很正常。每个预算月开始时对一次，账就不会越积越乱。']],
       ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额，差额自动记成「对账差额」，不算进预算。', '美元账户填美元。']],
     ])),
+    h('a', { class: 'receipt-link', href: '#/bills' }, icon('search'), ' 对不上？导入微信、支付宝账单找出漏记的'),
     h('div', { class: 'card' },
       d.accounts.map((a) => {
         const cur = a.currency === 'USD' ? '$' : '¥';
@@ -2017,6 +2023,169 @@ function receiptDone(head) {
       h('button', { class: 'secondary', onclick: again }, '再导入一张')));
 }
 
+// ---------- 微信、支付宝账单查漏记 ----------
+// 导出账单（CSV 或 Excel）→ 和账本对：金额一样、日期差 2 天内的算记过了 → 没记的一笔笔确认。
+// 每笔带 bill（账单单号）和 billParty（商家），再导同一份不会重复，下次同一个商家按这次的类别猜。
+
+const BILLS_HELP = [
+  ['怎么导出账单', [
+    '微信：我 → 服务 → 钱包 → 账单 → 右上角「…」→ 下载账单 → 用于个人对账 → 选时间（比如上个月）→ 填邮箱。几分钟后邮箱收到一个压缩包，解压密码在微信「微信支付」的消息里。',
+    '支付宝：我的 → 账单 → 右上角「…」→ 开具交易流水证明 → 用于个人对账 → 选时间 → 填邮箱。解压密码在支付宝的消息里。',
+    '在 iPhone「文件」App 或 Mac 上点开压缩包、输入密码解压，得到一个表格文件（.csv 或 .xlsx），在这里选它。微信和支付宝的可以一起选。',
+  ]],
+  ['怎么对', [
+    '账单上每一笔，在账本里找金额一样、日期差 2 天以内的，找到了就算记过了（AA 的几笔按总数对）。',
+    '没找到的一笔笔给你看：类别是猜的，可以改；从哪个账户付的按付款方式猜，改过一次以后就记住了。',
+    '转给个人的钱、红包默认「不记」：可能是 AA、还钱，这种去人情账记；真是买东西就点「记上」。',
+    '开始记账之前的、退款的、转账充值提现这些不算钱花出去的，不用管。',
+  ]],
+];
+
+let billState = null;
+
+function billsView() {
+  if (!billState) billState = { stage: 'pick' };
+  const s = billState;
+  const head = (sub) => headerSub('账单查漏记', sub, helpButton('账单查漏记怎么用', BILLS_HELP));
+  if (s.stage === 'pick') return billsPick(head);
+  if (s.stage === 'check') return billsCheck(head);
+  if (s.stage === 'summary') return billsSummary(head);
+  return billsDone(head);
+}
+
+function billsPick(head) {
+  const d = store.data;
+  const input = h('input', { type: 'file', accept: '.csv,.xlsx,text/csv', multiple: true, hidden: true, 'aria-label': '选账单文件',
+    onchange: async (e) => {
+      const files = [...e.target.files];
+      if (!files.length) return;
+      try {
+        const bills = [];
+        const names = [];
+        for (const f of files) {
+          const parsed = parseBill(await readTable(f));
+          bills.push(...parsed.rows);
+          names.push(`${parsed.source === 'wechat' ? '微信' : '支付宝'}（${parsed.rows.length} 笔）`);
+        }
+        const result = matchBills(bills, d.tx, d.openingDate);
+        const cats = d.categories.filter((c) => c.kind === 'expense' && !c.hidden && !AUTO_CATEGORIES.includes(c.id));
+        const accounts = d.accounts.filter((a) => a.currency !== 'USD');
+        const last = readJson(LAST_KEY).account;
+        const remembered = d.settings.payMethods || {};
+        billState = {
+          stage: result.missing.length ? 'check' : 'done', step: 0, names, result, saved: [],
+          lines: result.missing.map((b) => ({
+            b, category: guessBillCategory(b, cats, d.tx, (name) => guessCategory(cats, d.tx, name)),
+            account: guessAccount(b, accounts, remembered, last), note: b.party || b.product, skip: isPersonal(b), personal: isPersonal(b),
+          })),
+        };
+        render();
+      } catch (err) { toast(err.message, 'error'); }
+    } });
+  return h('div', {},
+    head('看看有没有漏记的'),
+    h('div', { class: 'card' },
+      h('p', { class: 'small' }, '把微信、支付宝导出的账单拿来和账本对一对：记过的自动跳过，没记的一笔笔让你确认。'),
+      h('ol', { class: 'small' }, BILLS_HELP[0][1].map((x) => h('li', {}, x)))),
+    input,
+    h('div', { class: 'actions sticky' }, h('button', { onclick: () => input.click() }, '选账单文件（.csv / .xlsx）')));
+}
+
+function billLine(l) {
+  const b = l.b;
+  return h('div', { class: 'bill-meta' },
+    h('div', { class: 'bill-amount' }, exact(b.amount)),
+    h('div', {}, h('b', {}, b.party || '（没写商家）'), b.product && b.product !== b.party ? h('span', { class: 'muted small block' }, b.product) : null),
+    h('div', { class: 'muted small' }, `${b.source === 'wechat' ? '微信' : '支付宝'} · ${b.time.slice(5, 16)} · ${b.method}${b.type ? ` · ${b.type}` : ''}`));
+}
+
+function billsCheck(head) {
+  const s = billState;
+  const d = store.data;
+  const n = s.lines.length;
+  const l = s.lines[s.step];
+  const go2 = (step) => { s.step = step; if (step >= n) s.stage = 'summary'; render(); window.scrollTo(0, 0); };
+  const accounts = d.accounts.filter((a) => a.currency !== 'USD');
+  const r = s.result;
+  return h('div', {},
+    head(`没记的第 ${s.step + 1} / ${n} 笔`),
+    s.step === 0 ? h('p', { class: 'muted small' }, `${s.names.join('、')}：记过的 ${r.matched.length} 笔已经跳过${r.before.length ? `，开始记账前的 ${r.before.length} 笔不算` : ''}${r.skipped.length ? `，退款、转账充值等 ${r.skipped.length} 笔不算` : ''}。`) : null,
+    h('div', { class: 'card' },
+      billLine(l),
+      l.personal ? h('p', { class: 'banner soon small' }, '这是转给个人的钱（转账 / 红包）。AA、还钱去「人情账」记；真是买东西、发红包就点「记上」。') : null,
+      h('label', { class: 'form-label' }, '记成', categorySelect(l.category, (v) => { l.category = v; }, '类别')),
+      h('div', { class: 'label-sm' }, '从哪个账户付'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '账户' }, accounts.map((a) => h('button', {
+        type: 'button', class: `chip${a.id === l.account ? ' on' : ''}`, 'aria-pressed': String(a.id === l.account),
+        onclick: () => {
+          // 同一种付款方式的，后面的一起改
+          for (const x of s.lines.slice(s.step)) if (methodKey(x.b) === methodKey(l.b)) x.account = a.id;
+          render();
+        },
+      }, a.name))),
+      h('label', { class: 'form-label' }, '备注', h('input', { value: l.note, 'aria-label': '备注', oninput: (e) => { l.note = e.target.value; } }))),
+    h('div', { class: 'actions sticky' },
+      s.step > 0 ? h('button', { class: 'secondary', onclick: () => go2(s.step - 1) }, '上一笔') : null,
+      h('button', { class: 'secondary', onclick: () => { l.skip = true; go2(s.step + 1); } }, '不记'),
+      h('button', { onclick: () => { l.skip = false; go2(s.step + 1); } }, '记上')),
+    s.step + 1 < n ? h('p', { class: 'center' }, h('button', { class: 'link small', onclick: () => go2(n) }, '剩下的都按推荐，直接看合计')) : null);
+}
+
+function billsSummary(head) {
+  const s = billState;
+  const keep = s.lines.filter((l) => !l.skip);
+  const total = round2(keep.reduce((a, l) => a + l.b.amount, 0));
+  return h('div', {},
+    head('最后看一眼'),
+    h('div', { class: 'section-title' }, `补记 ${keep.length} 笔，共 ${exact(total)}`),
+    keep.length ? h('div', { class: 'card' }, keep.map((l) => h('div', { class: 'receipt-row' },
+      h('span', { class: 'grow' }, `${l.note || catName(l.category)}`, h('span', { class: 'muted small block' }, `${l.b.date.slice(5)} · ${catName(l.category)} · ${accName(l.account)}`)),
+      h('b', {}, exact(l.b.amount))))) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '都不记。')),
+    s.lines.some((l) => l.skip) ? h('p', { class: 'muted small' }, `不记：${s.lines.filter((l) => l.skip).map((l) => `${l.b.party || l.b.product} ${exact(l.b.amount)}`).join('、')}`) : null,
+    h('div', { class: 'actions sticky' },
+      h('button', { class: 'secondary', onclick: () => { s.stage = 'check'; s.step = 0; render(); } }, '回去改'),
+      h('button', { onclick: saveBills }, keep.length ? '全部记上' : '完成')));
+}
+
+async function saveBills() {
+  const s = billState;
+  const keep = s.lines.filter((l) => !l.skip);
+  const now = new Date().toISOString();
+  if (keep.length) {
+    try {
+      await save(`账单补记：${keep.length} 笔 ${round2(keep.reduce((a, l) => a + l.b.amount, 0))}`, (data) => {
+        const have = new Set(data.tx.map((t) => t.bill).filter(Boolean));
+        for (const l of keep) {
+          if (have.has(l.b.id)) continue; // 别的设备刚补过
+          data.tx.push({
+            id: newId('t'), type: 'expense', date: l.b.date, account: l.account, amount: l.b.amount, category: l.category,
+            note: l.note.trim(), ...(FREEFORM.includes(l.category) ? { what: l.note.trim() || l.b.product || l.b.party } : {}),
+            bill: l.b.id, billParty: l.b.party || undefined, createdAt: now,
+          });
+        }
+        // 记住付款方式对应哪个账户，下次直接选好
+        data.settings.payMethods = { ...(data.settings.payMethods || {}), ...Object.fromEntries(keep.map((l) => [methodKey(l.b), l.account])) };
+      });
+    } catch { return; }
+  }
+  s.saved = keep;
+  s.stage = 'done';
+  render();
+}
+
+function billsDone(head) {
+  const s = billState;
+  const total = round2(s.saved.reduce((a, l) => a + l.b.amount, 0));
+  return h('div', {},
+    head('对完了'),
+    h('div', { class: 'card' },
+      h('p', {}, s.lines.length ? `补记了 ${s.saved.length} 笔，共 ${exact(total)}。` : '没有漏记的，账本和账单对得上 ✓'),
+      h('p', { class: 'muted small' }, `${s.names.join('、')}：记过的 ${s.result.matched.length} 笔。`)),
+    h('div', { class: 'actions' },
+      h('button', { onclick: () => { billState = null; go('#/', true); } }, '回首页'),
+      h('button', { class: 'secondary', onclick: () => { billState = null; render(); } }, '再对一份')));
+}
+
 // ---------- Siri 和快捷指令 ----------
 
 function siriView() {
@@ -2193,6 +2362,7 @@ async function askWishAdvice(btn) {
     '2. 什么时候买（when，一句话）：结合心愿基金、已攒的钱和预计攒够的时间；只在相关时提一下常见的大促（比如双十一、618）或教育优惠，不要每条都提。',
     '3. 真需要还是一时想要（need：需要 / 想要 / 说不准），comment 用一两句话说理由，可以提一个值得想想的问题。',
     '你查不到实时价格，不要编价格。不要建议动应急钱或存款，不要推荐分期、花呗、信用卡。',
+    `4. ${INVENTORY_RULE}写在那一条的 comment 里。`,
     '只输出 JSON：{"summary":"一两句话总的建议","order":["id"],"items":[{"id":"","when":"","need":"需要","comment":""}]}',
   ].join('\n');
   const user = [
@@ -2201,6 +2371,7 @@ async function askWishAdvice(btn) {
     `这个预算月生活预算还剩 ${money(Math.max(0, hl.left))}，还有 ${hl.daysLeft} 天。安全垫 ${hl.items.find((x) => x.key === 'cushion')?.value || ''}。`,
     recent.length ? `最近几个预算月：${recent.join('；')}` : '刚开始记账，还没有完整的预算月。',
     d.settings.summerMonths?.length ? `${d.settings.summerMonths.join('、')} 月没有收入。` : '',
+    (await inventoryContext()).trim(),
     '心愿单（id | 名称 | 价格 | 小额/大额 | 想要程度 | 为什么想要 | 加进来几天 | 已攒 | 预计攒够 | 想在什么时候前买到）：',
     ...open.map((w) => {
       const big = isBigWish(d, w);
@@ -2381,6 +2552,26 @@ function moneyContext(d) {
   ].filter(Boolean).join('\n');
 }
 
+// 物品档案里已有的东西（买不买、心愿单发给 DeepSeek，用户 2026-10-04 要求：买之前看看已经有没有类似的）
+// 每行：名称 | 类别 | 数量 | 颜色季节等 | 穿了几次（衣服鞋）、最近 30 天几次 | 价格。不发照片、序列号、备注。
+const invCache = { at: 0, text: '' };
+async function inventoryContext() {
+  if (Date.now() - invCache.at < 5 * 60000) return invCache.text;
+  let inv = null;
+  try { inv = await readInventory(inventoryGitHub(settings)); } catch { /* 读不到就不带 */ }
+  const since = addDays(today(), -30);
+  const lines = (inv?.items || []).filter((i) => !i.archived).slice(0, 400).map((i) => {
+    const f = i.fields || {};
+    const fields = ['部位', '颜色', '季节', '厚薄', '风格'].filter((k) => f[k]).map((k) => f[k]).join('/');
+    const worn = Array.isArray(i.worn) ? `穿了 ${i.worn.length} 次（近 30 天 ${i.worn.filter((x) => x >= since).length} 次）` : '';
+    return [i.name, i.tags?.[0] || '', `×${i.quantity ?? 1}`, fields, worn, i.purchasePrice ? `¥${i.purchasePrice}` : ''].map((x) => String(x).replace(/\|/g, '/')).join(' | ');
+  });
+  invCache.at = Date.now();
+  invCache.text = lines.length ? ['', `他宿舍里已经有的东西（物品档案，${lines.length} 件；名称 | 类别 | 数量 | 部位颜色季节等 | 穿的次数 | 价格）：`, ...lines].join('\n') : '';
+  return invCache.text;
+}
+const INVENTORY_RULE = '他想买东西时，先看下面「已经有的东西」里有没有类似的：有的话点出来（比如「你已经有 3 件灰色卫衣，最近一个月只穿了 1 次」），用得多不多也说一句；只是提醒，买不买他自己定。没有类似的就不用提。';
+
 async function askMoney(question) {
   const d = store.data;
   const ai = await aiConfig();
@@ -2395,10 +2586,12 @@ async function askMoney(question) {
     '网站算好的「硬规则」必须遵守：会动到应急钱的，verdict 必须是 no；大额的东西就算值得买，也要建议先冷静几天、放进心愿单。',
     '他问别的（比如这个月花得怎么样、钱花哪了、某个理财概念）就直接回答，verdict 为 null。',
     'answer 控制在 150 字以内，可以分几行。item 是他想买的东西（名称和价格，价格不知道就 null），不是买东西的问题就 null。',
+    INVENTORY_RULE,
     '只输出 JSON：{"answer":"","verdict":null,"item":{"name":"","price":null}}',
     '',
     '他的情况（汇总数字）：',
     moneyContext(d),
+    await inventoryContext(),
   ].join('\n');
   const extra = pf ? [
     '',
@@ -3020,7 +3213,7 @@ function pushCard() {
   }
   return h('div', { class: 'card' },
     h('h3', {}, '手机提醒'),
-    h('p', { class: 'small' }, '每晚 9 点左右：当天还没记账就提醒你；周日加一句这周的总结，预算月最后一天加一句这个月的总结，合成一条，不多打扰。由 GitHub 定时发送，可能晚几分钟到半小时。'),
+    h('p', { class: 'small' }, '每晚 9 点左右：当天还没记账就提醒你；周日加一句这周的总结，预算月最后一天加一句这个月的总结，合成一条，不多打扰。由 GitHub 定时发送，9 点到 10 点之间到（一晚上排了几次，只会收到一条）。'),
     h('p', { class: 'small muted' }, 'iPhone 上要先「分享 → 添加到主屏幕」，从主屏幕的「账本」打开再点开启。和物品档案的提醒是分开的。'),
     status,
     sup.ok ? h('button', { class: 'secondary', onclick: enable }, '在这台设备上开启') : null);
@@ -3068,7 +3261,44 @@ function settingsView() {
     settings.token && store?.data ? pushCard() : null,
     settings.token ? h('div', { class: 'card' },
       h('p', { class: 'small' }, '数据仓库：', settings.repo || DEFAULT_REPO, '（每次记账都是一次提交，可以在 GitHub 上查看历史）'),
-      h('button', { class: 'danger', onclick: logout }, '退出这台设备')) : null);
+      h('div', { class: 'actions' }, h('a', { class: 'button secondary', href: '#/lost' }, '手机丢了怎么办'), h('button', { class: 'danger', onclick: logout }, '退出这台设备'))) : null);
+}
+
+// ---------- 手机丢了怎么办 ----------
+// 令牌在手机的浏览器里，捡到手机的人能看、能改物品档案和账本。在 GitHub 上删掉令牌，马上就失效。
+function lostView() {
+  const box = h('div', {}, h('p', { class: 'muted small' }, '正在读最近的修改……'));
+  const repos = [['账本', gh], ['物品档案', inventoryGitHub(settings)]].filter(([, g]) => g);
+  Promise.all(repos.map(([name, g]) => recentCommits(g, 40).then((list) => list.map((c) => ({ ...c, site: name }))).catch(() => [])))
+    .then((lists) => {
+      const all = lists.flat().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 40);
+      if (!all.length) { box.replaceChildren(h('p', { class: 'muted small' }, '读不到修改记录。')); return; }
+      const count = {};
+      for (const c of all) count[c.device] = (count[c.device] || 0) + 1;
+      const when = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+      box.replaceChildren(
+        h('p', { class: 'small' }, `最近 ${all.length} 次修改来自：`, Object.entries(count).map(([k, v]) => `${k} ${v} 次`).join('、'), `。这台是 ${DEVICE}。`),
+        h('div', { class: 'commit-list' }, all.map((c) => h('div', { class: 'commit-row' },
+          h('span', { class: 'muted small commit-when' }, when(c.date)),
+          h('span', { class: 'grow small' }, c.message, h('span', { class: 'muted block' }, `${c.site} · ${c.device}`))))));
+    });
+  return h('div', {},
+    headerSub('手机丢了怎么办', '两分钟，让丢的手机再也打不开你的数据'),
+    h('div', { class: 'card' },
+      h('h3', {}, '马上做'),
+      h('ol', { class: 'small' },
+        h('li', {}, '用电脑或借别人的手机，登录 github.com，打开 ', h('a', { href: 'https://github.com/settings/personal-access-tokens', target: '_blank', rel: 'noopener' }, '令牌列表'), '（Settings → Developer settings → Personal access tokens → Fine-grained tokens）。'),
+        h('li', {}, '点这两个网站用的那个令牌（能访问 inventory-data 和 finance-data 的）→ 最下面 Delete。删掉的那一刻，丢的手机上的物品档案和账本就读不了、改不了了。'),
+        h('li', {}, '新建一个令牌（Only select repositories 勾 inventory-data 和 finance-data，Contents 选 Read and write），在新手机的物品档案「设置」里填上；账本会自动用同一个。'),
+        h('li', {}, 'DeepSeek 密钥存在数据仓库里，令牌删了别人也拿不到了。不放心的话去 DeepSeek 后台换一个新密钥，在物品档案「设置 → AI」里更新。'))),
+    h('div', { class: 'card' },
+      h('h3', {}, '然后看看'),
+      h('ul', { class: 'small' },
+        h('li', {}, '下面的修改记录里，有没有不是你做的（陌生的设备、你没改过的东西）。'),
+        h('li', {}, '真被改了也不怕：每次修改在 GitHub 上都有历史，可以恢复到任何一次之前（让 Claude 帮你恢复）。'),
+        h('li', {}, '平时：iPhone 设好锁屏密码、打开「查找我的 iPhone」，丢了还能远程抹掉。'))),
+    h('div', { class: 'section-title' }, '最近的修改'),
+    h('div', { class: 'card' }, box));
 }
 
 boot();
