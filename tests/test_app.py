@@ -735,13 +735,13 @@ def _(c):
     p.get_by_role("button", name="加一个存款目标").click()
     sheet = p.locator(".sheet")
     sheet.get_by_label("目标").fill("过渡金")
-    sheet.get_by_label("要存多少").fill("30000")
-    sheet.get_by_label("什么时候前存够").fill("2031-05-31")
+    sheet.get_by_label("要存多少").fill("20000")
+    sheet.get_by_label("什么时候前存够").fill("2030-12-31")
     sheet.get_by_role("button", name="保存").click()
     card = p.locator(".card.goal", has_text="过渡金")
     expect(card).to_contain_text("平均每月留")
     g = c.data()["goals"][0]
-    assert (g["target"], g["by"]) == (30000, "2031-05-31"), g
+    assert (g["target"], g["by"]) == (20000, "2030-12-31"), g
 
 @step("导出全部账目 Excel")
 def _(c):
