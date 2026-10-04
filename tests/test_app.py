@@ -652,6 +652,97 @@ def _(c):
     c.go("#/settings")
     expect(p.locator(".card", has_text="手机提醒")).to_contain_text("每晚 9 点")
 
+@step("个税退税：兼职收入填被预扣的个税；按年汇总；去年的点「办好了」记退税收入")
+def _(c):
+    p = c.page
+    c.go("#/add")
+    p.locator(".segmented").get_by_role("button", name="收入").click()
+    p.get_by_label("金额", exact=True).fill("1600")
+    p.get_by_role("button", name="兼职", exact=True).click()
+    p.get_by_label("被预扣的个税").fill("400")
+    p.get_by_role("group", name="账户").get_by_role("button", name="生活费卡").click()
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    assert c.tx()[-1]["tax"] == 400
+    # 去年的兼职（被扣过税）
+    y = date.today().year - 1
+    d = c.data()
+    d["tx"].append({"id": "lastyearjob", "type": "income", "date": f"{y}-11-02", "account": "a-live", "amount": 800, "category": "i-job", "tax": 200, "note": "", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/more")
+    p.reload()
+    p.get_by_role("link", name=re.compile("^个税退税")).click()
+    this = p.locator(".card").filter(has=p.get_by_role("heading", name=f"{y + 1} 年", exact=True))
+    expect(this).to_contain_text("¥400")
+    expect(this).to_contain_text("明年 3 月 1 日到 6 月 30 日办")
+    last = p.locator(".card").filter(has=p.get_by_role("heading", name=f"{y} 年", exact=True))
+    expect(last).to_contain_text("¥200")
+    last.get_by_role("button", name="办好了").click()
+    p.locator(".sheet").get_by_label("退了多少").fill("200")
+    n = len(c.tx())
+    p.locator(".sheet").get_by_role("button", name="办好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert (t["category"], t["amount"]) == ("i-tax", 200) and c.data()["taxYears"][str(y)]["refund"] == 200, t
+    expect(last).to_contain_text("退了 ¥200")
+
+
+@step("订阅：一年花多少、改金额、加年费、停掉、体检；满 3 个月首页提醒")
+def _(c):
+    p = c.page
+    d = c.data()
+    d["subReview"] = {"last": (date.today() - timedelta(days=100)).isoformat()}
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".cell.indicator", has_text="订阅体检")).to_be_visible()
+    c.go("#/subs")
+    expect(p.locator(".banner")).to_contain_text("该体检了")
+    card = p.locator(".card.sub", has_text="订阅乙")
+    expect(card).to_contain_text("¥8,400/年")  # 100 美元 × 12 × 7
+    card.get_by_role("button", name="考虑降档").click()
+    expect(card.get_by_role("button", name="考虑降档")).to_have_attribute("aria-pressed", "true")
+    card.get_by_role("button", name="改").click()
+    p.locator(".sheet").get_by_label("每次扣多少").fill("20")
+    p.locator(".sheet").get_by_role("button", name="保存").click()
+    expect(card).to_contain_text("¥1,680/年")
+    # 加一个年费
+    p.get_by_role("button", name="加一个订阅").click()
+    sheet = p.locator(".sheet")
+    sheet.get_by_label("名称").fill("笔记软件")
+    sheet.get_by_label("每次扣多少").fill("68")
+    sheet.get_by_role("button", name="每年").click()
+    sheet.get_by_label("每年哪天续费").fill(f"{date.today().year}-05-25")
+    sheet.get_by_role("group", name="从哪个账户扣").get_by_role("button", name="生活费卡").click()
+    sheet.get_by_role("button", name="保存").click()
+    expect(p.locator(".card.sub", has_text="笔记软件")).to_contain_text("每年 5月25日")
+    r = next(x for x in c.data()["recurring"] if x["name"] == "笔记软件")
+    assert r["yearly"] == "05-25" and r["remindOnly"] and "day" not in r, r
+    p.locator(".card.sub", has_text="订阅甲").get_by_role("button", name="停掉", exact=True).click()
+    expect(p.locator(".card.sub", has_text="订阅甲")).to_have_count(0)
+    p.get_by_role("button", name="体检完了").click()
+    expect(p.locator(".banner")).to_have_count(0)
+    assert c.data()["subReview"]["last"] == TODAY
+    c.go("#/")
+    expect(p.locator(".cell.indicator", has_text="订阅体检")).to_have_count(0)
+
+
+@step("存款目标：毕业过渡金的进度和每月要留多少")
+def _(c):
+    p = c.page
+    c.go("#/goals")
+    p.get_by_role("button", name="加一个存款目标").click()
+    sheet = p.locator(".sheet")
+    sheet.get_by_label("目标").fill("过渡金")
+    sheet.get_by_label("要存多少").fill("30000")
+    sheet.get_by_label("什么时候前存够").fill("2031-05-31")
+    sheet.get_by_role("button", name="保存").click()
+    card = p.locator(".card.goal", has_text="过渡金")
+    expect(card).to_contain_text("平均每月留")
+    g = c.data()["goals"][0]
+    assert (g["target"], g["by"]) == (30000, "2031-05-31"), g
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page

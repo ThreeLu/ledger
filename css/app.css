@@ -373,5 +373,11 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .chat-input textarea { min-height: 44px; max-height: 120px; }
 .chat-input button { flex: none; }
 
+/* 个税、订阅、存款目标 */
+.tax-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 15px; margin-bottom: 8px; }
+.tax-grid b { font-variant-numeric: tabular-nums; text-align: right; }
+.sub .chips, .goal .chips { margin: 10px 0 0; }
+.goal .bar-track { margin-top: 10px; }
+
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }

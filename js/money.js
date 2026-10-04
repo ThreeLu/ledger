@@ -61,7 +61,7 @@ export function defaultData(today) {
     categoryVersion: CATEGORY_VERSION,
     categories: [
       ...EXPENSE_CATEGORIES.map((c) => ({ ...c })),
-      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-other', '其他收入'),
+      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
     notes: {}, // 预算每组的说明（「我们的花钱方式」里显示）
@@ -112,6 +112,13 @@ export function migrate(data) {
     data.categoryVersion = CATEGORY_VERSION;
   }
   for (const c of data.categories) if (!c.sub) delete c.sub;
+  if (!data.categories.some((c) => c.id === 'i-tax')) {
+    const at = data.categories.findIndex((c) => c.id === 'i-other');
+    data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-tax', '个税退税'));
+  }
+  data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
+  data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
+  data.goals ||= []; // 存款目标：{ id, name, target, by: 'YYYY-MM-DD', note }
   // 心愿单
   data.wishes ||= []; // { id, name, price, want: 'very'|'nice', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
@@ -395,6 +402,60 @@ export function bigWishPlan(data, today) {
 
 export const coolingLeft = (data, w, today) => Math.max(0, (data.settings.coolDays ?? 3) - daysBetween(w.createdAt, today));
 
+// ---------- 个税退税 ----------
+// 兼职（劳务报酬）发钱时常被预扣 20% 左右的个税；学生一年的应税收入一般不高，每年 3 月 1 日到 6 月 30 日
+// 在「个人所得税」App 做上一年的年度汇算，多扣的能退回来。收入记账时填 tax（被预扣的个税）。
+
+export const TAX_FROM = '03-01';
+export const TAX_TO = '06-30';
+
+export function taxYear(data, year) {
+  const jobs = data.tx.filter((t) => t.type === 'income' && t.category === 'i-job' && t.date.startsWith(`${year}-`));
+  return {
+    year, jobs,
+    income: r2(jobs.reduce((s, t) => s + cny(t), 0)),
+    withheld: r2(jobs.reduce((s, t) => s + (Number(t.tax) || 0), 0)),
+    done: data.taxYears?.[year]?.done || null,
+    refund: data.taxYears?.[year]?.refund ?? null,
+  };
+}
+
+// 今天在不在汇算期；在的话是哪一年的汇算
+export function taxSeason(today) {
+  const md2 = today.slice(5);
+  return md2 >= TAX_FROM && md2 <= TAX_TO ? Number(today.slice(0, 4)) - 1 : null;
+}
+
+// ---------- 订阅体检 ----------
+export const SUB_REVIEW_DAYS = 90;
+export function subReviewDue(data, today) {
+  if (!data.recurring.length) return null;
+  const last = data.subReview?.last || data.openingDate || today;
+  const days = daysBetween(last, today);
+  return days >= SUB_REVIEW_DAYS ? { last, days } : null;
+}
+
+// 订阅一年要花多少（人民币）
+export function yearlyCost(data, r, rate = data.settings.usdRate) {
+  return (r.day ? r.amount * 12 : r.amount) * (isUsd(data, r.account) ? rate : 1);
+}
+
+// ---------- 存款目标（比如毕业过渡金）----------
+// 不另外挪钱：存钱卡里扣掉应急钱底线、大额心愿已攒的，剩下的按目标顺序算进度。
+export function goalStatus(data, today) {
+  const floorAcc = data.settings.floorAccount;
+  const big = wishFunds(data, today);
+  const bigSaved = data.wishes.filter((w) => w.status === 'open').reduce((s, w) => s + (big.saved[w.id] || 0), 0);
+  let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0) - bigSaved);
+  return data.goals.map((g) => {
+    const have = Math.min(pool, Number(g.target) || 0);
+    pool -= have;
+    const months = g.by ? Math.max(1, Math.round(daysBetween(today, g.by) / 30.4)) : null;
+    const need = Math.max(0, (Number(g.target) || 0) - have);
+    return { g, have: r2(have), need: r2(need), months, perMonth: months ? Math.ceil(need / months) : null };
+  });
+}
+
 // ---------- 健康指标 ----------
 // level: good 绿 / warn 黄 / bad 红。每个都带一句大白话 text，红黄的带 action（该做什么）。
 
@@ -523,6 +584,29 @@ export function health(data, today, rate = data.settings.usdRate) {
       key: 'reconcile', name: '对账', value: '还没对',
       level: 'warn', text: '新的预算月开始了，花 1 分钟对一下各账户余额',
       action: '新的预算月开始了，到「更多 → 对账」看一眼各账户的实际余额，对不上的填一下。',
+    });
+  }
+
+  // 8. 个税退税（汇算期里，去年兼职被预扣过个税、还没办）
+  const ty = taxSeason(today);
+  if (ty) {
+    const tx = taxYear(data, ty);
+    if (tx.withheld > 0 && !tx.done) {
+      out.push({
+        key: 'tax', name: '个税退税', value: money(tx.withheld),
+        level: 'warn', text: `${ty} 年兼职被预扣的个税，可以申请退了`,
+        action: `${ty} 年兼职被预扣了 ${money(tx.withheld)} 个税，${md(`${ty + 1}-${TAX_TO}`)}前在「个人所得税」App 做年度汇算，多扣的能退回来。到「更多 → 个税退税」看步骤。`,
+      });
+    }
+  }
+
+  // 9. 订阅体检（每 3 个月）
+  const sr = subReviewDue(data, today);
+  if (sr) {
+    out.push({
+      key: 'subs', name: '订阅体检', value: `${sr.days} 天没看`,
+      level: 'warn', text: '每 3 个月看一眼：每个订阅还值不值',
+      action: '订阅该体检了：到「更多 → 订阅」看一眼每个还用不用、能不能降档。',
     });
   }
 

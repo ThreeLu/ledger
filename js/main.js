@@ -5,6 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus,
 } from './money.js';
 import { askJson } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -148,6 +149,9 @@ const routes = [
   [/^\/reconcile$/, () => reconcileView()],
   [/^\/wishes$/, () => wishesView()],
   [/^\/ask$/, () => askView()],
+  [/^\/tax$/, () => taxView()],
+  [/^\/subs$/, () => subsView()],
+  [/^\/goals$/, () => goalsView()],
   [/^\/budget$/, () => budgetView()],
   [/^\/rules$/, () => rulesView()],
   [/^\/quick$/, () => quickView()],
@@ -157,7 +161,7 @@ const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/list': [/^\/list/],
   '/summary': [/^\/summary/],
-  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/],
+  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/],
 };
 
 function setupNav() {
@@ -307,6 +311,16 @@ const EXPLAIN = {
     '漏记、记错几笔很正常。每个预算月对一次，账就不会越积越乱，网站上的数字才可信。',
     `${x.text}。到「更多 → 对账」，对得上的不用填，对不上的填实际余额就行，1 分钟就好。`,
   ],
+  tax: (x) => [
+    '兼职发钱时，单位一般会先预扣 20% 左右的个税。但个税按一整年算，学生一年的应税收入通常不高，多扣的可以在第二年 3 月 1 日到 6 月 30 日申请退回。',
+    '这是你自己的钱，不办就白白放弃了；整个过程在手机上十几分钟就能办完。',
+    `${x.action}`,
+  ],
+  subs: (x) => [
+    '订阅体检：每 3 个月看一眼所有自动扣费的订阅，问问每个还值不值。',
+    '订阅是自动扣的，最容易被忘掉；一年加起来往往比想的多。',
+    `${x.action}`,
+  ],
   charges: (x) => [
     '接下来 35 天要从 Apple ID 自动扣的订阅，和账户里的美元比一比。',
     '余额不够的话订阅会扣费失败、被停掉。礼品卡要提前买，所以提前提醒你。',
@@ -444,7 +458,7 @@ function txRow(t, onclick = null) {
   else if (t.type === 'advance' || t.type === 'payback') { amount = `−${exact(t.amount, cur)}`; cls = 'muted'; }
   else { amount = exact(t.amount, cur); cls = 'muted'; }
   const where = t.type === 'transfer' || t.type === 'writeoff' ? null : t.account ? accName(t.account) : null;
-  const tag = { advance: '不算花销', repay: '不算收入', payback: '不算花销' }[t.type] || (t.what ? catName(t.category) : null);
+  const tag = { advance: '不算花销', repay: '不算收入', payback: '不算花销' }[t.type] || (t.what ? catName(t.category) : null) || (t.tax ? `被扣个税 ${exact(t.tax)}` : null);
   return h('a', { class: 'tx', href: onclick ? '#' : txHref(t), onclick: onclick ? (e) => { e.preventDefault(); onclick(); } : null },
     h('span', { class: 'grow' }, txTitle(t),
       h('span', { class: 'muted small block' }, [t.date.slice(5).replace('-', '/'), where, tag, t.note].filter(Boolean).join(' · '))),
@@ -487,10 +501,10 @@ function addView(q) {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
-    sub: category(d, editing.category)?.sub || null, what: editing.what || '',
+    sub: category(d, editing.category)?.sub || null, what: editing.what || '', tax: editing.tax != null ? String(editing.tax) : '',
   } : {
     type: q.type || 'expense', amount: q.amount || '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '',
+    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '',
   };
   if (!account(d, st.account)) st.account = firstCny;
   // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
@@ -590,6 +604,10 @@ function addView(q) {
         }
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
+        if (st.category === 'i-job') {
+          parts.push(h('label', { class: 'form-label' }, '被预扣的个税（选填）', taxInput),
+            h('p', { class: 'muted small' }, '金额填到手的钱。单位先扣了个税的话填在这里（看工资条或到账短信），每年 3～6 月会提醒你申请退回来。'));
+        }
       }
       if (!(st.type === 'expense' && st.split === 'paidby')) {
         parts.push(h('div', { class: 'label-sm' }, st.type === 'income' ? '到哪个账户' : '从哪个账户付'),
@@ -688,6 +706,8 @@ function addView(q) {
     } catch { /* 已提示 */ }
   };
 
+  const taxInput = h('input', { inputmode: 'decimal', placeholder: '没扣就不填', 'aria-label': '被预扣的个税', value: st.tax,
+    oninput: (e) => { st.tax = e.target.value; } });
   const whatInput = h('input', { class: 'what-input', placeholder: '写一下是什么，比如 自行车、体检费', 'aria-label': '具体是什么', value: st.what,
     oninput: (e) => { st.what = e.target.value; } });
 
@@ -717,6 +737,8 @@ function addView(q) {
       rec.category = st.category;
       if (usd) rec.cny = round2(n * usdRate());
       if (st.type === 'expense' && FREEFORM.includes(st.category)) rec.what = st.what.trim();
+      const tax = round2(num(st.tax) || 0);
+      if (st.type === 'income' && st.category === 'i-job' && tax > 0) rec.tax = tax;
     }
     const paidBy = st.type === 'expense' && st.split === 'paidby';
     if (paidBy) { rec.account = null; rec.person = st.person; delete rec.cny; }
@@ -744,6 +766,7 @@ function addView(q) {
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           if (!rec.to) { delete data.tx[i].to; delete data.tx[i].toAmount; }
           if (!rec.what) delete data.tx[i].what;
+          if (!rec.tax) delete data.tx[i].tax;
         } else {
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           data.tx.push({ id: newId('t'), ...rec, createdAt: new Date().toISOString() });
@@ -937,7 +960,13 @@ function moreView() {
       cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' })),
     h('div', { class: 'group' },
       cell({ href: '#/wishes', ic: 'sparkle', color: 'var(--accent)', title: '心愿单', sub: '想买但不急的东西，有闲钱再买',
-        meta: `基金 ${money(wishFunds(store.data, today()).small)}` })),
+        meta: `基金 ${money(wishFunds(store.data, today()).small)}` }),
+      cell({ href: '#/goals', ic: 'shield', color: 'var(--sage)', title: '存款目标', sub: '以后一定会用到的大钱',
+        meta: store.data.goals.length ? `${store.data.goals.length} 个` : '' })),
+    h('div', { class: 'group' },
+      cell({ href: '#/subs', ic: 'clock', color: 'var(--blue)', title: '订阅', meta: subReviewDue(store.data, today()) ? '该体检了' : `${money(store.data.recurring.reduce((x, r) => x + yearlyCost(store.data, r, usdRate()), 0))}/年` }),
+      cell({ href: '#/tax', ic: 'book', color: 'var(--amber)', title: '个税退税', sub: '兼职被预扣的个税，每年 3～6 月退',
+        meta: taxSeason(today()) && taxYear(store.data, taxSeason(today())).withheld > 0 && !taxYear(store.data, taxSeason(today())).done ? '可以办了' : '' })),
     h('div', { class: 'group' },
       cell({ href: '#/rules', ic: 'book', color: 'var(--sage)', title: '我们的花钱方式', sub: '定下来的规则，和为什么这样做' }),
       cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)', title: '预算', meta: money(budgetTotal(store.data)) }),
@@ -1894,6 +1923,205 @@ function askView() {
     chatState.messages.length ? null : h('div', { class: 'chips' }, ideas.map((x) => h('button', { type: 'button', class: 'chip', onclick: () => send(x) }, x))),
     box,
     h('div', { class: 'chat-input' }, input, h('button', { onclick: () => send(), 'aria-label': '发送' }, '发送')));
+}
+
+// ---------- 个税退税 ----------
+
+function taxView() {
+  const d = store.data;
+  const t = today();
+  const season = taxSeason(t);
+  const years = [...new Set(d.tx.filter((x) => x.type === 'income' && x.category === 'i-job').map((x) => Number(x.date.slice(0, 4))))].sort((a, b) => b - a);
+  const thisYear = Number(t.slice(0, 4));
+  if (!years.includes(thisYear)) years.unshift(thisYear);
+  const markDone = (y, tx) => {
+    const refund = h('input', { inputmode: 'decimal', placeholder: '退了多少（还没到账可以先不填）', 'aria-label': '退了多少' });
+    let acc = readJson(LAST_KEY).account;
+    if (!account(d, acc)) acc = d.accounts[0]?.id;
+    const accBox = h('div', { class: 'chips', role: 'group', 'aria-label': '退到哪个账户' });
+    const drawAcc = () => accBox.replaceChildren(...d.accounts.filter((a) => a.currency === 'CNY').map((a) => h('button', {
+      type: 'button', class: `chip${a.id === acc ? ' on' : ''}`, 'aria-pressed': String(a.id === acc), onclick: () => { acc = a.id; drawAcc(); },
+    }, a.name)));
+    drawAcc();
+    openSheet({
+      title: `${y} 年的汇算办好了`,
+      body: h('div', { class: 'form' }, h('p', { class: 'small muted' }, `${y} 年兼职被预扣 ${money(tx.withheld)}。退的钱到账了就填上，会记一笔「个税退税」收入。`),
+        refund, h('div', { class: 'label-sm' }, '退到哪个账户'), accBox),
+      confirmText: '办好了',
+      onConfirm: async () => {
+        const n = round2(Number(refund.value.replace(/[，,\s]/g, '')) || 0);
+        try {
+          await save(`个税汇算：${y} 年${n ? `，退了 ${n}` : ''}`, (data) => {
+            data.taxYears = { ...(data.taxYears || {}), [y]: { done: today(), refund: n || null } };
+            if (n > 0) data.tx.push({ id: newId('t'), type: 'income', date: today(), account: acc, amount: n, category: 'i-tax', note: `${y} 年个税汇算退税`, createdAt: new Date().toISOString() });
+          });
+          render();
+        } catch { return false; }
+        return true;
+      },
+    });
+  };
+  const yearCard = (y) => {
+    const tx = taxYear(d, y);
+    const canFile = y < thisYear;
+    return h('div', { class: 'card' },
+      h('h3', {}, `${y} 年`),
+      h('div', { class: 'tax-grid' },
+        h('span', {}, '兼职收入（到手）'), h('b', {}, money(tx.income)),
+        h('span', {}, '被预扣的个税'), h('b', {}, money(tx.withheld)),
+        tx.done ? [h('span', {}, '汇算'), h('b', { class: 'good-text' }, `${md(tx.done)}办好${tx.refund ? `，退了 ${money(tx.refund)}` : ''}`)] : null),
+      !tx.jobs.length ? h('p', { class: 'muted small' }, '这一年还没有记兼职收入。') : null,
+      tx.withheld > 0 && !tx.done ? h('p', { class: 'small' }, canFile
+        ? (season === y ? `现在就能办：${md(`${y + 1}-${TAX_TO}`)}前在「个人所得税」App 做 ${y} 年的年度汇算。` : `${y + 1} 年 3 月 1 日到 6 月 30 日之间办。`)
+        : `明年 3 月 1 日到 6 月 30 日办，到时候首页和手机会提醒你。`) : null,
+      canFile && tx.withheld > 0 && !tx.done ? h('button', { class: 'secondary', onclick: () => markDone(y, tx) }, '办好了') : null);
+  };
+  return h('div', {},
+    headerSub('个税退税', '兼职被预扣的个税，每年可以申请退回来', helpButton('个税退税怎么回事', [
+      ['为什么能退', ['兼职（劳务报酬）发钱时，单位一般会先按 20% 左右预扣个税（单次超过 800 元就会扣）。', '但个税是按一整年算的：学生一年的应税收入通常不高，扣掉每年 6 万的基本减除和其他扣除后，往往不用交税或者交很少，多扣的就能退回来。能退多少，以个税 App 算出来的为准。']],
+      ['平时要做的', ['记兼职收入时，在「被预扣的个税」里填一下扣了多少（看工资条、到账短信，或者问发钱的单位）。没扣就不填。', '网站会按年把兼职收入和被扣的税加起来。']],
+      ['每年 3～6 月', ['1. 手机下载「个人所得税」App（国家税务总局的官方 App），用身份证注册登录。', '2. 首页点「综合所得年度汇算」，选上一年，按提示一步步确认收入（App 会自动列出单位替你报的收入）。', '3. 有专项附加扣除的填上（比如继续教育），没有就跳过。', '4. 最后显示「应退税额」，填自己的银行卡申请退税，一般几天到几周到账。', '刚开放的那几天人多，可能要预约，晚几天再办也一样，6 月 30 日前就行。']],
+      ['顺便看一眼', ['在 App 的「收入纳税明细」里看看，有没有不认识的单位用你的身份证报了收入。如果有，可以直接在 App 里申诉。']],
+    ])),
+    years.map(yearCard));
+}
+
+// ---------- 订阅 ----------
+
+const SUB_NOTE = { keep: '值，继续用', downgrade: '考虑降档', stop: '可以停掉' };
+
+function subsView() {
+  const d = store.data;
+  const t = today();
+  const rate = usdRate();
+  const due = subReviewDue(d, t);
+  const notes = d.subReview?.notes || {};
+  const total = d.recurring.reduce((s, r) => s + yearlyCost(d, r, rate), 0);
+  const upd = (message, fn) => save(message, fn).then(render).catch(() => {});
+  const edit = (r = null) => {
+    const name = h('input', { value: r?.name || '', placeholder: '比如 视频会员', 'aria-label': '名称' });
+    const amount = h('input', { inputmode: 'decimal', value: r ? String(r.amount) : '', placeholder: '每次扣多少', 'aria-label': '每次扣多少' });
+    let yearly = Boolean(r?.yearly);
+    const kindBox = h('div', { class: 'chips', role: 'group', 'aria-label': '多久扣一次' });
+    const day = h('input', { inputmode: 'numeric', value: r?.day ? String(r.day) : '', placeholder: '每月几号扣，比如 6', 'aria-label': '每月几号' });
+    const ydate = h('input', { type: 'date', value: r?.yearly ? `${t.slice(0, 4)}-${r.yearly}` : '', 'aria-label': '每年哪天续费' });
+    let acc = r?.account || null;
+    const accBox = h('div', { class: 'chips', role: 'group', 'aria-label': '从哪个账户扣' });
+    const drawAcc = () => accBox.replaceChildren(...d.accounts.map((a) => h('button', {
+      type: 'button', class: `chip${a.id === acc ? ' on' : ''}`, 'aria-pressed': String(a.id === acc), onclick: () => { acc = a.id; drawAcc(); },
+    }, a.name)));
+    const drawKind = () => {
+      kindBox.replaceChildren(...[[false, '每月'], [true, '每年']].map(([k, label]) => h('button', {
+        type: 'button', class: `chip${yearly === k ? ' on' : ''}`, 'aria-pressed': String(yearly === k), onclick: () => { yearly = k; drawKind(); },
+      }, label)));
+      day.hidden = yearly;
+      ydate.hidden = !yearly;
+    };
+    drawAcc();
+    drawKind();
+    openSheet({
+      title: r ? `改「${r.name}」` : '加一个订阅',
+      body: h('div', { class: 'form' }, name, amount, kindBox, day, ydate, h('div', { class: 'label-sm' }, '从哪个账户扣'), accBox,
+        h('p', { class: 'muted small' }, '每月的到日子网站自动记一笔；每年的只提前提醒，不自动记。')),
+      confirmText: '保存',
+      onConfirm: async () => {
+        const n = Number(amount.value.replace(/[，,\s]/g, ''));
+        const dd = Number(day.value);
+        if (!name.value.trim() || !(n > 0)) { toast('名称和金额要填', 'error'); return false; }
+        if (!yearly && !(dd >= 1 && dd <= 31)) { toast('填一下每月几号扣', 'error'); return false; }
+        if (yearly && !ydate.value) { toast('填一下每年哪天续费', 'error'); return false; }
+        if (!yearly && !acc) { toast('选一下从哪个账户扣', 'error'); return false; }
+        const fields = yearly
+          ? { name: name.value.trim(), amount: round2(n), account: acc, yearly: ydate.value.slice(5), remindOnly: true, day: undefined }
+          : { name: name.value.trim(), amount: round2(n), account: acc, day: dd, yearly: undefined, remindOnly: undefined };
+        try {
+          await save(`${r ? '改' : '加'}订阅：${fields.name}`, (data) => {
+            let x = r && data.recurring.find((y) => y.id === r.id);
+            if (!x) { x = { id: newId('r'), category: 'c-member', since: today() }; data.recurring.push(x); }
+            Object.assign(x, fields);
+            for (const k of Object.keys(x)) if (x[k] === undefined) delete x[k];
+          });
+          render();
+        } catch { return false; }
+        return true;
+      },
+    });
+  };
+  const stop = (r) => confirm(`停掉「${r.name}」？\n以后不会再自动记账。记得也去 App Store 或对应的地方把订阅取消掉。`)
+    && upd(`停掉订阅：${r.name}`, (data) => { data.recurring = data.recurring.filter((x) => x.id !== r.id); });
+  const mark = (r, v) => upd(`订阅体检：${r.name} ${SUB_NOTE[v]}`, (data) => {
+    data.subReview = { ...(data.subReview || {}), notes: { ...(data.subReview?.notes || {}), [r.id]: v } };
+  });
+  const finish = () => upd('订阅体检完成', (data) => { data.subReview = { ...(data.subReview || {}), last: today() }; });
+  return h('div', {},
+    headerSub('订阅', `一年大约 ${money(total)}`, h('button', { class: 'icon-btn', 'aria-label': '加一个订阅', onclick: () => edit() }, icon('plus')), helpButton('订阅体检', [
+      ['为什么要体检', ['订阅是自动扣的，单看一个月不多，一年加起来很可观，也很容易忘了自己还订着。', '每 3 个月看一眼，每个问自己：这 3 个月真的常用吗？低一档的够不够？几个订阅用途重不重叠？能不能走报销？']],
+      ['怎么做', ['每个订阅点一下「值」「降档」或「停掉」，最后点「体检完了」。3 个月后首页会再提醒。', '决定停掉的，记得也去 App Store（设置 → Apple ID → 订阅）或对应的网站取消，网站这边点「停掉」就不再自动记账。']],
+    ])),
+    due ? h('div', { class: 'banner soon' }, `该体检了：上次是 ${md(due.last)}，已经 ${due.days} 天`) : h('p', { class: 'muted small' }, `上次体检 ${md(d.subReview?.last || d.openingDate)}，每 3 个月一次。`),
+    d.recurring.length ? d.recurring.map((r) => h('div', { class: 'card sub' },
+      h('div', { class: 'wish-top' },
+        h('div', { class: 'grow' }, h('div', { class: 'wish-name' }, r.name),
+          h('div', { class: 'muted small' }, r.day ? `每月 ${r.day} 号 · ${exact(r.amount, curOf(r.account))}` : `每年 ${md(`2000-${r.yearly}`)} · ${exact(r.amount, curOf(r.account))}`, r.account ? ` · ${accName(r.account)}` : '')),
+        h('div', { class: 'wish-price' }, `${money(yearlyCost(d, r, rate))}/年`)),
+      r.note ? h('p', { class: 'muted small' }, r.note) : null,
+      h('div', { class: 'chips', role: 'group', 'aria-label': `${r.name} 还值吗` }, Object.entries(SUB_NOTE).map(([k, label]) => h('button', {
+        type: 'button', class: `chip${notes[r.id] === k ? ' on' : ''}`, 'aria-pressed': String(notes[r.id] === k), onclick: () => mark(r, k),
+      }, label))),
+      h('div', { class: 'wish-actions' }, h('span', { class: 'grow' }),
+        h('button', { class: 'link', onclick: () => edit(r) }, '改'),
+        h('button', { class: 'link danger-text', onclick: () => stop(r) }, '停掉'))))
+      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有订阅。点右上角 ＋ 加。')),
+    d.recurring.length ? h('div', { class: 'actions sticky' }, h('button', { onclick: finish }, '体检完了')) : null);
+}
+
+// ---------- 存款目标 ----------
+
+function goalsView() {
+  const d = store.data;
+  const list = goalStatus(d, today());
+  const floorName = account(d, d.settings.floorAccount)?.name || '存钱卡';
+  const edit = (g = null) => {
+    const name = h('input', { value: g?.name || '', placeholder: '比如 毕业过渡金', 'aria-label': '目标' });
+    const target = h('input', { inputmode: 'decimal', value: g ? String(g.target) : '', placeholder: '要存多少', 'aria-label': '要存多少' });
+    const by = h('input', { type: 'date', value: g?.by || '', 'aria-label': '什么时候前存够' });
+    const note = h('input', { value: g?.note || '', placeholder: '用来做什么（选填）', 'aria-label': '用来做什么' });
+    openSheet({
+      title: g ? '改目标' : '加一个存款目标',
+      body: h('div', { class: 'form' }, name, target, h('label', {}, '什么时候前存够', by), note),
+      confirmText: '保存',
+      onConfirm: async () => {
+        const n = Number(target.value.replace(/[，,\s]/g, ''));
+        if (!name.value.trim() || !(n > 0) || !by.value) { toast('名称、金额、日期都要填', 'error'); return false; }
+        const fields = { name: name.value.trim(), target: round2(n), by: by.value, note: note.value.trim() };
+        try {
+          await save(`${g ? '改' : '加'}存款目标：${fields.name}`, (data) => {
+            if (g) Object.assign(data.goals.find((x) => x.id === g.id), fields);
+            else data.goals.push({ id: newId('g'), ...fields });
+          });
+          render();
+        } catch { return false; }
+        return true;
+      },
+    });
+  };
+  const remove = (g) => confirm(`删掉目标「${g.name}」？钱不会动，只是不再显示进度。`)
+    && save(`删除存款目标：${g.name}`, (data) => { data.goals = data.goals.filter((x) => x.id !== g.id); }).then(render).catch(() => {});
+  return h('div', {},
+    headerSub('存款目标', '给以后一定会用到的大钱提前留好', h('button', { class: 'icon-btn', 'aria-label': '加一个存款目标', onclick: () => edit() }, icon('plus')), helpButton('存款目标怎么算', [
+      ['是什么', ['以后一定会用到的一大笔钱，比如毕业到第一笔工资之间的过渡金。和心愿不一样：心愿是「想要」，这是「到时候必须有」。']],
+      ['进度怎么算', [`不用另外存，就看${floorName}：扣掉应急钱底线 ${money(d.settings.emergencyFloor)} 和大额心愿已经攒的，剩下的算进目标。`, '每月按计划存钱，进度会自己往上走。旁边的「每月要留」是还差的钱平均到剩下的月份。']],
+    ])),
+    list.length ? list.map(({ g, have, need, months, perMonth }) => h('div', { class: 'card goal' },
+      h('div', { class: 'wish-top' },
+        h('div', { class: 'grow' }, h('div', { class: 'wish-name' }, g.name), h('div', { class: 'muted small' }, `${md(g.by)}（${g.by.slice(0, 4)} 年）前${g.note ? ` · ${g.note}` : ''}`)),
+        h('div', { class: 'wish-price' }, money(g.target))),
+      bar(g.target ? have / g.target : 0, 'var(--sage)'),
+      h('div', { class: 'muted small wish-progress' }, need > 0 ? `已经有 ${money(have)}，还差 ${money(need)}；还有 ${months} 个月，平均每月留 ${money(perMonth)} 就够` : `已经够了 ✓（${money(have)}）`),
+      h('div', { class: 'wish-actions' }, h('span', { class: 'grow' }),
+        h('button', { class: 'link', onclick: () => edit(g) }, '改'),
+        h('button', { class: 'link danger-text', onclick: () => remove(g) }, '删掉'))))
+      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有目标。点右上角 ＋ 加，比如「毕业过渡金」。')));
 }
 
 // ---------- 我们的花钱方式 ----------
