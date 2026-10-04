@@ -42,7 +42,7 @@ export function defaultData(today) {
       C('c-medical', '医药', 'daily'), C('c-other', '其他', 'daily'),
       C('c-fun', '娱乐', 'free'), C('c-like', '喜欢的东西', 'free'),
       C('c-ai', 'AI 订阅', 'sub'), C('c-soft', '软件订阅', 'sub'),
-      C('c-fee', '手续费', 'none'),
+      C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'),
       I('i-salary', '生活费'), I('i-job', '兼职'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
@@ -74,6 +74,10 @@ export function migrate(data) {
   data.quick ||= [];
   data.recurring ||= [];
   data.tx ||= [];
+  data.claims ||= []; // 垫付报销：{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind, submitted }] }
+  data.people ||= []; // 人情账：{ id, name }
+  data.reconciled ||= {}; // 每个预算月对过账没有：{ 预算月开始日: 对账日 }
+  if (!data.categories.some((c) => c.id === 'c-trip')) data.categories.push({ id: 'c-trip', name: '出差自付', kind: 'expense', group: 'none' });
   return data;
 }
 
@@ -122,13 +126,18 @@ export const account = (data, id) => data.accounts.find((a) => a.id === id);
 export const category = (data, id) => data.categories.find((c) => c.id === id);
 export const isUsd = (data, id) => account(data, id)?.currency === 'USD';
 
-// 这笔账让某个账户变了多少（账户本身的币种）
+// 这笔账让某个账户变了多少（账户本身的币种）。
+// 钱的进出和「算不算花销」是两回事：
+//   advance 垫付 / 借给别人：钱出去了，但不是花销（是别人欠我的）
+//   repay   报销到账 / 别人还我：钱回来了，但不是收入
+//   payback 我还别人：钱出去了，不是花销（那笔花销在别人替我付的时候已经算过）
+//   expense 没有 account、有 person：别人替我付的，算我的花销，但我的账户没动
+//   writeoff 垫付结清时报不回的部分：算花销（出差自付），账户不动（钱早就在垫付时出去了）
 export function delta(tx, accountId) {
   let d = 0;
-  if (tx.account === accountId) {
-    if (tx.type === 'income') d += tx.amount;
-    else if (tx.type === 'expense') d -= tx.amount;
-    else if (tx.type === 'transfer') d -= tx.amount;
+  if (tx.account && tx.account === accountId) {
+    if (tx.type === 'income' || tx.type === 'repay') d += tx.amount;
+    else if (tx.type === 'expense' || tx.type === 'transfer' || tx.type === 'advance' || tx.type === 'payback') d -= tx.amount;
     else if (tx.type === 'adjust') d += tx.amount; // 校准：正负都有
   }
   if (tx.type === 'transfer' && tx.to === accountId) d += tx.toAmount ?? tx.amount;
@@ -158,7 +167,7 @@ export function periodStats(data, p) {
   const byCat = {};
   let income = 0;
   for (const t of inP) {
-    if (t.type === 'expense') {
+    if (t.type === 'expense' || t.type === 'writeoff') {
       const g = category(data, t.category)?.group || 'daily';
       spent[g] += cny(t);
       byCat[t.category] = (byCat[t.category] || 0) + cny(t);
@@ -216,6 +225,66 @@ export function upcoming(data, today, days = 35) {
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ---------- 垫付报销、人情账 ----------
+
+// 先进先出：一串 +/- 的变动，算出还剩多少、最早没结清的那笔是哪天（用来提醒「拖了多久」）
+function fifo(events) {
+  const lots = [];
+  for (const e of events.sort((a, b) => a.date.localeCompare(b.date))) {
+    let amt = e.amount;
+    while (amt !== 0 && lots.length && Math.sign(lots[0].amount) !== Math.sign(amt)) {
+      const use = Math.min(Math.abs(amt), Math.abs(lots[0].amount)) * Math.sign(amt);
+      lots[0].amount += use;
+      amt -= use;
+      if (Math.abs(lots[0].amount) < 0.005) lots.shift();
+    }
+    if (Math.abs(amt) >= 0.005) lots.push({ date: e.date, amount: amt });
+  }
+  const net = Math.round(lots.reduce((s, l) => s + l.amount, 0) * 100) / 100;
+  return { net, since: lots[0]?.date || null };
+}
+
+// 一件垫付的事：垫了多少、报回多少、还差多少
+export function claimStatus(data, claimId) {
+  const tx = data.tx.filter((t) => t.claim === claimId);
+  const advanced = tx.filter((t) => t.type === 'advance').reduce((s, t) => s + cny(t), 0);
+  const repaid = tx.filter((t) => t.type === 'repay').reduce((s, t) => s + cny(t), 0);
+  const writeoff = tx.filter((t) => t.type === 'writeoff').reduce((s, t) => s + t.amount, 0);
+  const f = fifo(tx.filter((t) => t.type === 'advance' || t.type === 'repay').map((t) => ({ date: t.date, amount: t.type === 'advance' ? cny(t) : -cny(t) })));
+  return { tx, advanced, repaid, writeoff, pending: Math.round((advanced - repaid) * 100) / 100, since: f.net > 0 ? f.since : null };
+}
+
+// 和一个人之间：net > 0 他欠我，< 0 我欠他
+export function personStatus(data, personId) {
+  const tx = data.tx.filter((t) => t.person === personId);
+  const events = [];
+  for (const t of tx) {
+    if (t.type === 'advance' || t.type === 'payback') events.push({ date: t.date, amount: cny(t) });
+    else if (t.type === 'repay') events.push({ date: t.date, amount: -cny(t) });
+    else if (t.type === 'expense' && !t.account) events.push({ date: t.date, amount: -cny(t) }); // 他替我付的
+  }
+  const f = fifo(events);
+  return { tx, net: f.net, since: f.since };
+}
+
+export function receivables(data) {
+  const claims = data.claims.filter((c) => c.status !== 'settled').map((c) => ({ claim: c, ...claimStatus(data, c.id) }));
+  const people = data.people.map((p) => ({ person: p, ...personStatus(data, p.id) })).filter((x) => x.net !== 0);
+  const toMe = claims.reduce((s, c) => s + Math.max(0, c.pending), 0) + people.reduce((s, p) => s + Math.max(0, p.net), 0);
+  const iOwe = people.reduce((s, p) => s + Math.max(0, -p.net), 0);
+  return { claims, people, toMe, iOwe };
+}
+
+export const CLAIM_REMIND_DAYS = 30; // 垫付多久没报回来提醒
+export const PERSON_REMIND_DAYS = 14; // 别人欠我 / 我欠别人多久提醒
+
+// 这个预算月该不该对账：开始记账后的完整预算月，还没对过
+export function needsReconcile(data, today) {
+  const p = periodFor(data, today);
+  if (data.openingDate && data.openingDate > p.start) return false;
+  return !data.reconciled?.[p.start];
 }
 
 // ---------- 健康指标 ----------
@@ -320,6 +389,35 @@ export function health(data, today, rate = data.settings.usdRate) {
       action: short ? `在 ${md(short.date)}前给 ${a.name} 充值至少 ${money(Math.ceil(short.need), '$')}。` : null,
     });
   }
+  // 6. 待收回 / 我欠别人
+  const rc = receivables(data);
+  if (rc.claims.length || rc.people.length) {
+    const lateClaim = rc.claims.find((c) => c.pending > 0 && c.since && daysBetween(c.since, today) >= CLAIM_REMIND_DAYS);
+    const latePerson = rc.people.find((x) => x.net > 0 && x.since && daysBetween(x.since, today) >= PERSON_REMIND_DAYS);
+    const lateOwe = rc.people.find((x) => x.net < 0 && x.since && daysBetween(x.since, today) >= PERSON_REMIND_DAYS);
+    const late = lateOwe || lateClaim || latePerson;
+    const parts = [];
+    if (rc.toMe) parts.push(`别人欠你 ${money(rc.toMe)}`);
+    if (rc.iOwe) parts.push(`你欠别人 ${money(rc.iOwe)}`);
+    out.push({
+      key: 'owed', name: '待收回', value: money(rc.toMe),
+      level: late ? 'warn' : 'good',
+      text: parts.join('，') || '都结清了',
+      action: lateOwe ? `记得还${lateOwe.person.name} ${money(-lateOwe.net)}（已经 ${daysBetween(lateOwe.since, today)} 天）。`
+        : lateClaim ? `「${lateClaim.claim.name}」垫的 ${money(lateClaim.pending)} 已经 ${daysBetween(lateClaim.since, today)} 天没报回来，问一下进度。`
+          : latePerson ? `提醒${latePerson.person.name}还 ${money(latePerson.net)}（已经 ${daysBetween(latePerson.since, today)} 天）。` : null,
+    });
+  }
+
+  // 7. 每月对账
+  if (needsReconcile(data, today)) {
+    out.push({
+      key: 'reconcile', name: '对账', value: '还没对',
+      level: 'warn', text: '新的预算月开始了，花 1 分钟对一下各账户余额',
+      action: '新的预算月开始了，到「更多 → 对账」看一眼各账户的实际余额，对不上的填一下。',
+    });
+  }
+
   // 年费提醒（只提醒，不自动记）
   for (const u of upcoming(data, today, 40).filter((x) => x.r.remindOnly)) {
     out.push({

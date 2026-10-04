@@ -20,6 +20,9 @@ const PATHS = {
   arrowdown: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   shield: '<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z"/>',
   bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6Z"/>',
+  suitcase: '<rect x="5" y="7" width="14" height="13" rx="2"/><path d="M9 7V4h6v3M9 20v1M15 20v1"/>',
+  people: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+  check: '<path d="m5 12 4.5 4.5L19 7"/>',
 };
 export function icon(name, cls = 'i') {
   const span = document.createElement('span');

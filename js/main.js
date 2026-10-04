@@ -2,9 +2,12 @@ import { GitHub } from './github.js';
 import { Store, newId } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
-  periodStats, budgetTotal, livingBudget, duePostings, health, headline, money, md,
+  periodStats, budgetTotal, livingBudget, duePostings, health, headline, money, md, addDays,
+  receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS,
 } from './money.js';
-import { h, today } from './util.js';
+import { weekOf, weekSummary, monthSummary } from './summary.js';
+import { barChart, donut, lineChart } from './charts.js';
+import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
 
@@ -12,7 +15,7 @@ const SETTINGS_KEY = 'ledger-settings';
 const DEFAULT_REPO = 'ThreeLu/finance-data';
 const RATE_KEY = 'ledger-usd-rate';
 const LAST_KEY = 'ledger-last'; // 上次用的账户和类别，记账时默认选上
-const EDITING_ROUTES = /^\/(add)/;
+const EDITING_ROUTES = /^\/(add|reconcile)/;
 
 const view = document.getElementById('view');
 const nav = document.getElementById('nav');
@@ -103,7 +106,11 @@ async function updateRate() {
 
 function boot() {
   setupNav();
-  window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', () => {
+    for (const el of document.querySelectorAll('.sheet-overlay, .overlay')) el.remove(); // 换页时收起弹出的表单
+    render();
+    window.scrollTo(0, 0);
+  });
   if (settings.token) {
     connect();
     render();
@@ -130,6 +137,12 @@ const routes = [
   [/^\/accounts$/, () => accountsView()],
   [/^\/account\/([^/]+)$/, (id) => accountView(id)],
   [/^\/more$/, () => moreView()],
+  [/^\/summary$/, (_, q) => summaryView(q)],
+  [/^\/claims$/, () => claimsView()],
+  [/^\/claim\/([^/]+)$/, (id) => claimView(id)],
+  [/^\/people$/, () => peopleView()],
+  [/^\/person\/([^/]+)$/, (id) => personView(id)],
+  [/^\/reconcile$/, () => reconcileView()],
   [/^\/budget$/, () => budgetView()],
   [/^\/rules$/, () => rulesView()],
   [/^\/quick$/, () => quickView()],
@@ -138,8 +151,8 @@ const routes = [
 const NAV_GROUPS = {
   '/': [/^\/?$/],
   '/list': [/^\/list/],
-  '/accounts': [/^\/accounts?/],
-  '/more': [/^\/more/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/],
+  '/summary': [/^\/summary/],
+  '/more': [/^\/more/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/],
 };
 
 function setupNav() {
@@ -196,7 +209,7 @@ async function saving(message, fn) {
     el.remove();
   }
 }
-const save = (message, fn) => saving('正在保存…', () => store.save(message, fn));
+const save = (message, fn, opts) => saving('正在保存…', () => store.save(message, fn, opts));
 
 function errorView(e) {
   return h('div', {},
@@ -279,6 +292,16 @@ const EXPLAIN = {
     `「储蓄率」（存下的钱占收入的比例）是最能说明花钱习惯的一个数。常见的建议是存 20%。${yearPlan(d).rate != null ? `你的计划${d.settings.summerMonths.length ? `算上 ${d.settings.summerMonths.join('、')} 月没有收入，` : ''}全年约 ${yearPlan(d).rate}%。` : ''}`,
     `${x.text}。`,
   ],
+  owed: (x) => [
+    '待收回 = 别人欠你的钱：出差开会垫付还没报回来的，加上同学 AA、借钱还没还的。「你欠别人」是别人帮你付了、你还没还的。',
+    '这些钱暂时不在你手里，所以不能当成能花的钱；拖久了容易忘，也伤感情，所以拖太久会提醒你。',
+    `${x.text}。${x.action || '都还在正常的时间里，不用急。'}点「更多 → 垫付报销 / 人情账」看明细。`,
+  ],
+  reconcile: (x) => [
+    '对账 = 打开手机银行、微信看一眼实际余额，和网站上的对一下。',
+    '漏记、记错几笔很正常。每个预算月对一次，账就不会越积越乱，网站上的数字才可信。',
+    `${x.text}。到「更多 → 对账」，对得上的不用填，对不上的填实际余额就行，1 分钟就好。`,
+  ],
   charges: (x) => [
     '接下来 35 天要从 Apple ID 自动扣的订阅，和账户里的美元比一比。',
     '余额不够的话订阅会扣费失败、被停掉。礼品卡要提前买，所以提前提醒你。',
@@ -304,7 +327,44 @@ const HOME_HELP = [
   ['这个月还能花', ['吃饭 + 日常 + 自由钱这三项预算，减去这个预算月已经花的。下面的「每天约」= 还能花的 ÷ 剩下的天数。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。']],
   ['健康指标', ['绿 = 很好，不用管；黄 = 留意一下；红 = 需要做点什么。', '每一行都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
+  ['总结', ['底部「总结」看每周、每个预算月的图表。']],
 ];
+
+// 「这个月的钱」：收入分成 生活 / 订阅 / 其他花销 / 存下
+function flowCard(st, part, title = '这个月的钱') {
+  const segs = [
+    { name: '生活', v: st.living, color: 'var(--amber)' },
+    { name: '订阅', v: st.spent.sub, color: 'var(--blue)' },
+    { name: '其他', v: st.spent.none, color: 'var(--muted)' },
+  ];
+  const base = Math.max(st.income, st.total, 1);
+  const kept = Math.max(0, st.income - st.total);
+  return h('div', { class: 'card' },
+    h('h3', {}, title),
+    h('div', { class: 'flow-line' }, `收入 ${money(st.income)} · 花了 ${money(st.total)}${st.income ? ` · 存下 ${money(st.income - st.total)}` : ''}`),
+    h('div', { class: 'stack' },
+      segs.filter((x) => x.v > 0).map((x) => h('span', { style: `width:${(x.v / base) * 100}%;background:${x.color}`, title: x.name })),
+      kept > 0 ? h('span', { style: `width:${(kept / base) * 100}%;background:var(--sage)`, title: '存下' }) : null),
+    h('div', { class: 'legend' },
+      [...segs.filter((x) => x.v > 0), ...(kept > 0 ? [{ name: '存下', v: kept, color: 'var(--sage)' }] : [])]
+        .map((x) => h('span', {}, h('i', { style: `background:${x.color}` }), `${x.name} ${money(x.v)}`))),
+    !st.income ? h('p', { class: 'muted small' }, part.isPartial ? '这个预算月开始记账前到的收入没有记，下个预算月起就完整了。' : '这个预算月的收入还没到。') : null);
+}
+
+// 每组预算的进度条
+function budgetCard(st, part) {
+  const d = store.data;
+  return h('div', { class: 'card' },
+    h('h3', {}, part.isPartial ? `预算（从 ${md(part.from)}起按天数折算）` : '预算'),
+    GROUPS.filter((g) => d.budget[g.id]).map((g) => {
+      const b = d.budget[g.id] * part.factor;
+      const sp = st.spent[g.id];
+      return h('div', { class: 'budget-row' },
+        h('div', { class: 'budget-top' }, h('span', {}, g.name), h('span', { class: sp > b ? 'warn-text' : 'muted' }, `${money(sp)} / ${money(b)}`)),
+        bar(b ? sp / b : 0, g.color, sp > b));
+    }),
+    st.spent.none ? h('p', { class: 'muted small' }, `另有不占预算的花销 ${money(st.spent.none)}（手续费、出差自付等）`) : null);
+}
 
 function homeView() {
   const d = store.data;
@@ -313,36 +373,6 @@ function homeView() {
   const p = hl.period;
   const st = hl.stats;
   const part = partial(d, p);
-
-  // 这个月的钱去哪了：收入分成 生活 / 订阅 / 其他花销 / 存下
-  const segs = [
-    { name: '生活', v: st.living, color: 'var(--amber)' },
-    { name: '订阅', v: st.spent.sub, color: 'var(--blue)' },
-    { name: '其他', v: st.spent.none, color: 'var(--muted)' },
-  ];
-  const base = Math.max(st.income, st.total, 1);
-  const kept = Math.max(0, st.income - st.total);
-  const flow = h('div', { class: 'card' },
-    h('h3', {}, '这个月的钱'),
-    h('div', { class: 'flow-line' }, `收入 ${money(st.income)} · 花了 ${money(st.total)}${st.income ? ` · 存下 ${money(st.income - st.total)}` : ''}`),
-    h('div', { class: 'stack' },
-      segs.filter((s) => s.v > 0).map((s) => h('span', { style: `width:${(s.v / base) * 100}%;background:${s.color}`, title: s.name })),
-      kept > 0 ? h('span', { style: `width:${(kept / base) * 100}%;background:var(--sage)`, title: '存下' }) : null),
-    h('div', { class: 'legend' },
-      [...segs.filter((s) => s.v > 0), ...(kept > 0 ? [{ name: '存下', v: kept, color: 'var(--sage)' }] : [])]
-        .map((s) => h('span', {}, h('i', { style: `background:${s.color}` }), `${s.name} ${money(s.v)}`))),
-    !st.income ? h('p', { class: 'muted small' }, part.isPartial ? '这个预算月开始记账前到的收入没有记，下个预算月起就完整了。' : '这个预算月的收入还没到。') : null);
-
-  const budgetCard = h('div', { class: 'card' },
-    h('h3', {}, part.isPartial ? `预算（从 ${md(part.from)}起按天数折算）` : '预算'),
-    GROUPS.filter((g) => d.budget[g.id]).map((g) => {
-      const b = d.budget[g.id] * part.factor;
-      const s = st.spent[g.id];
-      return h('div', { class: 'budget-row' },
-        h('div', { class: 'budget-top' }, h('span', {}, g.name), h('span', { class: s > b ? 'warn-text' : 'muted' }, `${money(s)} / ${money(b)}`)),
-        bar(b ? s / b : 0, g.color, s > b));
-    }),
-    st.spent.none ? h('p', { class: 'muted small' }, `另有不占预算的花销 ${money(st.spent.none)}（手续费等）`) : null);
 
   const recent = [...d.tx].sort(txOrder).slice(0, 5);
   return h('div', {},
@@ -357,9 +387,10 @@ function homeView() {
       h('span', { class: `light ${x.level}`, 'aria-label': LEVEL_TEXT[x.level] }),
       h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, x.text)),
       h('span', { class: 'meta' }, x.value), icon('chev', 'i chev')))),
-    flow,
-    budgetCard,
-    recent.length ? [h('div', { class: 'section-title' }, '最近记的'), h('div', { class: 'card tx-list' }, recent.map(txRow)),
+    summaryLinks(p),
+    flowCard(st, part),
+    budgetCard(st, part),
+    recent.length ? [h('div', { class: 'section-title' }, '最近记的'), h('div', { class: 'card tx-list' }, recent.map((t) => txRow(t))),
       h('p', { class: 'center' }, h('a', { href: '#/list' }, '全部流水'))]
       : h('div', { class: 'card' }, h('p', {}, '还没有记账。点底部中间的 ＋ 记第一笔。')),
     h('p', { class: 'center small' }, h('a', { href: '#/rules' }, '我们的花钱方式 →')));
@@ -367,24 +398,46 @@ function homeView() {
 
 const txOrder = (a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '');
 
+const personName = (id) => store.data.people.find((p) => p.id === id)?.name || '某人';
+const claimName = (id) => store.data.claims.find((c) => c.id === id)?.name || '垫付';
+
 function txTitle(t) {
-  if (t.type === 'transfer') return `转账 ${accName(t.account)} → ${accName(t.to)}`;
-  if (t.type === 'adjust') return '对账差额';
-  return catName(t.category);
+  switch (t.type) {
+    case 'transfer': return `转账 ${accName(t.account)} → ${accName(t.to)}`;
+    case 'adjust': return '对账差额';
+    case 'advance': return t.claim ? `垫付 · ${claimName(t.claim)}` : `帮${personName(t.person)}付 / 借给他`;
+    case 'repay': return t.claim ? `报销到账 · ${claimName(t.claim)}` : `${personName(t.person)}还我`;
+    case 'payback': return `还给${personName(t.person)}`;
+    case 'writeoff': return `${catName(t.category)} · ${claimName(t.claim)}`;
+    default: return t.person && !t.account ? `${catName(t.category)}（${personName(t.person)}代付）` : catName(t.category);
+  }
 }
 
-function txRow(t) {
+// 这一笔点进去去哪：普通的改一笔；垫付、人情相关的去那件事 / 那个人的页面
+function txHref(t) {
+  if (t.claim) return `#/claim/${t.claim}`;
+  if (t.person && t.type !== 'expense') return `#/person/${t.person}`;
+  return `#/add?edit=${t.id}`;
+}
+
+// onclick 给了就点了执行它（垫付、人情页里点一笔是删除），不然按 txHref 跳转
+function txRow(t, onclick = null) {
   const d = store.data;
   const usd = isUsd(d, t.account);
+  const cur = usd ? '$' : '¥';
   let amount;
   let cls = '';
-  if (t.type === 'expense') { amount = `−${exact(t.amount, usd ? '$' : '¥')}`; }
-  else if (t.type === 'income') { amount = `+${exact(t.amount, usd ? '$' : '¥')}`; cls = 'in'; }
-  else if (t.type === 'adjust') { amount = `${t.amount < 0 ? '−' : '+'}${exact(t.amount, usd ? '$' : '¥')}`; cls = 'muted'; }
-  else { amount = exact(t.amount, usd ? '$' : '¥'); cls = 'muted'; }
-  return h('a', { class: 'tx', href: `#/add?edit=${t.id}` },
+  if (t.type === 'expense' || t.type === 'writeoff') amount = `${t.amount < 0 ? '+' : '−'}${exact(t.amount, cur)}`;
+  else if (t.type === 'income') { amount = `+${exact(t.amount, cur)}`; cls = 'in'; }
+  else if (t.type === 'adjust') { amount = `${t.amount < 0 ? '−' : '+'}${exact(t.amount, cur)}`; cls = 'muted'; }
+  else if (t.type === 'repay') { amount = `+${exact(t.amount, cur)}`; cls = 'muted'; }
+  else if (t.type === 'advance' || t.type === 'payback') { amount = `−${exact(t.amount, cur)}`; cls = 'muted'; }
+  else { amount = exact(t.amount, cur); cls = 'muted'; }
+  const where = t.type === 'transfer' || t.type === 'writeoff' ? null : t.account ? accName(t.account) : null;
+  const tag = { advance: '不算花销', repay: '不算收入', payback: '不算花销' }[t.type];
+  return h('a', { class: 'tx', href: onclick ? '#' : txHref(t), onclick: onclick ? (e) => { e.preventDefault(); onclick(); } : null },
     h('span', { class: 'grow' }, txTitle(t),
-      h('span', { class: 'muted small block' }, [t.date.slice(5).replace('-', '/'), t.type === 'transfer' ? null : accName(t.account), t.note].filter(Boolean).join(' · '))),
+      h('span', { class: 'muted small block' }, [t.date.slice(5).replace('-', '/'), where, tag, t.note].filter(Boolean).join(' · '))),
     h('span', { class: `tx-amt ${cls}` }, amount,
       usd && t.cny ? h('span', { class: 'muted small block' }, `≈${exact(t.cny)}`) : null));
 }
@@ -394,6 +447,7 @@ function txRow(t) {
 const ADD_HELP = [
   ['三种账', ['支出：花出去的钱，算进预算。', '收入：生活费、补助、兼职、红包。', '转账：自己的账户之间倒钱（充校园卡、充 Apple ID、存钱卡转生活费卡），不算收入也不算花销，只是换了个口袋。']],
   ['怎么记', ['填金额 → 点类别 → 点账户 → 记好了。账户默认是你上次用的。', '用支付宝、微信绑卡付的钱，记在实际扣钱的那张卡上。', '常记的（比如食堂午饭 15）勾上「存成快捷」，以后在上面一点就记好。']],
+  ['和别人有关', ['和同学吃饭你先付：填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，别人的记成欠你的。', '帮人代买：同样选「AA / 帮人付」，把「我那份」改成 0。', '别人帮你付了：选「别人帮我付的」，算你的花销，记成你欠他的。', '出差开会垫钱不在这里记，去「更多 → 垫付报销」。']],
   ['美元', ['Apple ID 是美元账户，金额填美元，按当天汇率折成人民币算预算。充值 Apple ID 用转账：填花了多少人民币、到账多少美元。']],
   ['记错了', ['在流水里点那一笔，可以改，也可以删。']],
 ];
@@ -407,18 +461,33 @@ function addView(q) {
   const st = editing ? {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
+    split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
   } : {
     type: q.type || 'expense', amount: '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: '',
+    category: '', date: today(), note: '', split: 'none', person: '',
   };
   if (!account(d, st.account)) st.account = firstCny;
+  // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
+  const aa = { people: new Set(), newPeople: [], my: '', myTouched: false };
+  const splitHint = h('div', { class: 'muted small split-hint' });
+  const myInput = h('input', { inputmode: 'decimal', 'aria-label': '我那份', oninput: (e) => { aa.my = e.target.value; aa.myTouched = true; drawSplit(); } });
+  const drawSplit = () => {
+    if (st.split !== 'aa') return;
+    const k = aa.people.size;
+    const n = num(st.amount) || 0;
+    if (!aa.myTouched) { aa.my = String(k ? round2(n / (k + 1)) : n); myInput.value = aa.my; }
+    const my = num(aa.my) || 0;
+    splitHint.textContent = k
+      ? `其他 ${k} 人各约 ${exact(round2((n - my) / k))}，记成他们欠你的（不算你的花销）；你那份 ${exact(my)} 算花销。帮人代买就把「我那份」填 0。`
+      : '选一下和谁 AA（可以多选）。';
+  };
   let saveQuick = false;
   const fee = h('input', { inputmode: 'decimal', placeholder: '手续费（没有就不填）', 'aria-label': '手续费' });
 
   const box = h('div', {});
   let toTouched = Boolean(editing);
   const amountInput = h('input', { class: 'amount-input', inputmode: 'decimal', placeholder: '0', 'aria-label': '金额', value: st.amount,
-    oninput: (e) => { st.amount = e.target.value; drawHint(); syncTo(); } });
+    oninput: (e) => { st.amount = e.target.value; drawHint(); syncTo(); drawSplit(); } });
   const toAmountInput = h('input', { inputmode: 'decimal', 'aria-label': '到账金额', value: st.toAmount, oninput: (e) => { st.toAmount = e.target.value; toTouched = true; } });
   // 人民币 → 美元（充值 Apple ID）：到账金额先按汇率估一个，自己改过就不再自动改
   const crossCurrency = () => st.type === 'transfer' && st.to && account(d, st.to).currency !== account(d, st.account).currency;
@@ -471,8 +540,11 @@ function addView(q) {
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
       }
-      parts.push(h('div', { class: 'label-sm' }, st.type === 'income' ? '到哪个账户' : '从哪个账户付'),
-        chips(d.accounts, st.account, (id) => { st.account = id; draw(); }, '账户'));
+      if (!(st.type === 'expense' && st.split === 'paidby')) {
+        parts.push(h('div', { class: 'label-sm' }, st.type === 'income' ? '到哪个账户' : '从哪个账户付'),
+          chips(d.accounts, st.account, (id) => { st.account = id; draw(); }, '账户'));
+      }
+      if (st.type === 'expense' && !editing?.group) parts.push(...splitSection());
     } else if (st.type === 'transfer') {
       parts.push(h('div', { class: 'label-sm' }, '从'), chips(d.accounts, st.account, (id) => { st.account = id; draw(); }, '转出账户'),
         h('div', { class: 'label-sm' }, '到'), chips(d.accounts.filter((a) => a.id !== st.account), st.to, (id) => { st.to = id; toTouched = false; draw(); }, '转入账户'));
@@ -498,6 +570,71 @@ function addView(q) {
     drawHint();
   };
 
+  const splitSection = () => {
+    const out = [h('div', { class: 'label-sm' }, '和别人有关吗'),
+      chips([{ id: 'none', name: '没有' }, { id: 'aa', name: 'AA / 帮人付' }, { id: 'paidby', name: '别人帮我付的' }].filter((x) => !editing || x.id !== 'aa'),
+        st.split, (id) => { st.split = id; draw(); }, '和别人有关')];
+    if (st.split === 'none') return out;
+    const everyone = [...d.people, ...aa.newPeople];
+    const multi = st.split === 'aa';
+    const isOn = (id) => (multi ? aa.people.has(id) : st.person === id);
+    const pick = (id) => {
+      if (!multi) st.person = id;
+      else if (aa.people.has(id)) aa.people.delete(id);
+      else aa.people.add(id);
+      draw();
+    };
+    const addPerson = () => {
+      const name = prompt('名字（比如 小王）')?.trim();
+      if (!name) return;
+      let p = everyone.find((x) => x.name === name);
+      if (!p) { p = { id: newId('p'), name }; aa.newPeople.push(p); }
+      pick(p.id);
+    };
+    out.push(h('div', { class: 'chips', role: 'group', 'aria-label': multi ? '和谁 AA' : '谁帮我付的' },
+      everyone.map((p) => h('button', { type: 'button', class: `chip${isOn(p.id) ? ' on' : ''}`, 'aria-pressed': String(isOn(p.id)), onclick: () => pick(p.id) }, p.name)),
+      h('button', { type: 'button', class: 'chip add', onclick: addPerson }, '+ 新的人')));
+    if (multi) {
+      out.push(h('label', { class: 'form-label' }, '我那份', myInput), splitHint);
+      setTimeout(drawSplit);
+    } else {
+      out.push(h('p', { class: 'muted small' }, '算你的花销，但你的账户没动钱；记成你欠他的，还他的时候在「人情账」里点「我还他钱」。'));
+    }
+    return out;
+  };
+
+  const submitAA = async (n) => {
+    const ids = [...aa.people];
+    if (!ids.length) return toast('选一下和谁 AA', 'error');
+    const my = round2(num(aa.my) || 0);
+    if (my < 0 || my > n) return toast('「我那份」要在 0 和总金额之间', 'error');
+    if (my > 0 && !st.category) return toast('选一下类别', 'error');
+    const others = round2(n - my);
+    const each = Math.floor((others / ids.length) * 100) / 100;
+    const usd = isUsd(d, st.account);
+    const rate = usdRate();
+    const g = newId('g');
+    const now = new Date().toISOString();
+    const note = st.note.trim();
+    try {
+      await save(`AA：${st.category ? catName(st.category) : '帮人付'} ${n}`, (data) => {
+        for (const p of aa.newPeople) if (ids.includes(p.id) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
+        if (my > 0) {
+          data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
+            group: g, createdAt: now, ...(usd ? { cny: round2(my * rate) } : {}) });
+        }
+        ids.forEach((pid, i) => {
+          const amt = i === ids.length - 1 ? round2(others - each * (ids.length - 1)) : each;
+          data.tx.push({ id: newId('t'), type: 'advance', date: st.date, account: st.account, amount: amt, person: pid,
+            note: note || (st.category ? `${catName(st.category)} AA` : '帮忙付'), group: g, createdAt: now, ...(usd ? { cny: round2(amt * rate) } : {}) });
+        });
+      });
+      writeJson(LAST_KEY, { account: st.account });
+      toast(`已记：你那份 ${exact(my)}，${ids.length} 人共欠你 ${exact(others)}`);
+      go('#/', true);
+    } catch { /* 已提示 */ }
+  };
+
   const recordQuick = async (qk) => {
     const usd = isUsd(d, qk.account);
     try {
@@ -513,6 +650,8 @@ function addView(q) {
   const submit = async () => {
     const n = round2(num(st.amount));
     if (!(n > 0) && st.type !== 'adjust') return toast('先填金额', 'error');
+    if (st.type === 'expense' && st.split === 'aa' && !editing) return submitAA(n);
+    if (st.type === 'expense' && st.split === 'paidby' && !st.person) return toast('选一下是谁帮你付的', 'error');
     if ((st.type === 'expense' || st.type === 'income') && !st.category) return toast(st.type === 'income' ? '选一下收入来源' : '选一下类别', 'error');
     if (st.type === 'transfer' && !st.to) return toast('选一下转到哪个账户', 'error');
     const usd = isUsd(d, st.account);
@@ -521,6 +660,8 @@ function addView(q) {
       rec.category = st.category;
       if (usd) rec.cny = round2(n * usdRate());
     }
+    const paidBy = st.type === 'expense' && st.split === 'paidby';
+    if (paidBy) { rec.account = null; rec.person = st.person; delete rec.cny; }
     if (st.type === 'transfer') {
       rec.to = st.to;
       if (account(d, st.to).currency !== account(d, st.account).currency) {
@@ -541,26 +682,33 @@ function addView(q) {
           const keepCny = old.cny != null && old.amount === rec.amount && old.account === rec.account;
           data.tx[i] = { ...old, ...rec, ...(keepCny ? { cny: old.cny } : {}) };
           if (!rec.cny && !keepCny) delete data.tx[i].cny;
+          if (!paidBy && old.person && old.type === 'expense' && !old.group) delete data.tx[i].person;
+          for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           if (!rec.to) { delete data.tx[i].to; delete data.tx[i].toAmount; }
         } else {
+          for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           data.tx.push({ id: newId('t'), ...rec, createdAt: new Date().toISOString() });
           if (st.type === 'transfer' && f > 0) {
             data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: f, category: 'c-fee',
               note: `${title} 的手续费`, createdAt: new Date().toISOString(), ...(usd ? { cny: round2(f * usdRate()) } : {}) });
           }
-          if (saveQuick) data.quick.push({ id: newId('q'), name: rec.note || catName(rec.category), amount: n, category: rec.category, account: rec.account });
+          if (saveQuick && !paidBy) data.quick.push({ id: newId('q'), name: rec.note || catName(rec.category), amount: n, category: rec.category, account: rec.account });
         }
       });
-      if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' ? last.account : st.account });
-      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}`);
+      if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' || paidBy ? last.account : st.account });
+      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}`);
       if (editing) history.back(); else go('#/', true);
     } catch { /* 已提示 */ }
   };
 
   const remove = async () => {
-    if (!confirm(`删掉这一笔？\n${txTitle(editing)} ${exact(editing.amount, curOf(editing.account))}（${editing.date}）`)) return;
+    const group = editing.group ? d.tx.filter((t) => t.group === editing.group) : [];
+    const extra = group.length > 1 ? `\n（这是一次 AA，连同记给别人的 ${group.length - 1} 笔一起删）` : '';
+    if (!confirm(`删掉这一笔？\n${txTitle(editing)} ${exact(editing.amount, curOf(editing.account))}（${editing.date}）${extra}`)) return;
     try {
-      await save(`删除：${txTitle(editing)} ${editing.amount}`, (data) => { data.tx = data.tx.filter((t) => t.id !== editing.id); });
+      await save(`删除：${txTitle(editing)} ${editing.amount}`, (data) => {
+        data.tx = data.tx.filter((t) => t.id !== editing.id && !(editing.group && t.group === editing.group));
+      });
       toast('已删除');
       history.back();
     } catch { /* 已提示 */ }
@@ -603,7 +751,7 @@ function listView(q) {
       d.accounts.map((a) => h('a', { class: `chip${accFilter === a.id ? ' on' : ''}`, href: link(p.start, a.id) }, a.name))),
     byDay.length ? byDay.map((g) => [
       h('div', { class: 'section-title' }, `${md(g.date)} 周${'日一二三四五六'[new Date(g.date.replace(/-/g, '/')).getDay()]}`),
-      h('div', { class: 'card tx-list' }, g.list.map(txRow))])
+      h('div', { class: 'card tx-list' }, g.list.map((t) => txRow(t)))])
       : h('div', { class: 'card' }, h('p', { class: 'muted' }, '这个预算月还没有记账。')));
 }
 
@@ -630,7 +778,21 @@ function accountsView() {
       return cell({ href: `#/account/${a.id}`, title: a.name, sub: a.note || null,
         meta: a.currency === 'USD' ? `${exact(b, '$')} ≈ ${money(b * rate)}` : exact(b) });
     })),
+    receivablesCard(),
     h('p', { class: 'muted small' }, `从 ${md(d.openingDate)}开始记账。`));
+}
+
+// 别人欠我 / 我欠别人，加上账户就是「净资产」
+function receivablesCard() {
+  const d = store.data;
+  const rc = receivables(d);
+  if (!rc.toMe && !rc.iOwe) return null;
+  const assets = totalAssets(d, usdRate());
+  return h('div', { class: 'group' },
+    rc.toMe ? cell({ href: rc.claims.some((c) => c.pending > 0) ? '#/claims' : '#/people', ic: 'arrowdown', color: 'var(--sage)', title: '别人欠你', meta: money(rc.toMe),
+      sub: [rc.claims.length ? `垫付 ${rc.claims.length} 件` : null, rc.people.filter((x) => x.net > 0).length ? `同学 ${rc.people.filter((x) => x.net > 0).length} 人` : null].filter(Boolean).join(' · ') }) : null,
+    rc.iOwe ? cell({ href: '#/people', ic: 'swap', color: 'var(--danger)', title: '你欠别人', meta: money(rc.iOwe) }) : null,
+    cell({ href: '#/accounts', title: '净资产', sub: '账户 + 别人欠你的 − 你欠别人的', meta: money(assets + rc.toMe - rc.iOwe) }));
 }
 
 function accountView(id) {
@@ -699,7 +861,7 @@ function accountView(id) {
       h('a', { class: 'button', href: `#/add?account=${id}` }, '记一笔'),
       h('button', { class: 'secondary', onclick: calibrate }, '校准'),
       h('button', { class: 'secondary', onclick: edit }, '改信息')),
-    tx.length ? h('div', { class: 'card tx-list' }, tx.map(txRow)) : h('p', { class: 'muted' }, '还没有进出记录。'));
+    tx.length ? h('div', { class: 'card tx-list' }, tx.map((t) => txRow(t))) : h('p', { class: 'muted' }, '还没有进出记录。'));
 }
 
 // ---------- 更多 ----------
@@ -708,12 +870,441 @@ function moreView() {
   return h('div', {},
     header('更多'),
     h('div', { class: 'group' },
+      cell({ href: '#/accounts', ic: 'wallet', color: 'var(--accent)', title: '账户', meta: money(totalAssets(store.data, usdRate())) }),
+      cell({ href: '#/claims', ic: 'suitcase', color: 'var(--blue)', title: '垫付报销', meta: store.data.claims.filter((c) => c.status !== 'settled').length ? `${store.data.claims.filter((c) => c.status !== 'settled').length} 件在报` : '' }),
+      cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : '' }),
+      cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' })),
+    h('div', { class: 'group' },
       cell({ href: '#/rules', ic: 'book', color: 'var(--sage)', title: '我们的花钱方式', sub: '定下来的规则，和为什么这样做' }),
       cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)', title: '预算', meta: money(budgetTotal(store.data)) }),
       cell({ href: '#/quick', ic: 'bolt', color: 'var(--blue)', title: '快捷记账', meta: store.data.quick.length ? `${store.data.quick.length} 个` : '' })),
     h('div', { class: 'group' },
       cell({ href: '#/settings', ic: 'gear', color: '#8a8680', title: '设置' })),
     h('p', { class: 'center' }, h('button', { class: 'link small', onclick: exportExcel }, '导出全部账目（Excel）')));
+}
+
+// ---------- 垫付、人情：通用的「一笔钱」小表单 ----------
+
+const daysSince = (day) => Math.round((new Date(today().replace(/-/g, '/')) - new Date(day.replace(/-/g, '/'))) / 86400000);
+
+// 金额 + 账户 + 日期 + 备注，用于垫一笔、报销到账、还钱
+function moneySheet({ title, hint, amount = '', confirmText = '记好了', accountLabel = '哪个账户', onSave }) {
+  const d = store.data;
+  const amt = h('input', { inputmode: 'decimal', placeholder: '金额', 'aria-label': '金额', value: amount ? String(round2(amount)) : '' });
+  let acc = readJson(LAST_KEY).account;
+  if (!account(d, acc)) acc = d.accounts[0]?.id;
+  const accBox = h('div', { class: 'chips', role: 'group', 'aria-label': accountLabel });
+  const drawAcc = () => accBox.replaceChildren(...d.accounts.map((a) => h('button', {
+    type: 'button', class: `chip${a.id === acc ? ' on' : ''}`, 'aria-pressed': String(a.id === acc), onclick: () => { acc = a.id; drawAcc(); },
+  }, a.name)));
+  drawAcc();
+  const date = h('input', { type: 'date', value: today(), 'aria-label': '日期' });
+  const note = h('input', { placeholder: '备注（选填）', 'aria-label': '备注' });
+  openSheet({
+    title,
+    body: h('div', { class: 'form' }, hint ? h('p', { class: 'small muted' }, hint) : null, amt,
+      h('div', { class: 'label-sm' }, accountLabel), accBox, h('div', { class: 'row-2' }, date, note)),
+    confirmText,
+    onConfirm: async () => {
+      const n = round2(Number(amt.value.replace(/[，,\s]/g, '')));
+      if (!(n > 0)) { toast('先填金额', 'error'); return false; }
+      try {
+        await onSave({ amount: n, account: acc, date: date.value || today(), note: note.value.trim() });
+        render();
+      } catch { return false; }
+      return true;
+    },
+  });
+}
+
+// 一笔不算收支的进出（垫付、报销到账、还钱）
+const moveTx = (type, f, extra) => ({
+  id: newId('t'), type, date: f.date, account: f.account, amount: f.amount, note: f.note, createdAt: new Date().toISOString(),
+  ...(isUsd(store.data, f.account) ? { cny: round2(f.amount * usdRate()) } : {}), ...extra,
+});
+
+// 列表里点一笔：删掉（垫付、还钱这些记错了就删了重记）
+function txActions(t) {
+  if (t.type === 'expense' || t.type === 'income') return () => go(`#/add?edit=${t.id}`);
+  return () => {
+    if (!confirm(`删掉这一笔？\n${txTitle(t)} ${exact(t.amount, curOf(t.account))}（${t.date}）`)) return;
+    save(`删除：${txTitle(t)} ${t.amount}`, (data) => { data.tx = data.tx.filter((x) => x.id !== t.id); }).then(render).catch(() => {});
+  };
+}
+
+// ---------- 垫付报销 ----------
+
+const CLAIM_HELP = [
+  ['什么时候用', ['出差、开会先自己垫钱，之后学校或单位报销的。每件事建一个，比如「10 月北京开会」。']],
+  ['怎么记', ['垫钱的时候点「垫一笔」：机票、酒店、餐费各记一笔，从哪张卡付的就选哪张。', '垫付不算你的花销，不占预算；首页「待收回」会算上它。', '出差期间自己买的东西（纪念品、自己加的餐）照常在「记一笔」记，算花销。']],
+  ['报销', ['钱回来了点「报销到账」，打到哪张卡都行，可以分几次。', '都报完了、或者确定报不了了，点「结清」：报不回的部分这时才算花销（「出差自付」，不占日常预算）。', `垫了超过 ${CLAIM_REMIND_DAYS} 天还没报回来，首页会提醒你问一下。`]],
+  ['发票', ['可以上传发票 PDF 或照片，存在你的私有仓库里。交上去了就勾「已提交」。']],
+];
+
+function newClaim() {
+  const name = h('input', { placeholder: '比如 10月北京开会', 'aria-label': '这件事' });
+  const payer = h('input', { value: '学校', 'aria-label': '谁来报销' });
+  openSheet({
+    title: '新的垫付',
+    body: h('div', { class: 'form' }, h('label', {}, '这件事', name), h('label', {}, '谁来报销', payer)),
+    confirmText: '建好',
+    onConfirm: async () => {
+      if (!name.value.trim()) { toast('写个名字', 'error'); return false; }
+      const id = newId('c');
+      try {
+        await save(`新的垫付：${name.value.trim()}`, (data) => {
+          data.claims.push({ id, name: name.value.trim(), payer: payer.value.trim(), createdAt: today(), status: 'open', docs: [] });
+        });
+      } catch { return false; }
+      go(`#/claim/${id}`);
+      return true;
+    },
+  });
+}
+
+function claimsView() {
+  const d = store.data;
+  const open = d.claims.filter((c) => c.status !== 'settled');
+  const done = d.claims.filter((c) => c.status === 'settled').reverse();
+  const row = (c) => {
+    const cs = claimStatus(d, c.id);
+    const sub = c.status === 'settled' ? `已结清 ${md(c.settledAt)}`
+      : cs.pending > 0 ? `还差 ${money(cs.pending)}${cs.since ? ` · 已经 ${daysSince(cs.since)} 天` : ''}` : cs.advanced ? '都报回来了，可以结清' : '还没记垫付';
+    return cell({ href: `#/claim/${c.id}`, title: c.name, sub, meta: (c.docs || []).length ? `${c.docs.length} 张票` : '' });
+  };
+  return h('div', {},
+    header('垫付报销', h('button', { class: 'icon-btn', 'aria-label': '新的垫付', onclick: newClaim }, icon('plus')), helpButton('垫付报销怎么用', CLAIM_HELP)),
+    open.length ? h('div', { class: 'group' }, open.map(row))
+      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '没有在报销中的事。出差开会要先垫钱的话，点右上角 ＋ 建一个。')),
+    done.length ? [h('div', { class: 'section-title' }, '已结清'), h('div', { class: 'group' }, done.map(row))] : null);
+}
+
+async function openDoc(doc) {
+  try {
+    const blob = await saving('正在打开…', () => gh.readBlob(doc.file));
+    const typed = new Blob([blob], { type: doc.kind === 'pdf' ? 'application/pdf' : 'image/jpeg' });
+    const url = URL.createObjectURL(typed);
+    if (doc.kind === 'pdf') {
+      const a = h('a', { href: url, target: '_blank', rel: 'noopener', download: doc.name });
+      document.body.append(a); a.click(); a.remove();
+    } else {
+      const ov = h('div', { class: 'overlay', onclick: () => ov.remove() }, h('img', { src: url, alt: doc.name }));
+      document.body.append(ov);
+    }
+  } catch { /* 已提示 */ }
+}
+
+function claimView(id) {
+  const d = store.data;
+  const c = d.claims.find((x) => x.id === id);
+  if (!c) return notFound();
+  const cs = claimStatus(d, id);
+  const settled = c.status === 'settled';
+  const upd = (message, fn) => save(message, (data) => fn(data.claims.find((x) => x.id === id), data)).then(render).catch(() => {});
+
+  const advance = () => moneySheet({
+    title: `垫一笔 · ${c.name}`, hint: '比如机票、酒店、餐费。垫付不算你的花销。', accountLabel: '从哪个账户付的',
+    onSave: (f) => save(`垫付：${c.name} ${f.amount}`, (data) => { data.tx.push(moveTx('advance', f, { claim: id })); }),
+  });
+  const repay = () => moneySheet({
+    title: `报销到账 · ${c.name}`, amount: Math.max(0, cs.pending), accountLabel: '打到哪个账户',
+    hint: cs.pending > 0 ? `还差 ${money(cs.pending)} 没报回来。这次到账多少就填多少，可以分几次记。` : null,
+    onSave: (f) => save(`报销到账：${c.name} ${f.amount}`, (data) => { data.tx.push(moveTx('repay', f, { claim: id })); }),
+  });
+  const settle = () => {
+    const diff = round2(cs.advanced - cs.repaid);
+    openSheet({
+      title: `结清「${c.name}」`,
+      body: h('div', { class: 'explain' },
+        h('p', {}, `一共垫了 ${money(cs.advanced)}，报回来 ${money(cs.repaid)}。`),
+        h('p', {}, diff > 0 ? `还差 ${money(diff)} 报不回来。结清后这部分算你的花销（「出差自付」，不占日常预算，但这个月的存钱会少一点）。`
+          : diff < 0 ? `多报回来 ${money(-diff)}，结清后会抵掉一部分花销。` : '正好报完了，结清后这件事就收起来了。'),
+        h('p', { class: 'muted small' }, '结清以后还能「重新打开」。')),
+      confirmText: '结清',
+      onConfirm: () => upd(`结清：${c.name}`, (cl, data) => {
+        if (diff !== 0) {
+          data.tx.push({ id: newId('t'), type: 'writeoff', date: today(), amount: diff, category: 'c-trip', claim: id,
+            note: diff > 0 ? '报不回的部分' : '多报回的部分', createdAt: new Date().toISOString() });
+        }
+        cl.status = 'settled';
+        cl.settledAt = today();
+      }),
+    });
+  };
+  const reopen = () => upd(`重新打开：${c.name}`, (cl, data) => {
+    data.tx = data.tx.filter((t) => !(t.claim === id && t.type === 'writeoff'));
+    cl.status = 'open';
+    delete cl.settledAt;
+  });
+  const rename = () => {
+    const name = h('input', { value: c.name, 'aria-label': '这件事' });
+    const payer = h('input', { value: c.payer || '', 'aria-label': '谁来报销' });
+    openSheet({
+      title: '改信息', body: h('div', { class: 'form' }, h('label', {}, '这件事', name), h('label', {}, '谁来报销', payer)), confirmText: '保存',
+      onConfirm: () => upd(`改垫付：${name.value.trim()}`, (cl) => { cl.name = name.value.trim() || cl.name; cl.payer = payer.value.trim(); }),
+    });
+  };
+  const remove = () => {
+    if (cs.tx.length) return toast('这件事下面还有记录，先把垫付和到账删掉', 'error');
+    if (!confirm(`删掉「${c.name}」？`)) return;
+    save(`删除垫付：${c.name}`, (data) => { data.claims = data.claims.filter((x) => x.id !== id); }, { removes: (c.docs || []).map((x) => x.file) })
+      .then(() => go('#/claims', true)).catch(() => {});
+  };
+
+  // 发票：PDF 原样存，照片压缩后存，放在私有仓库 claims/<id>/ 下
+  const fileInput = h('input', { type: 'file', accept: 'application/pdf,image/*', multiple: true, hidden: true, 'aria-label': '上传发票',
+    onchange: async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      if (!files.length) return;
+      try {
+        await saving('正在上传…', async () => {
+          const uploads = [];
+          const docs = [];
+          for (const f of files) {
+            const pdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+            if (pdf && f.size > 20 * 1024 * 1024) throw new Error(`${f.name} 超过 20MB，太大了`);
+            const blob = pdf ? f : await compressImage(f, 2200, 0.85);
+            const path = `claims/${id}/${newId('')}.${pdf ? 'pdf' : 'jpg'}`;
+            uploads.push({ path, base64: await blobToBase64(blob) });
+            docs.push({ file: path, name: f.name, kind: pdf ? 'pdf' : 'image', submitted: false, addedAt: today() });
+          }
+          await store.save(`上传发票：${c.name}（${docs.length} 个）`, (data) => {
+            const cl = data.claims.find((x) => x.id === id);
+            cl.docs = [...(cl.docs || []), ...docs];
+          }, { uploads });
+        });
+        toast('已上传');
+        render();
+      } catch { /* 已提示 */ }
+    } });
+  const docRow = (doc) => h('div', { class: 'manage-row' },
+    h('label', { class: 'check-inline' }, h('input', { type: 'checkbox', checked: doc.submitted, 'aria-label': `${doc.name} 已提交`,
+      onchange: (e) => upd(`${e.target.checked ? '已提交' : '取消已提交'}：${doc.name}`, (cl) => { cl.docs.find((x) => x.file === doc.file).submitted = e.target.checked; }) })),
+    h('button', { class: 'link grow left', onclick: () => openDoc(doc) }, h('span', { class: 'badge' }, doc.kind === 'pdf' ? 'PDF' : '图片'), ` ${doc.name}`),
+    h('button', { class: 'link danger-text', onclick: () => confirm(`删掉「${doc.name}」？`)
+      && save(`删除发票：${doc.name}`, (data) => { const cl = data.claims.find((x) => x.id === id); cl.docs = cl.docs.filter((x) => x.file !== doc.file); }, { removes: [doc.file] }).then(render).catch(() => {}) }, '删除'));
+
+  return h('div', {},
+    headerSub(c.name, `${c.payer ? `${c.payer}报销 · ` : ''}${md(c.createdAt)}建`, h('button', { class: 'icon-btn', 'aria-label': '改信息', onclick: rename }, icon('gear'))),
+    h('div', { class: 'card spend-left' },
+      h('div', { class: 'muted small' }, settled ? `${md(c.settledAt)}结清` : '还差'),
+      h('div', { class: `big-num${settled ? ' good-text' : ''}` }, settled ? '已结清 ✓' : money(Math.max(0, cs.pending))),
+      h('div', { class: 'muted small' }, settled ? `垫了 ${money(cs.advanced)} · 报回 ${money(cs.repaid)}${cs.writeoff > 0 ? ` · 报不回的 ${money(cs.writeoff)} 算了花销` : cs.writeoff < 0 ? ` · 多报回 ${money(-cs.writeoff)}` : ''}`
+        : `垫了 ${money(cs.advanced)} · 报回 ${money(cs.repaid)}${cs.since ? ` · 已经 ${daysSince(cs.since)} 天` : ''}`)),
+    h('div', { class: 'actions' },
+      settled ? h('button', { class: 'secondary', onclick: reopen }, '重新打开') : [
+        h('button', { onclick: advance }, '垫一笔'),
+        h('button', { class: 'secondary', onclick: repay }, '报销到账'),
+        cs.tx.length ? h('button', { class: 'secondary', onclick: settle }, '结清') : null,
+      ]),
+    h('div', { class: 'card' },
+      h('h3', {}, `发票和单据${(c.docs || []).length ? `（已提交 ${c.docs.filter((x) => x.submitted).length} / ${c.docs.length}）` : ''}`),
+      (c.docs || []).length ? (c.docs || []).map(docRow) : h('p', { class: 'muted small' }, '还没有。发票 PDF、行程单、付款截图都可以传上来，左边打勾表示已经交上去了。'),
+      fileInput, h('button', { class: 'secondary wide', onclick: () => fileInput.click() }, '上传 PDF 或照片')),
+    cs.tx.length ? [h('div', { class: 'section-title' }, '记录（点一笔可以删掉）'), h('div', { class: 'card tx-list' }, [...cs.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))] : null,
+    !cs.tx.length ? h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这件事')) : null);
+}
+
+// ---------- 人情账 ----------
+
+const PEOPLE_HELP = [
+  ['记什么', ['和同学吃饭你先付、帮人代买、借钱给别人：别人欠你的。', '别人帮你付了：你欠别人的。']],
+  ['怎么记', ['吃饭 AA：在「记一笔」填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，其他人的记成欠你的（不算花销）。', '别人帮你付：在「记一笔」选「别人帮我付的」。算你的花销，但账户没动。', '还钱：点这个人，「他还我钱」或「我还他钱」。钱到了哪张卡、从哪张卡出都行，和当初是哪张卡没关系。']],
+  ['提醒', [`别人欠你、你欠别人超过 ${PERSON_REMIND_DAYS} 天，首页会提醒。`]],
+];
+
+function newPerson(after) {
+  const name = h('input', { placeholder: '名字，比如 小王', 'aria-label': '名字' });
+  openSheet({
+    title: '加一个人', body: name, confirmText: '加好',
+    onConfirm: async () => {
+      const n = name.value.trim();
+      if (!n) { toast('写个名字', 'error'); return false; }
+      if (store.data.people.some((p) => p.name === n)) { toast('已经有这个人了', 'error'); return false; }
+      const id = newId('p');
+      try { await save(`人情账：加 ${n}`, (data) => { data.people.push({ id, name: n }); }); } catch { return false; }
+      if (after) after(id); else render();
+      return true;
+    },
+  });
+}
+
+function peopleView() {
+  const d = store.data;
+  const list = d.people.map((p) => ({ p, ...personStatus(d, p.id) }))
+    .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.p.name.localeCompare(b.p.name, 'zh'));
+  const rc = receivables(d);
+  return h('div', {},
+    header('人情账', h('button', { class: 'icon-btn', 'aria-label': '加一个人', onclick: () => newPerson((id) => go(`#/person/${id}`)) }, icon('plus')), helpButton('人情账怎么用', PEOPLE_HELP)),
+    h('div', { class: 'card spend-left' },
+      h('div', { class: 'muted small' }, '别人一共欠你'), h('div', { class: 'big-num' }, money(list.reduce((s, x) => s + Math.max(0, x.net), 0))),
+      rc.iOwe ? h('div', { class: 'small warn-text' }, `你欠别人 ${money(rc.iOwe)}`) : h('div', { class: 'muted small' }, '你不欠谁')),
+    list.length ? h('div', { class: 'group' }, list.map((x) => cell({
+      href: `#/person/${x.p.id}`, title: x.p.name,
+      sub: x.net > 0 ? `欠你 · ${daysSince(x.since)} 天` : x.net < 0 ? `你欠他 · ${daysSince(x.since)} 天` : '两清了',
+      meta: x.net ? money(Math.abs(x.net)) : '',
+    }))) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有人。在「记一笔」里选「AA / 帮人付」就会自动加上，也可以点右上角 ＋。')));
+}
+
+function personView(id) {
+  const d = store.data;
+  const p = d.people.find((x) => x.id === id);
+  if (!p) return notFound();
+  const ps = personStatus(d, id);
+  const record = (type, title, hint, amount) => moneySheet({
+    title, hint, amount, accountLabel: type === 'repay' ? '钱到了哪个账户' : '从哪个账户出',
+    onSave: (f) => save(`${title}：${f.amount}`, (data) => { data.tx.push(moveTx(type, f, { person: id })); }),
+  });
+  const rename = () => {
+    const name = h('input', { value: p.name, 'aria-label': '名字' });
+    openSheet({
+      title: '改名字', body: name, confirmText: '保存',
+      onConfirm: () => save(`人情账：${p.name} 改名 ${name.value.trim()}`, (data) => { data.people.find((x) => x.id === id).name = name.value.trim() || p.name; }).then(render).catch(() => false),
+    });
+  };
+  const remove = () => {
+    if (ps.tx.length) return toast('和他还有记录，不能删', 'error');
+    save(`人情账：删除 ${p.name}`, (data) => { data.people = data.people.filter((x) => x.id !== id); }).then(() => go('#/people', true)).catch(() => {});
+  };
+  return h('div', {},
+    header(p.name, h('button', { class: 'icon-btn', 'aria-label': '改名字', onclick: rename }, icon('gear'))),
+    h('div', { class: 'card spend-left' },
+      h('div', { class: 'muted small' }, ps.net > 0 ? '他欠你' : ps.net < 0 ? '你欠他' : '两清了'),
+      h('div', { class: `big-num${ps.net < 0 ? ' warn-text' : ''}` }, money(Math.abs(ps.net))),
+      ps.since ? h('div', { class: 'muted small' }, `最早一笔没结清的是 ${md(ps.since)}，${daysSince(ps.since)} 天前`) : null),
+    h('div', { class: 'actions' },
+      h('button', { onclick: () => record('repay', `${p.name}还我钱`, '钱到了哪个账户就选哪个，和当初从哪张卡付的没关系。', Math.max(0, ps.net)) }, '他还我钱'),
+      h('button', { class: 'secondary', onclick: () => record('payback', `还给${p.name}`, '不算花销：那笔花销在他帮你付的时候已经算过了。', Math.max(0, -ps.net)) }, '我还他钱'),
+      h('button', { class: 'secondary', onclick: () => record('advance', `借给${p.name} / 帮他付`, '不算你的花销，记成他欠你的。') }, '借给他')),
+    ps.tx.length ? h('div', { class: 'card tx-list' }, [...ps.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))
+      : [h('p', { class: 'muted' }, '还没有记录。'), h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这个人'))]);
+}
+
+// ---------- 每月对账 ----------
+
+function reconcileView() {
+  const d = store.data;
+  const p = periodFor(d, today());
+  const done = d.reconciled?.[p.start];
+  const inputs = {};
+  const submit = async () => {
+    const diffs = [];
+    for (const a of d.accounts) {
+      const v = inputs[a.id].value.replace(/[，,\s]/g, '');
+      if (v === '') continue;
+      const real = Number(v);
+      if (!Number.isFinite(real)) return toast(`${a.name}要填数字`, 'error');
+      const diff = round2(real - balance(d, a.id));
+      if (diff !== 0) diffs.push({ a, real, diff });
+    }
+    try {
+      await save(`对账（${p.label}）${diffs.length ? `：${diffs.map((x) => x.a.name).join('、')}有差额` : '：都对得上'}`, (data) => {
+        for (const x of diffs) {
+          data.tx.push({ id: newId('t'), type: 'adjust', date: today(), account: x.a.id, amount: x.diff, note: `对账：校准到 ${x.real}`, createdAt: new Date().toISOString() });
+        }
+        data.reconciled = { ...(data.reconciled || {}), [p.start]: today() };
+      });
+      toast(diffs.length ? `对完了，${diffs.length} 个账户补了差额` : '对完了，都对得上 ✓');
+      go('#/', true);
+    } catch { /* 已提示 */ }
+  };
+  return h('div', { class: 'form' },
+    headerSub('对账', done ? `这个预算月 ${md(done)} 已经对过了，可以再对一次` : `${p.label}`, helpButton('为什么要对账', [
+      ['为什么', ['漏记、记错几笔很正常。每个预算月开始时对一次，账就不会越积越乱。']],
+      ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额，差额自动记成「对账差额」，不算进预算。', '美元账户填美元。']],
+    ])),
+    h('div', { class: 'card' },
+      d.accounts.map((a) => {
+        const cur = a.currency === 'USD' ? '$' : '¥';
+        inputs[a.id] = h('input', { inputmode: 'decimal', placeholder: '对得上就不填', 'aria-label': `${a.name}实际余额` });
+        return h('label', {}, h('span', { class: 'rec-top' }, h('span', {}, a.name), h('span', { class: 'muted' }, `网站上 ${exact(balance(d, a.id), cur)}`)), inputs[a.id]);
+      })),
+    h('div', { class: 'actions sticky' }, h('button', { onclick: submit }, '对完了')));
+}
+
+// ---------- 总结 ----------
+
+const SUMMARY_HELP = [
+  ['周总结', ['一周从周一到周日。柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
+  ['月总结', ['按预算月算（和发钱对齐）。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
+  ['翻看', ['左右箭头看以前的。']],
+];
+const WEEKDAYS = '一二三四五六日';
+
+function summaryView(q) {
+  const d = store.data;
+  const mode = q.mode === 'month' ? 'month' : 'week';
+  const day = q.day || today();
+  const link = (m, dd) => `#/summary?mode=${m}&day=${dd}`;
+  const seg = h('div', { class: 'segmented' }, [['week', '周'], ['month', '月']].map(([k, t]) =>
+    h('a', { class: `seg${mode === k ? ' on' : ''}`, href: link(k, today()) }, t)));
+  const navRow = (label, sub, prev, next) => h('div', { class: 'period-nav' },
+    h('a', { class: 'icon-btn', href: link(mode, prev), 'aria-label': '上一个' }, '‹'),
+    h('div', { class: 'grow center' }, h('b', {}, label), sub ? h('div', { class: 'muted small' }, sub) : null),
+    next <= today() ? h('a', { class: 'icon-btn', href: link(mode, next), 'aria-label': '下一个' }, '›') : h('span', { class: 'icon-btn ghost' }));
+  const head = header('总结', helpButton('总结怎么看', SUMMARY_HELP));
+
+  if (mode === 'week') {
+    const ws = weekSummary(d, day);
+    const groups = GROUPS.filter((g) => ws.st.byGroup[g.id] || ws.prev.byGroup[g.id]);
+    const arrow = (now, before) => {
+      const diff = now - before;
+      if (Math.abs(diff) < 1) return h('span', { class: 'muted small' }, '和上周一样');
+      return h('span', { class: `small ${diff > 0 ? 'warn-text' : 'good-text'}` }, `${diff > 0 ? '↑' : '↓'} ${money(Math.abs(diff))}`);
+    };
+    return h('div', {}, head, seg,
+      navRow(ws.label, ws.end >= today() && ws.start <= today() ? '这周' : null, addDays(ws.start, -1), addDays(ws.end, 1)),
+      h('div', { class: 'card summary-head' }, h('p', {}, ws.headline)),
+      h('div', { class: 'card' }, h('h3', {}, '每天的生活花销'),
+        barChart(ws.days.map((x, i) => ({ label: `周${WEEKDAYS[i]}`, v: x.v, color: x.v > ws.perDay ? 'var(--amber)' : 'var(--accent)' })),
+          { line: ws.perDay, lineLabel: `每天预算 ${money(ws.perDay)}`, title: '每天的生活花销' })),
+      h('div', { class: 'card' }, h('h3', {}, '花在哪了'),
+        ws.st.total ? h('div', { class: 'donut-row' },
+          donut(GROUPS.map((g) => ({ name: g.name, v: ws.st.byGroup[g.id], color: g.color })), { center: money(ws.st.total), sub: '这周花销', title: '花在哪了' }),
+          h('div', { class: 'donut-legend' }, groups.map((g) => h('div', {},
+            h('span', {}, h('i', { style: `background:${g.color}` }), g.name), h('b', {}, money(ws.st.byGroup[g.id])), arrow(ws.st.byGroup[g.id], ws.prev.byGroup[g.id])))))
+          : h('p', { class: 'muted small' }, '这周还没有花销。')),
+      ws.top.length ? h('div', { class: 'card tx-list' }, h('h3', {}, '这周最大的几笔'), ws.top.map((t) => txRow(t))) : null);
+  }
+
+  const ms = monthSummary(d, day, usdRate());
+  const p = ms.p;
+  const upto = ms.curve.filter((x) => x.day <= today());
+  const n = ms.curve.length - 1;
+  const hist = ms.hist;
+  return h('div', {}, head, seg,
+    navRow(p.label, p.start <= today() && p.end >= today() ? '这个预算月' : null, addDays(p.start, -1), p.next),
+    h('div', { class: 'card summary-head' }, h('p', {}, ms.headline),
+      h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), ms.advice)),
+    flowCard(ms.st, ms.part, '钱怎么分的'),
+    h('div', { class: 'card' }, h('h3', {}, '花钱曲线（生活花销）'),
+      lineChart([
+        { values: ms.curve.map((x) => x.planned), color: 'var(--muted)', dashed: true },
+        { values: upto.map((x) => x.actual), color: 'var(--accent)' },
+      ], { xLabels: [[0, md(p.start)], [Math.round(n / 2), md(ms.curve[Math.round(n / 2)].day)], [n, md(p.end)]], title: '花钱曲线' }),
+      h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--accent)' }), '实际累计'), h('span', {}, h('i', { style: 'background:var(--muted)' }), '按计划'))),
+    budgetCard(ms.st, ms.part),
+    hist.length ? h('div', { class: 'card' }, h('h3', {}, '每月存下'),
+      barChart(hist.map((x) => ({ label: `${x.p.startMonth}月`, v: Math.round(x.saved), color: x.saved >= 0 ? 'var(--sage)' : 'var(--danger)' })), { title: '每月存下' }),
+      hist.length < 2 ? h('p', { class: 'muted small' }, '记满几个月，这里就能看出趋势。') : null) : null,
+    hist.length ? h('div', { class: 'card' }, h('h3', {}, '总资产'),
+      lineChart([{ values: hist.map((x) => Math.round(x.assets)), color: 'var(--accent)' }],
+        { fromZero: false, xLabels: hist.length > 1 ? [[0, `${hist[0].p.startMonth}月`], [hist.length - 1, `${hist.at(-1).p.startMonth}月`]] : [[0, `${hist[0].p.startMonth}月`]], title: '总资产' }),
+      h('p', { class: 'muted small' }, `每个预算月月底的总资产（美元按今天的汇率）。现在 ${money(hist.at(-1).assets)}。`)) : null,
+    ms.owedStart || ms.owedEnd ? h('div', { class: 'card' }, h('h3', {}, '待收回'),
+      h('p', {}, `月初 ${money(ms.owedStart)} → 月底 ${money(ms.owedEnd)}`)) : null);
+}
+
+// 首页上的总结入口：周一、周二提醒看上周；预算月头三天提醒看上个月
+function summaryLinks(p) {
+  const wd = new Date().getDay();
+  const out = [];
+  if (wd === 1 || wd === 2) out.push(cell({ href: `#/summary?mode=week&day=${addDays(weekOf(today()).start, -1)}`, ic: 'chart', color: 'var(--blue)', title: '上周总结出来了' }));
+  if (p.dayIndex <= 3 && !(store.data.openingDate > addDays(p.start, -1))) {
+    out.push(cell({ href: `#/summary?mode=month&day=${addDays(p.start, -1)}`, ic: 'chart', color: 'var(--accent)', title: '上个预算月的总结出来了' }));
+  }
+  return out.length ? h('div', { class: 'group' }, out) : null;
 }
 
 // ---------- 我们的花钱方式 ----------
@@ -838,11 +1429,12 @@ function quickView() {
 
 function exportExcel() {
   const d = store.data;
-  const TYPE = { expense: '支出', income: '收入', transfer: '转账', adjust: '对账差额' };
-  const rows = [['日期', '类型', '类别', '金额', '币种', '折合人民币', '账户', '转入账户', '到账金额', '备注']];
+  const TYPE = { expense: '支出', income: '收入', transfer: '转账', adjust: '对账差额', advance: '垫付/借出', repay: '报销到账/还我', payback: '我还别人', writeoff: '垫付结清差额' };
+  const rows = [['日期', '类型', '类别', '金额', '币种', '折合人民币', '账户', '转入账户', '到账金额', '垫付的事 / 人', '备注']];
   for (const t of [...d.tx].sort((a, b) => a.date.localeCompare(b.date))) {
     rows.push([t.date, TYPE[t.type], t.category ? catName(t.category) : '', t.amount, isUsd(d, t.account) ? 'USD' : 'CNY',
-      t.type === 'expense' || t.type === 'income' ? cny(t) : '', accName(t.account), t.to ? accName(t.to) : '', t.toAmount ?? '', t.note || '']);
+      ['expense', 'income', 'writeoff'].includes(t.type) ? cny(t) : '', t.account ? accName(t.account) : '', t.to ? accName(t.to) : '', t.toAmount ?? '',
+      t.claim ? claimName(t.claim) : t.person ? personName(t.person) : '', t.note || '']);
   }
   const blob = new Blob([makeXlsx(rows, '账目')], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const a = h('a', { href: URL.createObjectURL(blob), download: `账目-${today()}.xlsx` });

@@ -64,8 +64,8 @@ export class Store {
     this.writeCache();
   }
 
-  // mutate(data) 直接修改传入的数据，可返回结果；uploads: [{ path, base64 }]
-  async save(message, mutate, { uploads = [] } = {}) {
+  // mutate(data) 直接修改传入的数据，可返回结果；uploads: [{ path, base64 }]；removes: [path]
+  async save(message, mutate, { uploads = [], removes = [] } = {}) {
     const blobs = [];
     for (const u of uploads) blobs.push({ path: u.path, sha: await this.gh.createBlob(u.base64) });
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -76,7 +76,8 @@ export class Store {
       const result = mutate(next);
       if (result === false) return false; // 修改函数发现不用改（比如别的设备已经记过了）
       try {
-        this.head = await this.gh.commit(head, [{ path: DATA_FILE, content: JSON.stringify(next, null, 1) + '\n' }, ...blobs], message);
+        const changes = [{ path: DATA_FILE, content: JSON.stringify(next, null, 1) + '\n' }, ...blobs, ...removes.map((path) => ({ path, remove: true }))];
+        this.head = await this.gh.commit(head, changes, message);
         this.data = next;
         this.writeCache();
         return result;

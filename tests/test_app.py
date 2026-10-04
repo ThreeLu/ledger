@@ -43,6 +43,7 @@ def step(name):
 class Ctx:
     def __init__(self, page, repo):
         self.page, self.repo = page, repo
+        self.prompt = ""  # 下一次 prompt() 弹窗填什么
 
     def data(self):
         return json.loads(self.repo.read("finance.json"))
@@ -61,8 +62,8 @@ class Ctx:
         a = next(x for x in d["accounts"] if x["id"] == acc)
         b = a["opening"]
         for t in d["tx"]:
-            if t["account"] == acc:
-                b += {"income": t["amount"], "expense": -t["amount"], "transfer": -t["amount"], "adjust": t["amount"]}[t["type"]]
+            if t.get("account") == acc:
+                b += {"income": 1, "repay": 1, "adjust": 1, "expense": -1, "transfer": -1, "advance": -1, "payback": -1}.get(t["type"], 0) * t["amount"]
             if t["type"] == "transfer" and t.get("to") == acc:
                 b += t.get("toAmount", t["amount"])
         return round(b, 2)
@@ -291,6 +292,181 @@ def _(c):
     expect(p.locator(".rule", has_text="兼职的钱")).to_contain_text("70% 存下")
     expect(p.locator(".rule", has_text="一年下来")).to_contain_text("能存约 ¥33,200，储蓄率 42%")  # 前面把吃饭预算改成了 2000
 
+def person(c, name):
+    return next(p for p in c.data()["people"] if p["name"] == name)
+
+
+def net(c, pid):
+    """和这个人之间：正数他欠我，负数我欠他（和网页 personStatus 一样算）"""
+    n = 0
+    for t in c.tx():
+        if t.get("person") != pid:
+            continue
+        v = t.get("cny", t["amount"])
+        if t["type"] in ("advance", "payback"):
+            n += v
+        elif t["type"] == "repay" or (t["type"] == "expense" and not t.get("account")):
+            n -= v
+    return round(n, 2)
+
+
+@step("AA：先付 200，选两个新同学，我那份算花销、其他记成欠我；别人帮我付；人情账还钱")
+def _(c):
+    p = c.page
+    c.go("#/add")
+    p.get_by_label("金额", exact=True).fill("200")
+    p.get_by_role("button", name="出去吃", exact=True).click()
+    p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
+    p.get_by_role("group", name="和别人有关").get_by_role("button", name="AA / 帮人付").click()
+    for name in ("小甲", "小乙"):
+        c.prompt = name
+        p.get_by_role("button", name="+ 新的人").click()
+    expect(p.get_by_label("我那份")).to_have_value("66.67")
+    p.get_by_label("我那份").fill("50")
+    expect(p.locator(".split-hint")).to_contain_text("其他 2 人各约 ¥75")
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 3)
+    new = c.tx()[n:]
+    assert sorted((t["type"], t["amount"]) for t in new) == [("advance", 75), ("advance", 75), ("expense", 50)], new
+    assert len({t["group"] for t in new}) == 1
+    a, b = person(c, "小甲"), person(c, "小乙")
+    assert net(c, a["id"]) == 75 and net(c, b["id"]) == 75
+    # 小乙帮我付了 30：算我的花销，账户不动
+    wechat = c.balance("a-wechat")
+    c.go("#/add")
+    p.get_by_label("金额", exact=True).fill("30")
+    p.get_by_role("button", name="三餐", exact=True).click()
+    p.get_by_role("group", name="和别人有关").get_by_role("button", name="别人帮我付的").click()
+    expect(p.get_by_role("group", name="账户")).to_have_count(0)
+    p.get_by_role("group", name="谁帮我付的").get_by_role("button", name="小乙").click()
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 4)
+    t = c.tx()[-1]
+    assert t["account"] is None and t["person"] == b["id"] and c.balance("a-wechat") == wechat, t
+    assert net(c, b["id"]) == 45
+    # 人情账：小甲还我 75 到生活费卡（当初是微信付的，没关系）
+    c.go("#/more")
+    p.get_by_role("link", name="人情账").click()
+    expect(p.locator(".cell", has_text="小乙")).to_contain_text("¥45")
+    p.locator(".cell", has_text="小甲").click()
+    expect(p.locator(".big-num")).to_have_text("¥75")
+    p.get_by_role("button", name="他还我钱").click()
+    expect(p.locator(".sheet").get_by_label("金额")).to_have_value("75")
+    p.locator(".sheet").get_by_role("group", name="钱到了哪个账户").get_by_role("button", name="生活费卡").click()
+    live = c.balance("a-live")
+    p.locator(".sheet").get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 5)
+    assert net(c, a["id"]) == 0 and c.balance("a-live") == round(live + 75, 2)
+    expect(p.locator(".big-num")).to_have_text("¥0")
+    # 首页：待收回
+    c.go("#/")
+    expect(p.locator(".cell.indicator", has_text="待收回")).to_contain_text("¥45")
+    # 删 AA 的那笔花销，连同记给别人的一起删
+    c.go("#/list")
+    p.locator(".tx").filter(has_text=re.compile(r"^出去吃")).click()
+    p.get_by_role("button", name="删除").click()
+    c.wait_saved(n + 2)
+    assert not any(t.get("group") == new[0]["group"] for t in c.tx())
+
+
+@step("垫付报销：建一件事、垫两笔、传 PDF 和照片、勾已提交、分两次报销、结清（报不回的算出差自付）")
+def _(c):
+    p = c.page
+    c.go("#/claims")
+    p.get_by_role("button", name="新的垫付").click()
+    p.get_by_label("这件事").fill("测试开会")
+    p.locator(".sheet").get_by_role("button", name="建好").click()
+    p.wait_for_function("location.hash.startsWith('#/claim/')")
+    cid = c.data()["claims"][-1]["id"]
+    save_before, n = c.balance("a-save"), len(c.tx())
+    for amount in ("600", "400"):
+        p.get_by_role("button", name="垫一笔").click()
+        p.locator(".sheet").get_by_label("金额").fill(amount)
+        p.locator(".sheet").get_by_role("group", name="从哪个账户付的").get_by_role("button", name="存钱卡").click()
+        p.locator(".sheet").get_by_role("button", name="记好了").click()
+        expect(p.locator(".sheet")).to_have_count(0)
+    c.wait_saved(n + 2)
+    assert c.balance("a-save") == round(save_before - 1000, 2)
+    expect(p.locator(".big-num")).to_have_text("¥1,000")
+    # 不算花销：这个预算月的「不占预算」里没有它
+    # 发票
+    pdf = ART / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+    img = ART / "ticket.png"
+    import struct, zlib
+    raw = b"".join(b"\x00" + b"\x80\x80\x80" * 8 for _ in range(8))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))  # noqa: E731
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    p.get_by_label("上传发票").set_input_files([str(pdf), str(img)])
+    expect(p.get_by_text("已提交 0 / 2")).to_be_visible()
+    docs = next(x for x in c.data()["claims"] if x["id"] == cid)["docs"]
+    assert [x["kind"] for x in docs] == ["pdf", "image"] and c.repo.read(docs[0]["file"]).startswith(b"%PDF"), docs
+    p.get_by_label("invoice.pdf 已提交").check()
+    expect(p.get_by_text("已提交 1 / 2")).to_be_visible()
+    # 报销分两次到账
+    for amount, acc in (("500", "生活费卡"), ("300", "微信")):
+        p.get_by_role("button", name="报销到账").click()
+        p.locator(".sheet").get_by_label("金额").fill(amount)
+        p.locator(".sheet").get_by_role("group", name="打到哪个账户").get_by_role("button", name=acc).click()
+        p.locator(".sheet").get_by_role("button", name="记好了").click()
+        expect(p.locator(".sheet")).to_have_count(0)
+    c.wait_saved(n + 4)
+    expect(p.locator(".big-num")).to_have_text("¥200")
+    p.get_by_role("button", name="结清").click()
+    expect(p.locator(".sheet")).to_contain_text("还差 ¥200 报不回来")
+    p.locator(".sheet").get_by_role("button", name="结清").click()
+    c.wait_saved(n + 5)
+    w = c.tx()[-1]
+    assert (w["type"], w["amount"], w["category"], w.get("account")) == ("writeoff", 200, "c-trip", None), w
+    assert next(x for x in c.data()["claims"] if x["id"] == cid)["status"] == "settled"
+    c.go("#/")
+    expect(p.get_by_text("出差自付").first).to_be_visible()
+    # 删一张发票
+    c.go(f"#/claim/{cid}")
+    p.locator(".manage-row", has_text="ticket.png").get_by_role("button", name="删除").click()
+    expect(p.get_by_text("已提交 1 / 1")).to_be_visible()
+    assert c.repo.read(docs[1]["file"]) is None
+
+
+@step("对账：新的预算月提醒对账，对得上的不填，对不上的补差额")
+def _(c):
+    p = c.page
+    d = c.data()
+    d["openingDate"] = "2020-01-01"  # 假装早就开始记账，这个预算月是完整的
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".cell.indicator", has_text="对账")).to_be_visible()
+    c.go("#/reconcile")
+    live = c.balance("a-live")
+    p.get_by_label("生活费卡实际余额").fill(str(round(live - 12.5, 2)))
+    n = len(c.tx())
+    p.get_by_role("button", name="对完了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert t["type"] == "adjust" and t["amount"] == -12.5 and c.data()["reconciled"], t
+    p.wait_for_function("location.hash === '#/'")
+    expect(p.locator(".cell.indicator", has_text="对账")).to_have_count(0)
+
+
+@step("总结：周（每天柱状图、环形图、和上周比、最大几笔）、月（曲线、每月存下、总资产、建议）")
+def _(c):
+    p = c.page
+    c.go("#/summary")
+    expect(p.get_by_role("img", name="每天的生活花销")).to_be_visible()
+    expect(p.locator(".summary-head")).to_contain_text("这周")
+    if c.tx():
+        expect(p.get_by_role("img", name="花在哪了")).to_be_visible()
+    p.get_by_role("link", name="月", exact=True).click()
+    expect(p.get_by_role("img", name="花钱曲线")).to_be_visible()
+    expect(p.locator(".advice")).to_contain_text("下个月可以试试")
+    expect(p.get_by_role("img", name="总资产")).to_be_visible()
+    p.get_by_role("link", name="上一个").click()
+    expect(p.locator(".period-nav")).to_be_visible()
+    p.get_by_role("button", name="怎么用").click()
+    expect(p.locator(".sheet")).to_contain_text("花钱曲线")
+
 
 @step("导出全部账目 Excel")
 def _(c):
@@ -326,9 +502,9 @@ def main():
         ctx.set_default_timeout(10000)
         page = ctx.new_page()
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("dialog", lambda d: d.accept())
-        fake_externals(page)
+        page.on("dialog", lambda d: d.accept(c.prompt) if d.type == "prompt" else d.accept())
         c = Ctx(page, repo)
+        fake_externals(page)
         for i, (name, fn) in enumerate(STEPS):
             if i and only and not any(k in name for k in only):
                 continue
