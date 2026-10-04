@@ -119,6 +119,9 @@ export function migrate(data) {
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
   data.goals ||= []; // 存款目标：{ id, name, target, by: 'YYYY-MM-DD', note }
+  data.milestones ||= {}; // 里程碑：{ reached: { key: { at, text } }, seen: { key: true } }
+  data.milestones.reached ||= {};
+  data.letters ||= {}; // 月度小信：{ 预算月开始日: { at, text } }
   data.payday ||= {}; // 发钱日卡片：{ 预算月开始日: { later: { 收入计划序号: 再问的日期 }, noTransfer: true } }
   // 心愿单
   data.wishes ||= []; // { id, name, price, want: 'very'|'nice', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
@@ -557,6 +560,38 @@ export function payday(data, today) {
     ? { amount: livingBudget(data), from: floor, routes: data.presets.filter((x) => x.from === floor), summer: p.summer }
     : null;
   return { p, waiting, transfer };
+}
+
+// ---------- 里程碑 ----------
+// 总资产第一次超过某个整数（开始记账时就超过的不算），连续几个完整的预算月存钱达标（暑假不算、也不打断）。
+
+export const ASSET_MILESTONES = [20000, 30000, 50000, 80000, 100000, 150000, 200000, 300000, 500000];
+export const STREAK_MILESTONES = [1, 3, 6, 12, 24];
+
+export function saveStreak(data, today) {
+  const target = (Number(data.settings.expectedIncome) || 0) - budgetTotal(data);
+  if (target <= 0) return 0;
+  let streak = 0;
+  for (const p of closedPeriods(data, today).filter((x) => !partial(data, x).isPartial && !x.summer)) {
+    const st = periodStats(data, p);
+    streak = st.income - st.total >= target ? streak + 1 : 0;
+  }
+  return streak;
+}
+
+export function newMilestones(data, today, rate = data.settings.usdRate) {
+  const got = data.milestones?.reached || {};
+  const out = [];
+  const now = totalAssets(data, rate);
+  const start = data.openingDate ? totalAssets(data, rate, data.openingDate) : 0;
+  for (const m of ASSET_MILESTONES) {
+    if (now >= m && start < m && !got[`a${m}`]) out.push({ key: `a${m}`, text: `总资产第一次超过 ${money(m)}` });
+  }
+  const streak = saveStreak(data, today);
+  for (const n of STREAK_MILESTONES) {
+    if (streak >= n && !got[`s${n}`]) out.push({ key: `s${n}`, text: n === 1 ? '第一个完整的预算月，存钱达标了' : `连续 ${n} 个月存钱达标` });
+  }
+  return out;
 }
 
 // ---------- 健康指标 ----------

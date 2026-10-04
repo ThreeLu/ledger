@@ -891,6 +891,46 @@ def _(c):
     assert (t["type"], t["account"], t["to"], t["amount"]) == ("transfer", "a-save", "a-live", living), t
     expect(p.locator(".payday")).to_have_count(0)
 
+@step("记账时提示上次的价格；里程碑祝贺；月度小信（DeepSeek 写，存下来）")
+def _(c):
+    p = c.page
+    # 上次的价格（「比平时贵」要有 3 次以上的记录）
+    d = c.data()
+    d["tx"].append({"id": "lunch3", "type": "expense", "date": (date.today() - timedelta(days=1)).isoformat(), "account": "a-campus", "amount": 15, "category": "c-lunch", "note": "食堂午饭", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/list")
+    p.reload()
+    expect(p.locator(".tx", has_text="食堂午饭").nth(2)).to_be_visible()  # 新数据读到了
+    c.go("#/add")
+    p.get_by_role("button", name="午餐", exact=True).first.click()
+    expect(p.locator(".price-memo")).to_contain_text("上次")
+    p.get_by_label("备注").fill("食堂午饭")
+    expect(p.locator(".price-memo")).to_contain_text("最近 3 次平均 ¥15")
+    p.get_by_label("金额", exact=True).fill("40")
+    expect(p.locator(".price-memo")).to_contain_text("这次比平时贵一些")
+    # 里程碑：收到一大笔钱，总资产跨过好几个整数
+    d = c.data()
+    d["tx"].append({"id": "bigincome", "type": "income", "date": TODAY, "account": "a-save", "amount": 100000, "category": "i-other", "note": "测试", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    card = p.locator(".milestone")
+    expect(card).to_contain_text("总资产第一次超过 ¥100,000")
+    reached = c.data()["milestones"]["reached"]
+    assert "a100000" in reached and reached["a100000"]["at"] == TODAY, reached
+    card.get_by_role("button", name="好").click()
+    expect(p.locator(".milestone")).to_have_count(0)
+    p.reload()
+    expect(p.locator(".milestone")).to_have_count(0)
+    # 月度小信：上个预算月的总结
+    prev_end = period_start(date.today()) - timedelta(days=1)
+    c.go(f"#/summary?mode=month&day={prev_end.isoformat()}")
+    expect(p.locator(".letter-text")).to_contain_text("这个月你把吃饭控制得很好")
+    letters = c.data()["letters"]
+    assert any("吃饭控制得很好" in x["text"] for x in letters.values()), letters
+    p.reload()
+    expect(p.locator(".letter-text")).to_contain_text("这个月你把吃饭控制得很好")
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page
@@ -913,6 +953,9 @@ def fake_externals(page):
         system = body["messages"][0]["content"]
         LAST_AI.clear()
         LAST_AI.append(body)
+        if "理财小伙伴" in system:
+            ans = {"letter": "这个月你把吃饭控制得很好，比预算少花了一些。下个月试试每周日看一眼周总结。"}
+            return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
         if "理财小助手" in system:
             if "99999" in user:
                 ans = {"answer": "这个太贵了，不过你想买的话也行。", "verdict": "buy", "item": {"name": "顶配电脑", "price": 99999}}

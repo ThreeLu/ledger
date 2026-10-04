@@ -404,5 +404,15 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .payday-row.column { display: block; }
 .payday .routes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
+/* 里程碑、小信、价格提示 */
+.milestone { display: flex; align-items: center; gap: 12px; background: color-mix(in srgb, var(--good) 12%, var(--card)); }
+.milestone-icon { width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; background: var(--good); color: #fff; flex: none; }
+.milestone b { color: var(--text); }
+.letter h3 { display: flex; align-items: center; gap: 4px; }
+.letter-text { margin: 0 0 6px; line-height: 1.8; font-size: 15px; white-space: pre-wrap; }
+.letter .link { padding-left: 0; }
+.price-memo { margin: 0 2px; flex: 1 1 100%; }
+.price-memo:empty { display: none; }
+
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }

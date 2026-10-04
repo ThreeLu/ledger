@@ -2,7 +2,7 @@ import { GitHub } from './github.js';
 import { Store, newId } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
-  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday,
+  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus,
@@ -86,7 +86,31 @@ async function refresh() {
   }
   if (!hadData || loadError || store.missing) render();
   else if (store.head !== before && !EDITING_ROUTES.test(currentPath())) render();
-  if (!loadError && store.data) postRecurring();
+  if (!loadError && store.data) { postRecurring(); checkMilestones(); }
+}
+
+// 新达到的里程碑记下来（日期），首页祝贺 7 天
+function checkMilestones() {
+  const list = newMilestones(store.data, today(), usdRate());
+  if (!list.length) return;
+  save(`里程碑：${list.map((x) => x.text).join('、')}`, (data) => {
+    for (const x of list) data.milestones.reached[x.key] ??= { at: today(), text: x.text };
+  }).then(() => { if (!EDITING_ROUTES.test(currentPath())) render(); }).catch(() => {});
+}
+
+function milestoneCard() {
+  const m = store.data.milestones || {};
+  const fresh = Object.entries(m.reached || {}).filter(([k, x]) => !m.seen?.[k] && daysSince(x.at) <= 7);
+  if (!fresh.length) return null;
+  const ok = () => save('里程碑：看到了', (data) => {
+    data.milestones.seen = { ...(data.milestones.seen || {}), ...Object.fromEntries(fresh.map(([k]) => [k, true])) };
+  }).then(render).catch(() => {});
+  return h('div', { class: 'card milestone' },
+    h('div', { class: 'milestone-icon' }, icon('sparkle')),
+    h('div', { class: 'grow' },
+      fresh.map(([, x]) => h('b', { class: 'block' }, x.text)),
+      h('span', { class: 'muted small' }, '一步一步来，你做得很好。')),
+    h('button', { class: 'small secondary', onclick: ok }, '好'));
 }
 
 // 固定扣费到日子了自动记一笔（比如美元账户每月扣的订阅）
@@ -386,6 +410,7 @@ const HOME_HELP = [
   ['健康指标', ['绿 = 很好，不用管；黄 = 留意一下；红 = 需要做点什么。', '每一行都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
   ['总结', ['底部「总结」看每周、每个预算月的图表。']],
+  ['里程碑', ['总资产第一次超过 2 万、3 万、5 万……，或者连续几个月存钱达标，首页会出现一张祝贺卡片。']],
   ['买不买', ['想买东西拿不准，点「想买个东西？问问买不买」。理财小课堂也在那里。']],
 ];
 
@@ -504,6 +529,7 @@ function homeView() {
     headerSub('账本', `${p.label} · 第 ${p.dayIndex} 天`, helpButton('首页怎么看', HOME_HELP)),
     tokenNotice(),
     h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
+    milestoneCard(),
     paydayCard(),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '这个月还能花'),
@@ -594,7 +620,7 @@ function recentCategories(d, usable, n = 6) {
 
 const ADD_HELP = [
   ['三种账', ['支出：花出去的钱，算进预算。', '收入：生活费、补助、兼职、红包。', '转账：自己的账户之间倒钱（充校园卡、充 Apple ID、存钱卡转生活费卡），不算收入也不算花销，只是换了个口袋。']],
-  ['怎么记', ['填金额 → 点类别 → 点账户 → 记好了。账户默认是你上次用的。', '用支付宝、微信绑卡付的钱，记在实际扣钱的那张卡上。', '常记的（比如食堂午饭 15）勾上「存成快捷」，以后在上面一点就记好。']],
+  ['怎么记', ['填金额 → 点类别 → 点账户 → 记好了。账户默认是你上次用的。', '选好类别后，下面会显示上次花了多少、最近几次平均多少；这次明显贵或便宜也会说一声。', '用支付宝、微信绑卡付的钱，记在实际扣钱的那张卡上。', '常记的（比如食堂午饭 15）勾上「存成快捷」，以后在上面一点就记好。']],
   ['和别人有关', ['和同学吃饭你先付：填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，别人的记成欠你的。', '帮人代买：同样选「AA / 帮人付」，把「我那份」改成 0。', '别人帮你付了：选「别人帮我付的」，算你的花销，记成你欠他的。', '出差开会垫钱不在这里记，去「更多 → 垫付报销」。']],
   ['美元', ['Apple ID 是美元账户，金额填美元，按当天汇率折成人民币算预算。充值 Apple ID 用转账：填花了多少人民币、到账多少美元。']],
   ['记错了', ['在流水里点那一笔，可以改，也可以删。']],
@@ -636,7 +662,7 @@ function addView(q) {
   const box = h('div', {});
   let toTouched = Boolean(editing);
   const amountInput = h('input', { class: 'amount-input', inputmode: 'decimal', placeholder: '0', 'aria-label': '金额', value: st.amount,
-    oninput: (e) => { st.amount = e.target.value; drawHint(); syncTo(); drawSplit(); } });
+    oninput: (e) => { st.amount = e.target.value; drawHint(); syncTo(); drawSplit(); drawMemo(); } });
   const toAmountInput = h('input', { inputmode: 'decimal', 'aria-label': '到账金额', value: st.toAmount, oninput: (e) => { st.toAmount = e.target.value; toTouched = true; } });
   // 人民币 → 美元（充值 Apple ID）：到账金额先按汇率估一个，自己改过就不再自动改
   const crossCurrency = () => st.type === 'transfer' && st.to && account(d, st.to).currency !== account(d, st.account).currency;
@@ -708,6 +734,7 @@ function addView(q) {
           } else body = chips(list, st.category, pickCat, `${g.name}类别`);
           parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name', style: `color:${g.color}` }, g.name), body));
         }
+        drawMemo();
         if (FREEFORM.includes(st.category)) {
           parts.push(h('label', { class: 'form-label' }, '具体是什么', whatInput));
         }
@@ -737,11 +764,12 @@ function addView(q) {
 
     parts.push(h('div', { class: 'row-2' },
       h('input', { type: 'date', value: st.date, 'aria-label': '日期', onchange: (e) => { st.date = e.target.value || today(); } }),
-      h('input', { placeholder: '备注（选填）', value: st.note, 'aria-label': '备注', oninput: (e) => { st.note = e.target.value; } })));
+      h('input', { placeholder: '备注（选填）', value: st.note, 'aria-label': '备注', oninput: (e) => { st.note = e.target.value; drawMemo(); } })));
     if (st.type === 'expense' && !editing) {
       parts.push(h('label', { class: 'switch-row' }, h('input', { type: 'checkbox', checked: saveQuick, onchange: (e) => { saveQuick = e.target.checked; } }), '存成快捷，下次一点就记'));
     }
     parts.push(h('div', { class: 'actions sticky' },
+      st.type === 'expense' ? memo : null, // 上次的价格：放在按钮上面，点之前正好看到
       h('button', { onclick: submit }, editing ? '保存' : '记好了'),
       editing ? h('button', { class: 'danger', onclick: remove }, '删除') : null));
     box.replaceChildren(...parts);
@@ -817,8 +845,27 @@ function addView(q) {
 
   const taxInput = h('input', { inputmode: 'decimal', placeholder: '没扣就不填', 'aria-label': '被预扣的个税', value: st.tax,
     oninput: (e) => { st.tax = e.target.value; } });
+  // 上次同一类花了多少：选好类别就显示，帮你建立价格感
+  const memo = h('p', { class: 'muted small price-memo' });
+  const drawMemo = () => {
+    memo.textContent = '';
+    if (st.type !== 'expense' || !st.category || AUTO_CATEGORIES.includes(st.category)) return;
+    let past = d.tx.filter((t) => t.type === 'expense' && t.category === st.category && t.id !== editing?.id
+      && (!FREEFORM.includes(st.category) || !st.what.trim() || (t.what || '').includes(st.what.trim())));
+    const note = st.note.trim();
+    if (note && past.some((t) => t.note === note)) past = past.filter((t) => t.note === note);
+    if (!past.length) return;
+    past.sort(txOrder);
+    const last = past[0];
+    const recent = past.slice(0, 5);
+    const avg = recent.reduce((a, t) => a + cny(t), 0) / recent.length;
+    const name = last.what || (note && last.note === note ? note : catName(st.category));
+    const n = num(st.amount);
+    const cmp = n > 0 && recent.length >= 3 ? (n > avg * 1.3 ? '，这次比平时贵一些' : n < avg * 0.7 ? '，这次比平时便宜' : '') : '';
+    memo.textContent = `上次${name} ${exact(cny(last))}（${md(last.date)}）${recent.length >= 3 ? `，最近 ${recent.length} 次平均 ${exact(round2(avg))}` : ''}${cmp}`;
+  };
   const whatInput = h('input', { class: 'what-input', placeholder: '写一下是什么，比如 自行车、体检费', 'aria-label': '具体是什么', value: st.what,
-    oninput: (e) => { st.what = e.target.value; } });
+    oninput: (e) => { st.what = e.target.value; drawMemo(); } });
 
   const recordQuick = async (qk) => {
     const usd = isUsd(d, qk.account);
@@ -1476,6 +1523,7 @@ function reconcileView() {
 const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月总结', ['按预算月算（和发钱对齐）。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
+  ['月度小信', ['每个预算月结束后，打开那个月的总结，DeepSeek 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
   ['年总结', ['按自然年：一年存了多少、储蓄率、总资产多了多少、每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
 ];
@@ -1528,6 +1576,7 @@ function summaryView(q) {
     navRow(p.label, p.start <= today() && p.end >= today() ? '这个预算月' : null, addDays(p.start, -1), p.next),
     h('div', { class: 'card summary-head' }, h('p', {}, ms.headline),
       h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), ms.advice)),
+    letterCard(p),
     flowCard(ms.st, ms.part, '钱怎么分的'),
     budgetAdvice(d, today(), usdRate()).items.length ? h('a', { class: 'card link-card', href: '#/budget' }, `预算有调整建议，去看看 →`) : null,
     h('div', { class: 'card' }, h('h3', {}, '花钱曲线（生活花销）'),
@@ -1546,6 +1595,62 @@ function summaryView(q) {
       h('p', { class: 'muted small' }, `每个预算月月底的总资产（美元按今天的汇率）。现在 ${money(hist.at(-1).assets)}。`)) : null,
     ms.owedStart || ms.owedEnd ? h('div', { class: 'card' }, h('h3', {}, '待收回'),
       h('p', {}, `月初 ${money(ms.owedStart)} → 月底 ${money(ms.owedEnd)}`)) : null);
+}
+
+// 月度小信：预算月结束后，DeepSeek 根据这个月的汇总数字写几句话。存在 data.letters，写一次就不再花钱。
+const letterState = { busy: {}, error: {} };
+
+async function writeLetter(p) {
+  const d = store.data;
+  const st = periodStats(d, p);
+  const part = partial(d, p);
+  const prevP = shiftPeriod(d, p, -1);
+  const prev = d.openingDate && prevP.end >= d.openingDate ? periodStats(d, prevP) : null;
+  const inP = (day) => day && day >= p.start && day <= p.end;
+  const lines = [
+    `预算月：${p.label}${part.isPartial ? `（从 ${md(part.from)}开始记账，只记了一部分）` : ''}${p.summer ? '（暑假，没有收入）' : ''}。`,
+    `收入 ${Math.round(st.income)}，花销 ${Math.round(st.total)}，存下 ${Math.round(st.income - st.total)}${st.income ? `，储蓄率 ${Math.round(((st.income - st.total) / st.income) * 100)}%` : ''}。`,
+    `各块花销 / 预算：${GROUPS.filter((g) => d.budget[g.id] || st.spent[g.id]).map((g) => `${g.name} ${Math.round(st.spent[g.id])} / ${Math.round((d.budget[g.id] || 0) * part.factor)}`).join('；')}。`,
+    `花得最多的类别：${Object.entries(st.byCat).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, v]) => `${catName(id)} ${Math.round(v)}`).join('、') || '无'}。`,
+    prev ? `上个预算月：收入 ${Math.round(prev.income)}，花销 ${Math.round(prev.total)}，存下 ${Math.round(prev.income - prev.total)}。` : '这是第一个记账的月份，没有上个月可以比。',
+    `这个月实现的心愿：${d.wishes.filter((w) => w.status === 'bought' && inP(w.boughtAt)).map((w) => w.name).join('、') || '无'}；放弃的心愿：${d.wishes.filter((w) => w.status === 'dropped' && inP(w.droppedAt)).map((w) => w.name).join('、') || '无'}。`,
+    `这个月的里程碑：${Object.values(d.milestones?.reached || {}).filter((x) => inP(x.at)).map((x) => x.text).join('、') || '无'}。`,
+    `网站按规则给的建议：${monthSummary(d, p.end, usdRate()).advice}`,
+  ].join('\n');
+  const system = [
+    '你是一个大学生的理财小伙伴。他对理财不太懂，容易焦虑，在认真地学着记账、稳定存钱。',
+    '每个预算月结束，你根据下面的汇总数字给他写一封很短的信：120～220 字，像朋友写的便条，大白话，温和真诚。',
+    '先具体地说一件这个月做得好的事（用数字），再给一条下个月可以试试的小建议（只给一条，要具体、容易做到）。没有什么要改的，就鼓励他保持。',
+    '不说教，不吓唬人，不推荐任何理财产品，数字只用给你的，不要编。不要用「亲爱的」这类称呼，不要署名。',
+    '只输出 JSON：{"letter":""}',
+  ].join('\n');
+  const out = await askJson(await aiConfig(), system, lines, { maxTokens: 6000, timeout: 120000 });
+  const text = String(out.letter || '').trim();
+  if (!text) throw new Error('DeepSeek 没写出来，等会儿再试');
+  await save(`月度小信：${p.label}`, (data) => { data.letters = { ...(data.letters || {}), [p.start]: { at: today(), text } }; });
+}
+
+function letterCard(p) {
+  const d = store.data;
+  if (p.end >= today() || (d.openingDate && p.end < d.openingDate)) return null; // 还没结束 / 还没开始记账
+  if (!periodStats(d, p).tx.length) return null; // 这个月什么都没记，没什么可写的
+  const letter = d.letters?.[p.start];
+  const run = () => {
+    if (letterState.busy[p.start]) return;
+    letterState.busy[p.start] = true;
+    letterState.error[p.start] = '';
+    writeLetter(p).catch((e) => { letterState.error[p.start] = e.message; })
+      .finally(() => { letterState.busy[p.start] = false; if (/^\/summary/.test(currentPath())) render(); });
+  };
+  // 最近结束的那个预算月：打开总结时自动写；更早的点一下再写
+  const latest = shiftPeriod(d, p, 1).start === periodFor(d, today()).start;
+  if (!letter && latest && !letterState.busy[p.start] && !letterState.error[p.start]) setTimeout(run);
+  return h('div', { class: 'card letter' },
+    h('h3', {}, icon('sparkle'), ' 这个月的小信'),
+    letter ? [h('p', { class: 'letter-text' }, letter.text), h('button', { class: 'link small', onclick: () => { delete d.letters[p.start]; run(); render(); } }, '再写一封')]
+      : letterState.busy[p.start] || (latest && !letterState.error[p.start]) ? h('p', { class: 'muted small' }, 'DeepSeek 正在写……')
+        : [letterState.error[p.start] ? h('p', { class: 'small warn-text' }, letterState.error[p.start]) : null,
+          h('button', { class: 'secondary', onclick: run }, '让 DeepSeek 写一封')]);
 }
 
 // 年度总结
@@ -1579,7 +1684,11 @@ function yearView(d, year, head, seg, navRow) {
         h('span', {}, '放弃的心愿'), h('b', {}, ys.wishesDropped.length ? `${ys.wishesDropped.length} 个，省下 ${money(dropSaved)}` : '—'),
         h('span', {}, '订阅一共'), h('b', {}, money(ys.subs)),
         h('span', {}, '个税退回'), h('b', {}, ys.taxRefund ? money(ys.taxRefund) : '—')),
-      ys.wishesBought.length ? h('p', { class: 'muted small' }, `实现了：${ys.wishesBought.map((w) => w.name).join('、')}`) : null));
+      ys.wishesBought.length ? h('p', { class: 'muted small' }, `实现了：${ys.wishesBought.map((w) => w.name).join('、')}`) : null),
+    (() => {
+      const ms = Object.values(d.milestones?.reached || {}).filter((x) => x.at >= ys.from && x.at <= ys.to).sort((a, b) => a.at.localeCompare(b.at));
+      return ms.length ? h('div', { class: 'card' }, h('h3', {}, '这一年的里程碑'), ms.map((x) => h('div', { class: 'budget-top' }, h('span', {}, x.text), h('span', { class: 'muted' }, md(x.at))))) : null;
+    })());
 }
 
 // 首页上的总结入口：周一、周二提醒看上周；预算月头三天提醒看上个月
