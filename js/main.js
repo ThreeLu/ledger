@@ -412,7 +412,10 @@ function txTitle(t) {
     case 'repay': return t.claim ? `报销到账 · ${claimName(t.claim)}` : `${personName(t.person)}还我`;
     case 'payback': return `还给${personName(t.person)}`;
     case 'writeoff': return `${catName(t.category)} · ${claimName(t.claim)}`;
-    default: return t.person && !t.account ? `${catName(t.category)}（${personName(t.person)}代付）` : catName(t.category);
+    default: {
+      const name = t.what || catName(t.category); // 「其他」显示自己写的名字
+      return t.person && !t.account ? `${name}（${personName(t.person)}代付）` : name;
+    }
   }
 }
 
@@ -437,7 +440,7 @@ function txRow(t, onclick = null) {
   else if (t.type === 'advance' || t.type === 'payback') { amount = `−${exact(t.amount, cur)}`; cls = 'muted'; }
   else { amount = exact(t.amount, cur); cls = 'muted'; }
   const where = t.type === 'transfer' || t.type === 'writeoff' ? null : t.account ? accName(t.account) : null;
-  const tag = { advance: '不算花销', repay: '不算收入', payback: '不算花销' }[t.type];
+  const tag = { advance: '不算花销', repay: '不算收入', payback: '不算花销' }[t.type] || (t.what ? catName(t.category) : null);
   return h('a', { class: 'tx', href: onclick ? '#' : txHref(t), onclick: onclick ? (e) => { e.preventDefault(); onclick(); } : null },
     h('span', { class: 'grow' }, txTitle(t),
       h('span', { class: 'muted small block' }, [t.date.slice(5).replace('-', '/'), where, tag, t.note].filter(Boolean).join(' · '))),
@@ -448,6 +451,7 @@ function txRow(t, onclick = null) {
 // ---------- 记一笔 ----------
 
 const AUTO_CATEGORIES = ['c-wish', 'c-trip'];
+const FREEFORM = ['c-other']; // 选这些类别时要写一下具体是什么（往往是大额的、不好归类的东西）
 
 // 最近记过的几个支出类别（记账页最上面一排）
 function recentCategories(d, usable, n = 6) {
@@ -479,10 +483,10 @@ function addView(q) {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
-    sub: category(d, editing.category)?.sub || null,
+    sub: category(d, editing.category)?.sub || null, what: editing.what || '',
   } : {
     type: q.type || 'expense', amount: '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: '', split: 'none', person: '', sub: null,
+    category: '', date: today(), note: '', split: 'none', person: '', sub: null, what: '',
   };
   if (!account(d, st.account)) st.account = firstCny;
   // 和别人有关：AA（我先付，别人欠我）/ 别人帮我付的（我欠别人）
@@ -551,7 +555,12 @@ function addView(q) {
       if (st.type === 'expense') {
         // 心愿、出差自付由心愿单和垫付自动记，不在这里选；老版本的类别不再出现（正在改的那笔除外）
         const usable = cats.filter((c) => (!c.hidden && !AUTO_CATEGORIES.includes(c.id)) || c.id === st.category);
-        const pickCat = (id) => { st.category = id; st.sub = category(d, id)?.sub || st.sub; draw(); };
+        const pickCat = (id) => {
+          st.category = id;
+          st.sub = category(d, id)?.sub || st.sub;
+          draw();
+          if (FREEFORM.includes(id) && !whatInput.value) whatInput.focus();
+        };
         const recent = recentCategories(d, usable);
         if (recent.length) parts.push(h('div', { class: 'label-sm' }, '最近用过'), chips(recent, st.category, pickCat, '最近用过的类别'));
         parts.push(h('div', { class: 'label-sm' }, '类别'));
@@ -571,6 +580,9 @@ function addView(q) {
               open ? chips(list.filter((c) => c.sub === open), st.category, pickCat, `${open}类别`) : null);
           } else body = chips(list, st.category, pickCat, `${g.name}类别`);
           parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name', style: `color:${g.color}` }, g.name), body));
+        }
+        if (FREEFORM.includes(st.category)) {
+          parts.push(h('label', { class: 'form-label' }, '具体是什么', whatInput));
         }
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
@@ -644,6 +656,7 @@ function addView(q) {
     const my = round2(num(aa.my) || 0);
     if (my < 0 || my > n) return toast('「我那份」要在 0 和总金额之间', 'error');
     if (my > 0 && !st.category) return toast('选一下类别', 'error');
+    if (my > 0 && FREEFORM.includes(st.category) && !st.what.trim()) return toast('写一下具体是什么', 'error');
     const others = round2(n - my);
     const each = Math.floor((others / ids.length) * 100) / 100;
     const usd = isUsd(d, st.account);
@@ -656,6 +669,7 @@ function addView(q) {
         for (const p of aa.newPeople) if (ids.includes(p.id) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
         if (my > 0) {
           data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
+            ...(FREEFORM.includes(st.category) ? { what: st.what.trim() } : {}),
             group: g, createdAt: now, ...(usd ? { cny: round2(my * rate) } : {}) });
         }
         ids.forEach((pid, i) => {
@@ -670,12 +684,15 @@ function addView(q) {
     } catch { /* 已提示 */ }
   };
 
+  const whatInput = h('input', { class: 'what-input', placeholder: '写一下是什么，比如 自行车、体检费', 'aria-label': '具体是什么', value: st.what,
+    oninput: (e) => { st.what = e.target.value; } });
+
   const recordQuick = async (qk) => {
     const usd = isUsd(d, qk.account);
     try {
       await save(`记账：${qk.name} ${qk.amount}`, (data) => {
         data.tx.push({ id: newId('t'), type: 'expense', date: today(), account: qk.account, amount: qk.amount, category: qk.category,
-          note: qk.name, createdAt: new Date().toISOString(), ...(usd ? { cny: round2(qk.amount * usdRate()) } : {}) });
+          note: qk.name, ...(qk.what ? { what: qk.what } : {}), createdAt: new Date().toISOString(), ...(usd ? { cny: round2(qk.amount * usdRate()) } : {}) });
       });
       toast(`已记：${qk.name} ${exact(qk.amount, curOf(qk.account))}`);
       go('#/', true);
@@ -688,12 +705,14 @@ function addView(q) {
     if (st.type === 'expense' && st.split === 'aa' && !editing) return submitAA(n);
     if (st.type === 'expense' && st.split === 'paidby' && !st.person) return toast('选一下是谁帮你付的', 'error');
     if ((st.type === 'expense' || st.type === 'income') && !st.category) return toast(st.type === 'income' ? '选一下收入来源' : '选一下类别', 'error');
+    if (st.type === 'expense' && FREEFORM.includes(st.category) && !st.what.trim()) return toast('写一下具体是什么', 'error');
     if (st.type === 'transfer' && !st.to) return toast('选一下转到哪个账户', 'error');
     const usd = isUsd(d, st.account);
     const rec = { type: st.type, date: st.date, account: st.account, amount: st.type === 'adjust' ? num(st.amount) : n, note: st.note.trim() };
     if (st.type === 'expense' || st.type === 'income') {
       rec.category = st.category;
       if (usd) rec.cny = round2(n * usdRate());
+      if (st.type === 'expense' && FREEFORM.includes(st.category)) rec.what = st.what.trim();
     }
     const paidBy = st.type === 'expense' && st.split === 'paidby';
     if (paidBy) { rec.account = null; rec.person = st.person; delete rec.cny; }
@@ -720,6 +739,7 @@ function addView(q) {
           if (!paidBy && old.person && old.type === 'expense' && !old.group) delete data.tx[i].person;
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           if (!rec.to) { delete data.tx[i].to; delete data.tx[i].toAmount; }
+          if (!rec.what) delete data.tx[i].what;
         } else {
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           data.tx.push({ id: newId('t'), ...rec, createdAt: new Date().toISOString() });
@@ -727,7 +747,9 @@ function addView(q) {
             data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: f, category: 'c-fee',
               note: `${title} 的手续费`, createdAt: new Date().toISOString(), ...(usd ? { cny: round2(f * usdRate()) } : {}) });
           }
-          if (saveQuick && !paidBy) data.quick.push({ id: newId('q'), name: rec.note || catName(rec.category), amount: n, category: rec.category, account: rec.account });
+          if (saveQuick && !paidBy) {
+            data.quick.push({ id: newId('q'), name: rec.note || rec.what || catName(rec.category), amount: n, category: rec.category, account: rec.account, ...(rec.what ? { what: rec.what } : {}) });
+          }
         }
       });
       if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' || paidBy ? last.account : st.account });
@@ -1727,7 +1749,7 @@ function exportExcel() {
   const TYPE = { expense: '支出', income: '收入', transfer: '转账', adjust: '对账差额', advance: '垫付/借出', repay: '报销到账/还我', payback: '我还别人', writeoff: '垫付结清差额' };
   const rows = [['日期', '类型', '类别', '金额', '币种', '折合人民币', '账户', '转入账户', '到账金额', '垫付的事 / 人', '备注']];
   for (const t of [...d.tx].sort((a, b) => a.date.localeCompare(b.date))) {
-    rows.push([t.date, TYPE[t.type], t.category ? catName(t.category) : '', t.amount, isUsd(d, t.account) ? 'USD' : 'CNY',
+    rows.push([t.date, TYPE[t.type], t.category ? `${catName(t.category)}${t.what ? `：${t.what}` : ''}` : '', t.amount, isUsd(d, t.account) ? 'USD' : 'CNY',
       ['expense', 'income', 'writeoff'].includes(t.type) ? cny(t) : '', t.account ? accName(t.account) : '', t.to ? accName(t.to) : '', t.toAmount ?? '',
       t.claim ? claimName(t.claim) : t.person ? personName(t.person) : '', t.note || '']);
   }

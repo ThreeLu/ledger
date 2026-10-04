@@ -503,6 +503,21 @@ def _(c):
     assert c.tx()[-1]["category"] == "c-storage"
     c.go("#/add")
     expect(p.get_by_role("group", name="最近用过的类别").get_by_role("button", name="收纳整理")).to_be_visible()
+    # 「其他」：要写一下具体是什么，流水里显示写的名字
+    p.get_by_role("group", name="日常小组").get_by_role("button", name="其他").click()
+    p.get_by_role("group", name="其他类别").get_by_role("button", name="其他").click()
+    expect(p.get_by_label("具体是什么")).to_be_focused()
+    p.get_by_label("金额", exact=True).fill("680")
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    expect(p.locator(".toast.error")).to_contain_text("写一下具体是什么")
+    p.get_by_label("具体是什么").fill("二手自行车")
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert (t["category"], t["what"]) == ("c-other", "二手自行车"), t
+    c.go("#/list")
+    expect(p.locator(".tx").filter(has_text=re.compile(r"^二手自行车"))).to_contain_text("其他")
 
 
 @step("心愿单：小额用心愿基金（省下的预算）、大额按顺序每月最多 400 攒、冷静期、DeepSeek 建议、买了、放弃")
