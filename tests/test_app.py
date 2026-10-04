@@ -111,15 +111,15 @@ def _(c):
     }}""")
     p.goto(URL)
     expect(p.get_by_role("heading", name="开始记账")).to_be_visible()
-    for name, v in [("存钱卡余额", "13087.39"), ("生活费卡余额", "689.88"), ("微信余额", "1985.83"), ("校园卡余额", "162.58")]:
+    for name, v in [("存钱卡余额", "10000"), ("生活费卡余额", "500"), ("微信余额", "1000"), ("校园卡余额", "100")]:
         p.get_by_label(name).fill(v)
     p.get_by_role("button", name="开始记账").click()
     expect(p.locator(".summary-title")).to_be_visible()
     d = c.data()
-    assert {a["id"]: a["opening"] for a in d["accounts"]}["a-save"] == 13087.39, d["accounts"]
+    assert {a["id"]: a["opening"] for a in d["accounts"]}["a-save"] == 10000, d["accounts"]
     assert d["openingDate"] == TODAY
     # 个人设置在私有仓库里改（这里用编的数字模拟）：美元账户、固定扣费、收入计划、预算
-    d["accounts"].append({"id": "a-usd", "name": "Apple ID", "currency": "USD", "opening": 126.35, "note": ""})
+    d["accounts"].append({"id": "a-usd", "name": "Apple ID", "currency": "USD", "opening": 150, "note": ""})
     d["presets"].append({"name": "充值 Apple ID", "from": "a-live", "to": "a-usd"})
     d["recurring"] = [{"id": "r-claude", "name": "订阅甲", "amount": 20, "account": "a-usd", "category": "c-ai", "day": 6, "since": TODAY},
                       {"id": "r-gpt", "name": "订阅乙", "amount": 100, "account": "a-usd", "category": "c-ai", "day": 29, "since": TODAY}]
@@ -150,7 +150,7 @@ def _(c):
     c.go("#/add")
     p.get_by_role("button", name="食堂午饭 ¥15").click()
     c.wait_saved(2)
-    assert c.balance("a-campus") == 132.58
+    assert c.balance("a-campus") == 70
     # 下次默认账户是上次用的
     c.go("#/add")
     expect(p.get_by_role("group", name="账户").get_by_role("button", name="校园卡")).to_have_attribute("aria-pressed", "true")
@@ -159,7 +159,7 @@ def _(c):
 @step("记收入：生活费 4000 到存钱卡")
 def _(c):
     c.add(4000, kind="收入", cat="生活费", acc="存钱卡")
-    assert c.balance("a-save") == 17087.39
+    assert c.balance("a-save") == 14000
 
 
 @step("转账：常用的「充值校园卡」带手续费；充值 Apple ID 人民币换美元")
@@ -173,7 +173,7 @@ def _(c):
     n = len(c.tx())
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 2)
-    assert c.balance("a-campus") == 332.58 and c.balance("a-live") == 488.88, (c.balance("a-campus"), c.balance("a-live"))
+    assert c.balance("a-campus") == 270 and c.balance("a-live") == 299, (c.balance("a-campus"), c.balance("a-live"))
     fee = c.tx()[-1]
     assert fee["category"] == "c-fee" and fee["amount"] == 1
     p.wait_for_function("location.hash === '#/'")
@@ -187,7 +187,7 @@ def _(c):
     p.get_by_label("到账金额").fill("19.5")
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 3)
-    assert c.balance("a-usd") == 145.85, c.balance("a-usd")
+    assert c.balance("a-usd") == 169.5, c.balance("a-usd")
     # 美元账户的花销按汇率折成人民币
     c.add(2, cat="软件订阅", acc="Apple ID")
     assert c.tx()[-1]["cny"] == 14
@@ -203,7 +203,7 @@ def _(c):
     p.get_by_label("金额", exact=True).fill("4100")
     p.get_by_role("button", name="保存").click()
     p.wait_for_function("location.hash.startsWith('#/list')")
-    assert c.balance("a-save") == 17187.39
+    assert c.balance("a-save") == 14100
     n = len(c.tx())
     p.locator(".tx", has_text="软件订阅").click()
     p.get_by_role("button", name="删除").click()
@@ -226,8 +226,8 @@ def _(c):
     p.locator(".sheet").get_by_role("button", name="校准").click()
     c.wait_saved(n + 1)
     t = c.tx()[-1]
-    # 生活费卡：689.88 − 充校园卡 200 − 手续费 1 − 充 Apple ID 140 = 348.88，实际 480 → 差额 +131.12
-    assert t["type"] == "adjust" and t["amount"] == 131.12 and c.balance("a-live") == 480, t
+    # 生活费卡：500 − 充校园卡 200 − 手续费 1 − 充 Apple ID 140 = 159，实际 480 → 差额 +321
+    assert t["type"] == "adjust" and t["amount"] == 321 and c.balance("a-live") == 480, t
     expect(p.locator(".tx", has_text="对账差额")).to_be_visible()
 
 
