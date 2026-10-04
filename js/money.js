@@ -119,6 +119,7 @@ export function migrate(data) {
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
   data.goals ||= []; // 存款目标：{ id, name, target, by: 'YYYY-MM-DD', note }
+  data.payday ||= {}; // 发钱日卡片：{ 预算月开始日: { later: { 收入计划序号: 再问的日期 }, noTransfer: true } }
   // 心愿单
   data.wishes ||= []; // { id, name, price, want: 'very'|'nice', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
@@ -535,6 +536,29 @@ export function budgetAdvice(data, today, rate = data.settings.usdRate) {
   return { periods: full, items: out, waiting: full.length < 2 ? 2 - full.length : 0 };
 }
 
+// ---------- 发钱日一条龙 ----------
+// 收入计划里的每一笔：这个预算月到了没有；到了以后，生活费从存钱卡转出来没有。暑假没有收入，直接提醒转生活费。
+
+// 收入计划对应的收入类别：写了 category 用它，否则按名字找
+export const planCategory = (data, plan) => plan.category || data.categories.find((c) => c.kind === 'income' && c.name === plan.name)?.id || null;
+
+export function payday(data, today) {
+  const p = periodFor(data, today);
+  if (partial(data, p).isPartial) return { p, waiting: [], transfer: null }; // 开始记账那个月：之前到的钱没记，不问
+  const inP = data.tx.filter((t) => t.date >= p.start && t.date <= p.end);
+  const snooze = data.payday?.[p.start] || {};
+  const waiting = p.summer ? [] : data.incomePlan
+    .map((plan, i) => ({ plan, i, category: planCategory(data, plan) }))
+    .filter((x) => x.category && !inP.some((t) => t.type === 'income' && t.category === x.category) && !(snooze.later?.[x.i] >= today));
+  const floor = data.settings.floorAccount;
+  const gotIncome = inP.some((t) => t.type === 'income' && data.incomePlan.some((plan) => planCategory(data, plan) === t.category));
+  const moved = inP.some((t) => t.type === 'transfer' && t.account === floor && t.to !== floor);
+  const transfer = (gotIncome || p.summer) && !moved && !snooze.noTransfer && floor
+    ? { amount: livingBudget(data), from: floor, routes: data.presets.filter((x) => x.from === floor), summer: p.summer }
+    : null;
+  return { p, waiting, transfer };
+}
+
 // ---------- 健康指标 ----------
 // level: good 绿 / warn 黄 / bad 红。每个都带一句大白话 text，红黄的带 action（该做什么）。
 
@@ -666,9 +690,9 @@ export function health(data, today, rate = data.settings.usdRate) {
     });
   }
 
-  // 暑假：提醒从存钱卡转生活费
+  // 暑假：提醒从存钱卡转生活费（首页「发钱日」卡片里能一步转好，这里只在那张卡片关掉后还没转时提醒）
   const stf = summerTransfer(data, today);
-  if (stf) {
+  if (stf && data.payday?.[stf.period.start]?.noTransfer && !data.tx.some((t) => t.type === 'transfer' && t.account === data.settings.floorAccount && t.date >= stf.period.start && t.date <= today)) {
     out.push({
       key: 'summer', name: '暑假生活费', value: money(stf.amount),
       level: 'warn', text: '这个预算月没有收入，从存钱卡转生活费出来',

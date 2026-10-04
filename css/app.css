@@ -392,5 +392,17 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .link-card { display: block; color: var(--accent); font-weight: 600; }
 .token-banner { display: block; }
 
+/* 流水搜索、发钱日 */
+.list-tools { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 6px; }
+.list-tools select { width: auto; max-width: 9.5em; }
+.list-tools + .muted { min-height: 0; margin: 0 4px 8px; }
+.payday { background: color-mix(in srgb, var(--accent) 9%, var(--card)); }
+.payday-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--line); }
+.payday-row:last-child { border-bottom: 0; }
+.payday-row .grow b { display: block; }
+.payday-row button { flex: none; }
+.payday-row.column { display: block; }
+.payday .routes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }

@@ -2,7 +2,7 @@ import { GitHub } from './github.js';
 import { Store, newId } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
-  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays,
+  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus,
@@ -425,6 +425,61 @@ function budgetCard(st, part) {
     st.spent.none ? h('p', { class: 'muted small' }, `另有不占预算的花销 ${money(st.spent.none)}（手续费、出差自付等）`) : null);
 }
 
+// 发钱日一条龙：收入到了点一下记上，再点一下把这个月的生活费从存钱卡转出来
+function paydayCard() {
+  const d = store.data;
+  const t = today();
+  const pd = payday(d, t);
+  if (!pd.waiting.length && !pd.transfer) return null;
+  const floor = d.settings.floorAccount;
+  const later = (i) => save('发钱日：晚点再问', (data) => {
+    const day = data.payday[pd.p.start] ||= {};
+    day.later = { ...(day.later || {}), [i]: t };
+  }).then(render).catch(() => {});
+  const arrived = (x) => moneySheet({
+    title: `${x.plan.name}的钱到了`, amount: x.plan.amount, account: x.plan.account || floor, accountLabel: '到了哪个账户',
+    hint: '金额和计划不一样就改一下。',
+    onSave: (f) => save(`收入：${x.plan.name} ${f.amount}`, (data) => {
+      data.tx.push({ id: newId('t'), type: 'income', date: f.date, account: f.account, amount: f.amount, category: x.category, note: f.note, createdAt: new Date().toISOString() });
+    }).then(() => toast(`记好了：${x.plan.name} ${money(f.amount)}`)),
+  });
+  const move = (route) => {
+    const amt = h('input', { inputmode: 'decimal', value: String(pd.transfer.amount), 'aria-label': '转多少' });
+    openSheet({
+      title: `${accName(route.from)} → ${accName(route.to)}`,
+      body: h('div', { class: 'form' }, h('label', {}, '转多少', amt),
+        h('p', { class: 'muted small' }, `默认是这个月吃饭 + 日常 + 自由钱的预算。分两张卡的话，先转一部分，再点另一张卡转剩下的。`)),
+      confirmText: '转好了',
+      onConfirm: async () => {
+        const n = round2(Number(amt.value.replace(/[，,\s]/g, '')));
+        if (!(n > 0)) { toast('填一下转多少', 'error'); return false; }
+        try {
+          await save(`转生活费：${accName(route.from)} → ${accName(route.to)} ${n}`, (data) => {
+            data.tx.push({ id: newId('t'), type: 'transfer', date: t, account: route.from, to: route.to, amount: n, note: '这个月的生活费', createdAt: new Date().toISOString() });
+          });
+          toast(`记好了：转生活费 ${money(n)}`);
+          render();
+        } catch { return false; }
+        return true;
+      },
+    });
+  };
+  const skip = () => save('发钱日：这个月不用转生活费', (data) => { (data.payday[pd.p.start] ||= {}).noTransfer = true; }).then(render).catch(() => {});
+  return h('div', { class: 'card payday' },
+    h('h3', {}, pd.transfer?.summer ? '暑假生活费' : '发钱日'),
+    pd.waiting.map((x) => h('div', { class: 'payday-row' },
+      h('span', { class: 'grow' }, h('b', {}, `${x.plan.name}的 ${money(x.plan.amount)} 到了吗？`), x.plan.when ? h('span', { class: 'muted small' }, x.plan.when) : null),
+      h('button', { class: 'small', onclick: () => arrived(x) }, '到了'),
+      h('button', { class: 'small secondary', onclick: () => later(x.i) }, '还没'))),
+    pd.transfer ? h('div', { class: 'payday-row column' },
+      h('span', { class: 'grow' },
+        h('b', {}, pd.transfer.summer ? `暑假没有收入：从${accName(floor)}转这个月的生活费 ${money(pd.transfer.amount)}` : `从${accName(floor)}转这个月的生活费 ${money(pd.transfer.amount)}`),
+        h('span', { class: 'muted small' }, pd.transfer.summer ? '这是早就留好的钱，放心用。' : '先存后花：剩下的留在存钱卡里不动。'),
+        h('span', { class: 'routes' },
+          pd.transfer.routes.map((r) => h('button', { class: 'small', onclick: () => move(r) }, `转到${accName(r.to)}`)),
+          h('button', { class: 'small secondary', onclick: skip }, '这个月不用')))) : null);
+}
+
 // 令牌到期：账本和物品档案共用一个令牌，到期日填在物品档案的设置里
 function tokenNotice() {
   let exp = '';
@@ -449,6 +504,7 @@ function homeView() {
     headerSub('账本', `${p.label} · 第 ${p.dayIndex} 天`, helpButton('首页怎么看', HOME_HELP)),
     tokenNotice(),
     h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
+    paydayCard(),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '这个月还能花'),
       h('div', { class: `big-num${hl.left < 0 ? ' warn-text' : ''}` }, hl.left < 0 ? `超了 ${money(-hl.left)}` : money(hl.left)),
@@ -861,36 +917,81 @@ function addView(q) {
 
 const LIST_HELP = [
   ['看什么', ['按预算月（15 号到下个月 14 号）列出每一笔，左右箭头翻月份。', '点上面的账户只看那个账户的。']],
+  ['搜索和筛选', ['搜索框里打字，会在全部时间里找：备注、名称、类别、账户、人名、金额都能搜，空格隔开可以同时满足几个词（比如「理发 25」）。', '类别可以选一个，也可以选一整组（比如「吃饭（整组）」）。上面会显示找到几笔、一共花了多少。']],
   ['改和删', ['点任何一笔就能改或删。', '「（自动）」的是固定扣费，到日子网站自己记的。']],
 ];
 
+// 流水：默认按预算月看；搜索时看全部时间。类别可以选一个类别，也可以选一整组（吃饭、日常……）
+const listFilter = { text: '', cat: '' }; // 换页回来还记得
+
+function txHaystack(t) {
+  return [txTitle(t), t.note, t.what, t.category ? catName(t.category) : '', t.account ? accName(t.account) : '', t.to ? accName(t.to) : '',
+    t.person ? personName(t.person) : '', t.claim ? claimName(t.claim) : '', String(t.amount), t.date].filter(Boolean).join(' ').toLowerCase();
+}
+
 function listView(q) {
   const d = store.data;
-  let p = periodFor(d, q.day || today());
+  const p = periodFor(d, q.day || today());
   const accFilter = q.account || '';
   const link = (day, acc) => `#/list?day=${day}${acc ? `&account=${acc}` : ''}`;
-  const tx = d.tx.filter((t) => t.date >= p.start && t.date <= p.end && (!accFilter || t.account === accFilter || t.to === accFilter)).sort(txOrder);
-  const st = periodStats(d, p);
-  const byDay = [];
-  for (const t of tx) {
-    if (!byDay.length || byDay.at(-1).date !== t.date) byDay.push({ date: t.date, list: [] });
-    byDay.at(-1).list.push(t);
-  }
   const prev = shiftPeriod(d, p, -1);
   const next = shiftPeriod(d, p, 1);
-  return h('div', {},
-    header('流水', helpButton('流水怎么看', LIST_HELP)),
+  const results = h('div', {});
+  const summary = h('div', { class: 'muted small' });
+  const periodBox = h('div', {});
+
+  const catOk = (t) => {
+    if (!listFilter.cat) return true;
+    if (listFilter.cat.startsWith('g:')) return t.category && (category(d, t.category)?.group || 'daily') === listFilter.cat.slice(2);
+    return t.category === listFilter.cat;
+  };
+  const draw = () => {
+    const words = listFilter.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const searching = words.length > 0;
+    const tx = d.tx.filter((t) => (searching || (t.date >= p.start && t.date <= p.end))
+      && (!accFilter || t.account === accFilter || t.to === accFilter) && catOk(t)
+      && (!searching || words.every((w) => txHaystack(t).includes(w)))).sort(txOrder);
+    const spend = tx.filter((t) => t.type === 'expense' || t.type === 'writeoff').reduce((a, t) => a + cny(t), 0);
+    const income = tx.filter((t) => t.type === 'income').reduce((a, t) => a + cny(t), 0);
+    periodBox.hidden = searching;
+    summary.textContent = searching || listFilter.cat
+      ? `${searching ? '全部时间里' : '这个预算月'}找到 ${tx.length} 笔${spend ? ` · 支出 ${money(spend)}` : ''}${income ? ` · 收入 ${money(income)}` : ''}`
+      : '';
+    const byDay = [];
+    for (const t of tx) {
+      if (!byDay.length || byDay.at(-1).date !== t.date) byDay.push({ date: t.date, list: [] });
+      byDay.at(-1).list.push(t);
+    }
+    results.replaceChildren(...(byDay.length ? byDay.flatMap((g) => [
+      h('div', { class: 'section-title' }, `${searching && g.date.slice(0, 4) !== today().slice(0, 4) ? `${g.date.slice(0, 4)} 年` : ''}${md(g.date)} 周${'日一二三四五六'[new Date(g.date.replace(/-/g, '/')).getDay()]}`),
+      h('div', { class: 'card tx-list' }, g.list.map((t) => txRow(t)))])
+      : [h('div', { class: 'card' }, h('p', { class: 'muted' }, searching || listFilter.cat ? '没有找到。' : '这个预算月还没有记账。'))]));
+  };
+  const st = periodStats(d, p);
+  const search = h('input', { type: 'search', placeholder: '搜：理发、打印、25、小王……', 'aria-label': '搜索流水', value: listFilter.text,
+    oninput: (e) => { listFilter.text = e.target.value; draw(); } });
+  const catSelect = h('select', { 'aria-label': '按类别筛选', value: listFilter.cat, onchange: (e) => { listFilter.cat = e.target.value; draw(); } },
+    h('option', { value: '' }, '全部类别'),
+    GROUPS.map((g) => {
+      const cats = d.categories.filter((c) => c.kind === 'expense' && c.group === g.id && (!c.hidden || d.tx.some((t) => t.category === c.id)));
+      return cats.length ? h('optgroup', { label: g.name }, h('option', { value: `g:${g.id}` }, `${g.name}（整组）`), cats.map((c) => h('option', { value: c.id }, c.name))) : null;
+    }),
+    h('optgroup', { label: '收入' }, d.categories.filter((c) => c.kind === 'income').map((c) => h('option', { value: c.id }, c.name))));
+  periodBox.append(
     h('div', { class: 'period-nav' },
       h('a', { class: 'icon-btn', href: link(prev.start, accFilter), 'aria-label': '上个月' }, '‹'),
       h('div', { class: 'grow center' }, h('b', {}, p.label), h('div', { class: 'muted small' }, `支出 ${money(st.total)} · 收入 ${money(st.income)}`)),
-      next.start <= today() ? h('a', { class: 'icon-btn', href: link(next.start, accFilter), 'aria-label': '下个月' }, '›') : h('span', { class: 'icon-btn ghost' })),
+      next.start <= today() ? h('a', { class: 'icon-btn', href: link(next.start, accFilter), 'aria-label': '下个月' }, '›') : h('span', { class: 'icon-btn ghost' })));
+  draw();
+  return h('div', {},
+    header('流水', helpButton('流水怎么看', LIST_HELP)),
+    h('div', { class: 'list-tools' }, search, catSelect),
+    summary,
+    periodBox,
     h('div', { class: 'chip-scroll' },
       h('a', { class: `chip${accFilter ? '' : ' on'}`, href: link(p.start, '') }, '全部'),
       d.accounts.map((a) => h('a', { class: `chip${accFilter === a.id ? ' on' : ''}`, href: link(p.start, a.id) }, a.name))),
-    byDay.length ? byDay.map((g) => [
-      h('div', { class: 'section-title' }, `${md(g.date)} 周${'日一二三四五六'[new Date(g.date.replace(/-/g, '/')).getDay()]}`),
-      h('div', { class: 'card tx-list' }, g.list.map((t) => txRow(t)))])
-      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '这个预算月还没有记账。')));
+    results);
 }
 
 // ---------- 账户 ----------
@@ -1035,10 +1136,10 @@ function moreView() {
 const daysSince = (day) => Math.round((new Date(today().replace(/-/g, '/')) - new Date(day.replace(/-/g, '/'))) / 86400000);
 
 // 金额 + 账户 + 日期 + 备注，用于垫一笔、报销到账、还钱
-function moneySheet({ title, hint, amount = '', confirmText = '记好了', accountLabel = '哪个账户', onSave }) {
+function moneySheet({ title, hint, amount = '', confirmText = '记好了', accountLabel = '哪个账户', account: preset = null, onSave }) {
   const d = store.data;
   const amt = h('input', { inputmode: 'decimal', placeholder: '金额', 'aria-label': '金额', value: amount ? String(round2(amount)) : '' });
-  let acc = readJson(LAST_KEY).account;
+  let acc = preset || readJson(LAST_KEY).account;
   if (!account(d, acc)) acc = d.accounts[0]?.id;
   const accBox = h('div', { class: 'chips', role: 'group', 'aria-label': accountLabel });
   const drawAcc = () => accBox.replaceChildren(...d.accounts.map((a) => h('button', {

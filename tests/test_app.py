@@ -836,6 +836,61 @@ def _(c):
     expect(p.get_by_role("img", name="每月存下")).to_be_visible()
     expect(p.get_by_text("花得最多的类别")).to_be_visible()
 
+@step("流水搜索和筛选：全部时间里按名称、人名、金额搜，显示合计；按一整组类别筛选")
+def _(c):
+    p = c.page
+    c.go("#/list")
+    p.get_by_label("搜索流水").fill("二手")
+    expect(p.locator(".tx")).to_have_count(1)
+    expect(p.get_by_text("全部时间里找到 1 笔 · 支出 ¥680")).to_be_visible()
+    expect(p.locator(".period-nav")).to_be_hidden()
+    p.get_by_label("搜索流水").fill("小乙")
+    expect(p.locator(".tx").first).to_contain_text("小乙")
+    p.get_by_label("搜索流水").fill("")
+    p.get_by_label("按类别筛选").select_option("g:food")
+    expect(p.get_by_text(re.compile("^这个预算月找到"))).to_be_visible()
+    for row in p.locator(".tx").all():
+        assert "转账" not in row.inner_text()
+    p.get_by_label("按类别筛选").select_option("")
+
+
+@step("发钱日一条龙：收入到了点一下记上，「还没」今天不再问，再点一下从存钱卡转生活费")
+def _(c):
+    p = c.page
+    cur = period_start(date.today())
+    if cur.month in (7, 8):
+        return  # 暑假那两个月没有收入，这一步只在平时测
+    d = c.data()
+    d["openingDate"] = "2020-01-01"
+    d["categories"] += [{"id": "i-a", "name": "收入甲", "kind": "income"}, {"id": "i-b", "name": "收入乙", "kind": "income"}]
+    d["tx"] = [t for t in d["tx"] if not (t["date"] >= cur.isoformat() and t["type"] == "transfer" and t["account"] == "a-save")]
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    card = p.locator(".payday")
+    expect(card).to_contain_text("收入甲的 ¥4,000 到了吗？")
+    card.locator(".payday-row", has_text="收入乙").get_by_role("button", name="还没").click()
+    expect(card.locator(".payday-row", has_text="收入乙")).to_have_count(0)
+    card.locator(".payday-row", has_text="收入甲").get_by_role("button", name="到了").click()
+    sheet = p.locator(".sheet")
+    expect(sheet.get_by_label("金额")).to_have_value("4000")
+    expect(sheet.get_by_role("group", name="到了哪个账户").get_by_role("button", name="存钱卡")).to_have_attribute("aria-pressed", "true")
+    n = len(c.tx())
+    sheet.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert (t["type"], t["category"], t["amount"], t["account"]) == ("income", "i-a", 4000, "a-save"), t
+    expect(card).to_contain_text("转这个月的生活费")
+    card.get_by_role("button", name="转到生活费卡").click()
+    b = c.data()["budget"]
+    living = b["food"] + b["daily"] + b["free"]
+    expect(p.locator(".sheet").get_by_label("转多少")).to_have_value(str(living))
+    p.locator(".sheet").get_by_role("button", name="转好了").click()
+    c.wait_saved(n + 2)
+    t = c.tx()[-1]
+    assert (t["type"], t["account"], t["to"], t["amount"]) == ("transfer", "a-save", "a-live", living), t
+    expect(p.locator(".payday")).to_have_count(0)
+
 @step("导出全部账目 Excel")
 def _(c):
     p = c.page
