@@ -47,6 +47,10 @@ class Ctx:
         self.prompt = ""  # 下一次 prompt() 弹窗填什么
 
     def data(self):
+        # 修改是先存手机、后台上传的：等待上传队列清空再读仓库
+        self.page.wait_for_function(
+            "() => { try { const q = JSON.parse(localStorage.getItem('ledger-queue')); return !q || !q.items.length; } catch { return true; } }",
+            timeout=15000)
         return json.loads(self.repo.read("finance.json"))
 
     def tx(self):
@@ -742,6 +746,38 @@ def _(c):
     expect(card).to_contain_text("平均每月留")
     g = c.data()["goals"][0]
     assert (g["target"], g["by"]) == (20000, "2030-12-31"), g
+
+@step("没信号也能记：先存手机、立刻显示；离线刷新还在；有网后自动上传，和另一台设备的修改合并")
+def _(c):
+    p = c.page
+    before = c.data()
+    n = len(before["tx"])
+    p.route(f"{API}/**", lambda r: r.abort())  # 断网
+    c.go("#/add")
+    p.get_by_label("金额", exact=True).fill("12")
+    p.get_by_role("button", name="早餐", exact=True).first.click()
+    p.get_by_label("备注").fill("离线记的")
+    p.get_by_role("button", name="记好了").click()
+    p.wait_for_function("location.hash === '#/'")
+    expect(p.locator(".busy")).to_have_count(0)  # 不弹「正在保存」
+    expect(p.locator(".tx", has_text="离线记的")).to_be_visible()
+    expect(p.locator(".sync-pill")).to_contain_text("没网，1 项存在手机上")
+    p.reload()
+    expect(p.locator(".tx", has_text="离线记的")).to_be_visible()
+    assert len(json.loads(c.repo.read("finance.json"))["tx"]) == n
+    # 这期间另一台设备记了一笔
+    d = json.loads(c.repo.read("finance.json"))
+    d["tx"].append({"id": "otherdevice", "type": "expense", "date": TODAY, "account": "a-wechat", "amount": 7, "category": "c-drink", "note": "另一台设备", "createdAt": "2020-01-01T00:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.unroute(f"{API}/**")
+    p.evaluate("window.dispatchEvent(new Event('online'))")
+    d = c.data()
+    notes = [t.get("note") for t in d["tx"]]
+    assert "离线记的" in notes and "另一台设备" in notes and len(d["tx"]) == n + 2, notes[-3:]
+    expect(p.locator(".sync-pill")).to_be_hidden()
+    c.go("#/list")
+    expect(p.locator(".tx", has_text="另一台设备")).to_be_visible()
+    expect(p.locator(".tx", has_text="离线记的")).to_be_visible()
 
 @step("导出全部账目 Excel")
 def _(c):

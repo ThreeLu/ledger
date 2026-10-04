@@ -48,7 +48,29 @@ const writeJson = (key, v) => { try { localStorage.setItem(key, JSON.stringify(v
 function connect() {
   gh = new GitHub({ token: settings.token, repo: settings.repo || DEFAULT_REPO });
   store = new Store(gh);
+  store.onStatus = showSync;
   store.loadCached();
+  showSync(store.status);
+}
+
+// 右上角的小标记：有没上传的修改时显示。上传很快的话不显示（免得一闪一闪）
+const syncPill = h('button', { class: 'sync-pill', type: 'button', hidden: true, onclick: () => {
+  if (store?.status.state === 'error') toast(`上传失败：${store.status.error}（记的账都还在手机上）`, 'error');
+  store?.sync();
+} });
+let syncTimer = null;
+let renderedData = '';
+function showSync(st) {
+  clearTimeout(syncTimer);
+  const n = st.pending;
+  const text = st.state === 'offline' ? `没网，${n} 项存在手机上，有网自动上传`
+    : st.state === 'error' ? `${n} 项没传上去，点一下看看`
+      : n ? `正在上传 ${n} 项` : '';
+  const show = () => { syncPill.textContent = text; syncPill.hidden = !text; syncPill.className = `sync-pill ${st.state}`; };
+  if (st.state === 'offline' || st.state === 'error' || !text) show();
+  else syncTimer = setTimeout(show, 1500);
+  // 传完以后，如果合并进了别的设备的修改，页面刷新一下（正在填的表单不动）
+  if (st.state === 'ok' && store?.data && !EDITING_ROUTES.test(currentPath()) && JSON.stringify(store.data) !== renderedData) render();
 }
 
 const currentPath = () => window.location.hash.replace(/^#/, '').split('?')[0];
@@ -86,7 +108,7 @@ async function postRecurring() {
         r.lastPosted = date;
       }
       return list.length;
-    });
+    }, { online: true }); // 要在 GitHub 最新的数据上判断记没记过，两台设备才不会重复记
     if (n && !EDITING_ROUTES.test(currentPath())) { toast(`自动记了 ${n} 笔固定扣费`); render(); }
   } catch { /* 下次打开再试 */ } finally {
     posting = false;
@@ -110,6 +132,8 @@ async function updateRate() {
 
 function boot() {
   setupNav();
+  document.body.append(syncPill);
+  window.addEventListener('online', () => store?.sync());
   window.addEventListener('hashchange', () => {
     for (const el of document.querySelectorAll('.sheet-overlay, .overlay')) el.remove(); // 换页时收起弹出的表单
     render();
@@ -185,6 +209,7 @@ function render() {
     break;
   }
   view.replaceChildren(content || notFound());
+  renderedData = store?.data ? JSON.stringify(store.data) : '';
   for (const a of nav.querySelectorAll('a[href]')) {
     const target = a.getAttribute('href').slice(1);
     a.classList.toggle('active', (NAV_GROUPS[target] || []).some((re) => re.test(path)));
@@ -218,7 +243,16 @@ async function saving(message, fn) {
     el.remove();
   }
 }
-const save = (message, fn, opts) => saving('正在保存…', () => store.save(message, fn, opts));
+// 普通修改：先存手机、页面立刻更新、后台上传（不弹「正在保存」）；上传文件、删文件时要等 GitHub
+async function save(message, fn, opts) {
+  if (opts?.uploads?.length || opts?.removes?.length || opts?.online) return saving('正在保存…', () => store.save(message, fn, opts));
+  try {
+    return await store.save(message, fn, opts);
+  } catch (e) {
+    toast(e.message, 'error');
+    throw e;
+  }
+}
 
 function errorView(e) {
   return h('div', {},

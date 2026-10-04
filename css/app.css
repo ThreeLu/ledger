@@ -379,5 +379,10 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .sub .chips, .goal .chips { margin: 10px 0 0; }
 .goal .bar-track { margin-top: 10px; }
 
+/* 上传状态 */
+.sync-pill { position: fixed; z-index: 30; top: calc(8px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); min-height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; font-weight: 500; background: var(--chip); color: var(--muted); box-shadow: var(--shadow); white-space: nowrap; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; }
+.sync-pill.offline { background: color-mix(in srgb, var(--amber) 18%, var(--card)); color: var(--amber); }
+.sync-pill.error { background: color-mix(in srgb, var(--danger) 16%, var(--card)); color: var(--danger); }
+
 /* 放在最后：比带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }
