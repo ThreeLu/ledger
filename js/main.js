@@ -3010,6 +3010,7 @@ function rulesView() {
       '每笔钱分工明确，最好记，也最不容易乱花。');
   }
   rules.push(['__budget']);
+  if (b.look) R('形象', `每月 ${money(b.look)}，买护肤品、化妆品、香水这些。按「生活」网站形象路线图一样一样慢慢买，不追大牌。`, '对自己的投资是必要的，但别过火。单独一块预算，买的时候心里有数，也不会挤占日常的钱。');
   if (b.free) R('自由钱', `每月 ${money(b.free)}，想喝杯奶茶、买点小东西，花了就花了，不用想。`, '一点余地都不留的预算很难坚持，一旦超了就容易破罐破摔。留一小块不用记挂的钱，反而能长期存下去。');
   R('心愿单：有闲钱再买', `想买但不急的东西先放进心愿单，冷静 ${d.settings.coolDays} 天。${money(d.settings.wishBigFrom)} 以内的小额心愿用「心愿基金」买：每个预算月生活预算没花完的进基金，超了从基金扣回来。超过 ${money(d.settings.wishBigFrom)} 的大额心愿从每月存下的钱里按顺序攒，每月合计最多 ${money(d.settings.wishMonthlyCap)}。`,
     '省下来的钱有了用处，省钱更有动力；大件慢慢攒，不会一下子打乱存钱计划。');
@@ -3103,7 +3104,7 @@ function budgetView() {
     if (keys.some((k) => !Number.isFinite(val(k)) || val(k) < 0)) return toast('金额要填数字', 'error');
     try {
       await save('改预算', (data) => {
-        for (const g of ['food', 'daily', 'free', 'sub']) data.budget[g] = val(g);
+        for (const g of ['food', 'daily', 'free', 'look', 'sub']) data.budget[g] = val(g);
         data.settings.expectedIncome = val('income');
         data.settings.emergencyFloor = val('floor');
       });
@@ -3122,6 +3123,7 @@ function budgetView() {
       field('吃饭', 'food', d.budget.food, catList('food')),
       field('日常', 'daily', d.budget.daily, catList('daily')),
       field('自由钱', 'free', d.budget.free, catList('free')),
+      field('形象', 'look', d.budget.look ?? 0, catList('look')),
       field('订阅', 'sub', d.budget.sub, catList('sub')),
       h('p', { class: 'muted small' }, '手续费不占预算，但算花销。')),
     h('div', { class: 'card' },

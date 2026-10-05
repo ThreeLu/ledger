@@ -4,16 +4,17 @@
 // - 转账（自己的账户之间倒钱）不算收入也不算花销，只改两边余额。
 // - 美元账户（Apple ID）的金额按美元记；花销同时存一个人民币金额 cny（记账当时的汇率），统计都用人民币。
 // - 预算月从每月 periodStartDay 号开始（可以和发钱的日子对齐）。
-// - 「不占预算」组（手续费等）算花销、影响存钱，但不占吃饭 / 日常 / 自由钱 / 订阅的预算。
+// - 「不占预算」组（手续费等）算花销、影响存钱，但不占吃饭 / 日常 / 自由钱 / 形象 / 订阅的预算。
 
 export const GROUPS = [
   { id: 'food', name: '吃饭', color: 'var(--amber)' },
   { id: 'daily', name: '日常', color: 'var(--sage)' },
   { id: 'free', name: '自由钱', color: 'var(--accent)' },
+  { id: 'look', name: '形象', color: 'var(--rose)' },
   { id: 'sub', name: '订阅', color: 'var(--blue)' },
   { id: 'none', name: '不占预算', color: 'var(--muted)' },
 ];
-export const LIVING = ['food', 'daily', 'free']; // 每天都在花的几组，「花钱节奏」只看这些（订阅是固定日子扣的）
+export const LIVING = ['food', 'daily', 'free', 'look']; // 每天都在花的几组，「花钱节奏」只看这些（订阅是固定日子扣的）
 
 const C = (id, name, group, sub) => ({ id, name, kind: 'expense', group, ...(sub ? { sub } : {}) });
 const I = (id, name) => ({ id, name, kind: 'income' });
@@ -33,13 +34,14 @@ export const EXPENSE_CATEGORIES = [
   C('c-social', '聚餐请客', 'daily', '人情社交'), C('c-gift', '礼物', 'daily', '人情社交'), C('c-hongbao', '红包', 'daily', '人情社交'),
   C('c-doctor', '看病', 'daily', '医疗'), C('c-medical', '买药', 'daily', '医疗'),
   C('c-other', '其他', 'daily', '其他'),
+  C('c-skin', '护肤', 'look'), C('c-makeup', '化妆', 'look'), C('c-scent', '香水和打理', 'look'),
   C('c-fun', '娱乐', 'free'), C('c-hobby', '爱好', 'free'), C('c-like', '喜欢的小东西', 'free'),
   C('c-ai', 'AI 订阅', 'sub'), C('c-soft', '软件订阅', 'sub'), C('c-member', '会员', 'sub'),
   C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'), C('c-wish', '心愿', 'none'),
 ];
 // 老版本的类别：以前记的账还显示原来的名字，但记新账时不再出现
 const RETIRED = { 'c-meal': '三餐', 'c-daily': '日用品', 'c-transport': '交通', 'c-study': '学习' };
-export const CATEGORY_VERSION = 2;
+export const CATEGORY_VERSION = 3; // 3：加了「形象」组（护肤、化妆、香水和打理）
 
 // 第一次使用时的默认账本。这里的代码是公开的，所以只放通用的东西；
 // 具体的账户名、收入、固定扣费、规则说明都写在私有仓库的 finance.json 里，在网页上改。

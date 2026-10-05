@@ -16,8 +16,8 @@
 { version, openingDate,
   settings: { periodStartDay, expectedIncome, emergencyFloor, floorAccount, usdRate, summerMonths: [月], sideIncomeSave, payNote },
   accounts: [{ id, name, currency: 'CNY'|'USD', opening, note }],
-  categories: [{ id, name, kind: 'expense'|'income', group: 'food'|'daily'|'free'|'sub'|'none' }],
-  budget: { food, daily, free, sub }, notes: { 组: 说明 }, incomePlan: [{ name, amount, when, use }],
+  categories: [{ id, name, kind: 'expense'|'income', group: 'food'|'daily'|'free'|'look'|'sub'|'none' }],
+  budget: { food, daily, free, look, sub }, notes: { 组: 说明 }, incomePlan: [{ name, amount, when, use }],
   presets: [{ name, from, to }], recurring: [{ id, name, amount, account, category, day, since, lastPosted } | { yearly: 'MM-DD', remindOnly }],
   quick: [{ id, name, amount, category, account }],
   claims: [{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind: 'pdf'|'image', submitted }] }],
@@ -83,3 +83,5 @@
 2. ✅ 垫付报销（按「一件事」归组，发票 PDF/照片存私有仓库，报不回的部分结清时算「出差自付」，不占日常预算）、人情账（按人记谁欠谁，还到哪张卡都行）、每月对账、每周 / 每月总结图表。
 2.5 ✅ 类别细分（三餐拆开、日常分小组）、心愿单（小额 / 大额、DeepSeek 建议）。
 3. ✅ 存钱计划已并进大额心愿（暑假出游也建成大额心愿）；「买不买」聊天（DeepSeek，只发汇总数字；理财小课堂放在聊天页）、推送（每晚 9 点没记账提醒；周日、每月最后一天推总结）。
+
+- 形象（2026-10-05 加，`CATEGORY_VERSION` 3）：护肤 / 化妆 / 香水和打理单独一组 `look`，算进生活预算（`LIVING`）。用户从日常里分出 150 给它。护肤化妆品的关键词（`BY_WORD`，和物品档案 bridge.js 同一张表）先认成这一组。生活网站（`../life`）的形象路线图讲买什么。

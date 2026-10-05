@@ -263,6 +263,20 @@ def _(c):
     p.wait_for_function("location.hash === '#/'")
     expect(p.locator(".summary.bad")).to_have_count(0)
     assert c.data()["budget"]["food"] == 2000
+    # 形象预算：单独一组，算进生活预算
+    c.go("#/budget")
+    p.get_by_label("形象").fill("150")
+    p.get_by_role("button", name="保存").click()
+    p.wait_for_function("location.hash === '#/'")
+    assert c.data()["budget"]["look"] == 150
+    c.add(66, cat="护肤", acc="生活费卡", note="编的洗面奶")
+    assert c.tx()[-1]["category"] == "c-skin"
+    c.go("#/rules")
+    expect(p.get_by_text("买护肤品、化妆品、香水这些")).to_be_visible()
+    c.go("#/budget")
+    p.get_by_label("形象").fill("0")
+    p.get_by_role("button", name="保存").click()
+    p.wait_for_function("location.hash === '#/'")
 
 
 @step("固定扣费：到日子自动记一笔（美元按汇率折算），不会重复记")
