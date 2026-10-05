@@ -22,7 +22,7 @@
   quick: [{ id, name, amount, category, account }],
   claims: [{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind: 'pdf'|'image', submitted }] }],
   people: [{ id, name }], reconciled: { 预算月开始日: 对账日 },
-  wishes: [{ id, name, price, want: 'very'|'nice', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice }],
+  wishes: [{ id, name, price, want: 'very'|'nice', kind: ''|'joy'|'need', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice }],
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
@@ -32,7 +32,7 @@
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
 - 卡和欠款分开：欠款按 claim / person 算（`claimStatus`、`personStatus`，先进先出算「拖了多久」），还到哪张卡都行。AA 的几笔共用 `group`，删花销时一起删。
 - 类别：`EXPENSE_CATEGORIES`（大组 group 管预算，小组 sub 只为好找，日常先点小组再点类别）。改类别时提高 `CATEGORY_VERSION`，`migrate()` 会给老账本改名、补新的、按默认顺序排；不用的老类别 `hidden`（老账照样显示名字）。`c-wish`、`c-trip` 只由心愿单、垫付自动记。选「其他」（`FREEFORM`）必须写 `what`（具体是什么），流水里显示它。
-- 心愿单：`settings.wishBigFrom`（300）以内是小额，用「心愿基金」= 每个结束的预算月生活预算的结余（超支扣回，最低 0）减去小额心愿花的；以上是大额，每个结束的预算月按心愿单顺序攒，合计不超过 `wishMonthlyCap`（400）。都是现算的（`wishFunds`、`bigWishPlan`），钱不挪账户。买了记 `c-wish`（不占预算）；小额超出基金的部分记 `c-like`（自由钱）。冷静 `coolDays` 天。
+- 心愿单：`settings.wishBigFrom`（300）以内是小额，用「心愿基金」= 每个结束的预算月生活预算的结余（超支扣回，最低 0）减去小额心愿花的；以上是大额，每个结束的预算月按心愿单顺序攒，合计不超过 `wishMonthlyCap`（400）。都是现算的（`wishFunds`、`bigWishPlan`），钱不挪账户。买了记 `c-wish`（不占预算）；小额超出基金的部分记 `c-like`（自由钱）。冷静 `coolDays` 天。分类 `kind`（选填）：`joy` 提升幸福感、`need` 生活必需品（`WISH_KIND`），卡片上显示，也发给 DeepSeek。
 - DeepSeek：密钥先读账本仓库 `config/ai.json`，没有就读物品档案仓库的（同一个令牌）。只发心愿单和汇总数字，不发流水明细；建议存 `wishAdvice`，密钥不进 finance.json。
 - 买不买（`#/ask`）：话里有价格时网站先算 `priceFacts`（几天饭钱、几个月自由钱、存钱目标晚几天、大额要攒几个月）和硬规则（价格 > 总资产 − 应急底线 − 本月还要花的生活费 → 一定「不建议」，前端强制；大额建议先冷静），连同 `moneyContext`（只有汇总数字，不发流水明细和备注）给 DeepSeek。聊天只在内存，决定存 `decisions`，买了的 30 天后回访。理财小课堂（`lessons()`）是写死的大白话 + 他自己的数字，不推荐具体产品。
 - 个税退税：兼职收入（`i-job`）可填 `tax`（被预扣的个税），`taxYear()` 按年汇总；每年 3/1–6/30（`taxSeason`）上一年有预扣且没办（`taxYears[年].done`）就首页提醒、推送（3/1、3/15、4/15、5/15、6/15、6/25）；办好后记一笔 `i-tax` 收入。

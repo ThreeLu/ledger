@@ -124,7 +124,7 @@ export function migrate(data) {
   data.letters ||= {}; // 月度小信：{ 预算月开始日: { at, text } }
   data.payday ||= {}; // 发钱日卡片：{ 预算月开始日: { later: { 收入计划序号: 再问的日期 }, noTransfer: true } }
   // 心愿单
-  data.wishes ||= []; // { id, name, price, want: 'very'|'nice', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
+  data.wishes ||= []; // { id, name, price, want: 'very'|'nice', kind: ''|'joy'|'need', reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
   data.settings.wishMonthlyCap ??= 400; // 每月最多给大额心愿攒多少
   data.settings.coolDays ??= 3; // 新心愿冷静几天

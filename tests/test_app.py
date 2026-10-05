@@ -537,9 +537,13 @@ def _(c):
         sheet.get_by_label("想要什么").fill(name)
         sheet.get_by_label("价格").fill(price)
         sheet.get_by_role("button", name=want).click()
+        if name == "降噪耳机":
+            sheet.get_by_role("button", name="提升幸福感").click()
         sheet.get_by_role("button", name="加进心愿单").click()
         expect(p.locator(".wish", has_text=name)).to_be_visible()
     expect(p.locator(".wish", has_text="一本闲书")).to_contain_text("冷静中，还剩 3 天")
+    expect(p.locator(".wish", has_text="降噪耳机").locator(".wish-tags")).to_contain_text("提升幸福感")
+    assert next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")["kind"] == "joy"
     expect(p.locator(".section-title", has_text="小额心愿")).to_be_visible()
     # 上个预算月：生活预算 3000，花了 2800 → 省下 200 进心愿基金；耳机早就加进来了，攒了 400
     cur = period_start(date.today())

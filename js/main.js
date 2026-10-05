@@ -2237,6 +2237,7 @@ async function aiConfig() {
 // ---------- 心愿单 ----------
 
 const WANT = { very: '很想要', nice: '有了更好' };
+const WISH_KIND = { joy: '提升幸福感', need: '生活必需品' }; // 选填，老心愿没有
 const NEED_CLASS = { 需要: 'good-text', 想要: 'soon', 说不准: 'muted' };
 
 function wishHelp(d) {
@@ -2263,12 +2264,18 @@ function wishForm(w = null) {
     type: 'button', class: `chip${want === k ? ' on' : ''}`, 'aria-pressed': String(want === k), onclick: () => { want = k; drawWant(); },
   }, t)));
   drawWant();
+  let kind = w?.kind || '';
+  const kindBox = h('div', { class: 'chips', role: 'group', 'aria-label': '分类' });
+  const drawKind = () => kindBox.replaceChildren(...Object.entries(WISH_KIND).map(([k, t]) => h('button', {
+    type: 'button', class: `chip${kind === k ? ' on' : ''}`, 'aria-pressed': String(kind === k), onclick: () => { kind = kind === k ? '' : k; drawKind(); },
+  }, t)));
+  drawKind();
   const reason = h('input', { value: w?.reason || '', placeholder: '为什么想要（选填）', 'aria-label': '为什么想要' });
   const link = h('input', { value: w?.link || '', placeholder: '链接或备注（选填）', 'aria-label': '链接或备注' });
   const target = h('input', { type: 'date', value: w?.targetDate || '', 'aria-label': '想在什么时候前买到' });
   openSheet({
     title: w ? '改心愿' : '加一个心愿',
-    body: h('div', { class: 'form' }, name, price, h('div', { class: 'label-sm' }, '想要的程度'), wantBox, reason, link,
+    body: h('div', { class: 'form' }, name, price, h('div', { class: 'label-sm' }, '想要的程度'), wantBox, h('div', { class: 'label-sm' }, '分类（选填）'), kindBox, reason, link,
       h('label', {}, `想在什么时候前买到（大额心愿才用，选填）`, target),
       h('p', { class: 'muted small' }, `${money(d.settings.wishBigFrom)} 以内是小额心愿，用心愿基金买；超过的是大额心愿，每月慢慢攒。`)),
     confirmText: w ? '保存' : '加进心愿单',
@@ -2276,7 +2283,7 @@ function wishForm(w = null) {
       const n = Number(price.value.replace(/[，,\s¥]/g, ''));
       if (!name.value.trim()) { toast('写一下想要什么', 'error'); return false; }
       if (!(n > 0)) { toast('填一个大概的价格', 'error'); return false; }
-      const fields = { name: name.value.trim(), price: round2(n), want, reason: reason.value.trim(), link: link.value.trim(), targetDate: target.value || '' };
+      const fields = { name: name.value.trim(), price: round2(n), want, kind, reason: reason.value.trim(), link: link.value.trim(), targetDate: target.value || '' };
       try {
         await save(`${w ? '改心愿' : '新心愿'}：${fields.name}`, (data) => {
           if (w) Object.assign(data.wishes.find((x) => x.id === w.id), fields);
@@ -2358,7 +2365,7 @@ async function askWishAdvice(btn) {
     '你是一个大学生的理财助手。他对理财不太懂，有点焦虑，想稳定地存钱。说话温和、简短、具体，不说教。',
     '他有一个心愿单：想买但不急、有闲钱才买的东西。小额心愿用「心愿基金」（每月生活预算省下来的钱）买；大额心愿按顺序每月慢慢攒，所有大额心愿每月合计有上限。',
     '请看心愿单给建议：',
-    '1. 先买哪个：给出顺序（order，id 列表）。考虑想要的程度、价格、钱够不够、是不是刚加进来还在冷静期。',
+    '1. 先买哪个：给出顺序（order，id 列表）。考虑想要的程度、分类（生活必需品一般比提升幸福感的优先）、价格、钱够不够、是不是刚加进来还在冷静期。',
     '2. 什么时候买（when，一句话）：结合心愿基金、已攒的钱和预计攒够的时间；只在相关时提一下常见的大促（比如双十一、618）或教育优惠，不要每条都提。',
     '3. 真需要还是一时想要（need：需要 / 想要 / 说不准），comment 用一两句话说理由，可以提一个值得想想的问题。',
     '你查不到实时价格，不要编价格。不要建议动应急钱或存款，不要推荐分期、花呗、信用卡。',
@@ -2372,11 +2379,11 @@ async function askWishAdvice(btn) {
     recent.length ? `最近几个预算月：${recent.join('；')}` : '刚开始记账，还没有完整的预算月。',
     d.settings.summerMonths?.length ? `${d.settings.summerMonths.join('、')} 月没有收入。` : '',
     (await inventoryContext()).trim(),
-    '心愿单（id | 名称 | 价格 | 小额/大额 | 想要程度 | 为什么想要 | 加进来几天 | 已攒 | 预计攒够 | 想在什么时候前买到）：',
+    '心愿单（id | 名称 | 价格 | 小额/大额 | 想要程度 | 分类 | 为什么想要 | 加进来几天 | 已攒 | 预计攒够 | 想在什么时候前买到）：',
     ...open.map((w) => {
       const big = isBigWish(d, w);
       const pl = plan.find((x) => x.w.id === w.id);
-      return [w.id, w.name, w.price, big ? '大额' : '小额', WANT[w.want] || '', w.reason || '-', daysSince(w.createdAt),
+      return [w.id, w.name, w.price, big ? '大额' : '小额', WANT[w.want] || '', WISH_KIND[w.kind] || '-', w.reason || '-', daysSince(w.createdAt),
         big ? pl?.saved ?? 0 : '-', big ? pl?.ready || '很久以后' : '-', w.targetDate || '-'].map((x) => String(x).replace(/\|/g, '/')).join(' | ');
     }),
   ].filter(Boolean).join('\n');
@@ -2439,6 +2446,7 @@ function wishesView() {
           h('div', { class: 'muted small' }, [WANT[w.want], w.reason, w.link].filter(Boolean).join(' · '))),
         h('div', { class: 'wish-price' }, money(w.price))),
       h('div', { class: 'wish-tags' },
+        w.kind ? h('span', { class: 'badge' }, WISH_KIND[w.kind]) : null,
         cooling ? h('span', { class: 'badge' }, `冷静中，还剩 ${cooling} 天`) : null,
         ready ? h('span', { class: 'badge good' }, isBig ? '攒够了' : '心愿基金够了') : null,
         w.targetDate && isBig && pl.ready && pl.ready > w.targetDate ? h('span', { class: 'badge warn' }, `${md(w.targetDate)}前攒不够`) : null),
