@@ -1162,6 +1162,20 @@ def fake_externals(page):
     page.route("https://api.deepseek.com/**", deepseek)
 
 
+@step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")
+def _(c):
+    p = c.page
+    c.go("#/")
+    expect(p.locator(".today-head .greet")).to_have_text(re.compile("好|夜深"))
+    expect(p.locator(".head-tags .tag").first).to_have_text(re.compile("月预算 · 第 \\d+ 天"))
+    expect(p.locator(".spend-left .ring")).to_be_visible()
+    expect(p.locator(".whisper")).to_have_count(1)
+    p.wait_for_timeout(600)
+    p.screenshot(path=ART / "look-home.png")
+    c.go("#/add")
+    expect(p.locator(".whisper")).to_have_count(0)
+
+
 def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)

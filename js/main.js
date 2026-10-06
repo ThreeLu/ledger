@@ -14,6 +14,8 @@ import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
+import { solarTerm, greeting } from './solar.js';
+import { wordFor } from './words.js';
 import { receiptPrompt, parseReceipt, guessCategory, groupByCategory, matchInventory, defaultInventoryAction, restockQty, applyToInventory, parseSpoken } from './receipt.js';
 import { inventoryGitHub, readInventory, updateInventory } from './bridge.js';
 import { readTable } from './sheet.js';
@@ -227,6 +229,25 @@ function setupNav() {
   nav.querySelector('.plus').append(h('span', { class: 'circle' }, icon('plus')));
 }
 
+// 每页最下面角落的一句话（花钱观）。记账、拍小票、设置这些专心做事的页面不放
+const NO_WHISPER = /^\/(add|receipt|siri|settings|quick|lost)$/;
+function whisper(path) {
+  return h('div', { class: 'whisper' }, h('p', {}, wordFor(today(), path)), h('small', {}, '今天的一句'));
+}
+// 换页淡入只在真的换了页时
+let lastPath = null;
+// 点选（类别、账户这些标签）时轻轻弹一下：重画以后找到同一个、已选中的那个
+document.addEventListener('click', (e) => {
+  const t = e.target.closest?.('.chip, [role="checkbox"]');
+  if (!t) return;
+  const text = t.textContent.trim();
+  setTimeout(() => {
+    const el = [...document.querySelectorAll('.chip.on, [role="checkbox"][aria-checked="true"]')].find((x) => x.textContent.trim() === text);
+    if (!el) return;
+    el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  }, 60);
+}, true);
+
 function render() {
   const [path, query = ''] = window.location.hash.replace(/^#/, '').split('?');
   const q = Object.fromEntries(new URLSearchParams(query));
@@ -242,7 +263,9 @@ function render() {
     else content = fn(m[1], q);
     break;
   }
-  view.replaceChildren(content || notFound());
+  view.replaceChildren(...[content || notFound(), store?.data && !NO_WHISPER.test(path) ? whisper(path) : null].filter(Boolean));
+  if (path !== lastPath) { view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); lastPath = path; }
+  document.documentElement.dataset.season = solarTerm(today()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
   for (const a of nav.querySelectorAll('a[href]')) {
     const target = a.getAttribute('href').slice(1);
@@ -555,15 +578,12 @@ function homeView() {
 
   const recent = [...d.tx].sort(txOrder).slice(0, 5);
   return h('div', {},
-    headerSub('账本', `${p.label} · 第 ${p.dayIndex} 天`, helpButton('首页怎么看', HOME_HELP)),
+    homeHeader(p),
     tokenNotice(),
     h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
     milestoneCard(),
     paydayCard(),
-    h('div', { class: 'card spend-left' },
-      h('div', { class: 'muted small' }, '这个月还能花'),
-      h('div', { class: `big-num${hl.left < 0 ? ' warn-text' : ''}` }, hl.left < 0 ? `超了 ${money(-hl.left)}` : money(hl.left)),
-      h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天，每天约 ${money(hl.perDay)}` : `剩 ${hl.daysLeft} 天`)),
+    spendLeftCard(hl, st),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
     h('div', { class: 'section-title' }, '健康指标（点开看解释）'),
     h('div', { class: 'group' }, hl.items.map((x) => h('button', { class: 'cell indicator', type: 'button', onclick: () => openExplain(x, hl) },
@@ -579,6 +599,34 @@ function homeView() {
       h('p', { class: 'center' }, h('a', { href: '#/list' }, '全部流水'))]
       : h('div', { class: 'card' }, h('p', {}, '还没有记账。点底部中间的 ＋ 记第一笔。')),
     h('p', { class: 'center small' }, h('a', { href: '#/rules' }, '我们的花钱方式 →')));
+}
+
+// 首页开头：日期 → 问候（宋体）→ 这个预算月第几天、离发工资还有几天
+function homeHeader(p) {
+  const d = new Date();
+  const t = today();
+  const toPay = Math.round((new Date(`${p.next}T00:00:00`) - new Date(`${t}T00:00:00`)) / 86400000);
+  return h('header', { class: 'page-head today-head' },
+    h('div', {},
+      h('div', { class: 'sub' }, `${d.getMonth() + 1}月${d.getDate()}日 周${'日一二三四五六'[d.getDay()]}`),
+      h('h1', { class: 'greet' }, greeting(d)),
+      h('div', { class: 'head-tags' },
+        h('span', { class: 'tag' }, `${p.startMonth} 月预算 · 第 ${p.dayIndex} 天`),
+        !p.summer && toPay > 0 ? h('span', { class: 'tag' }, `离发工资还有 ${toPay} 天`) : null)),
+    h('div', { class: 'head-actions' }, helpButton('首页怎么看', HOME_HELP)));
+}
+// 这个月还能花：左边圆环是生活预算用了多少（超了变红），右边是还能花的钱
+function spendLeftCard(hl, st) {
+  const lb = hl.left + st.living;
+  const used = lb > 0 ? Math.min(100, Math.max(0, (st.living / lb) * 100)) : 0;
+  const over = hl.left < 0;
+  return h('div', { class: 'card spend-left' },
+    lb > 0 ? h('div', { class: `ring${over ? ' over' : ''}`, style: `--v:${over ? 100 : Math.round(used)}%`, 'aria-label': `生活预算用了 ${Math.round(used)}%` },
+      h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,
+    h('div', { class: 'spend-text' },
+      h('div', { class: 'muted small' }, '这个月还能花'),
+      h('div', { class: `big-num${over ? ' warn-text' : ''}` }, over ? `超了 ${money(-hl.left)}` : money(hl.left)),
+      h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天，每天约 ${money(hl.perDay)}` : `剩 ${hl.daysLeft} 天`)));
 }
 
 const txOrder = (a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '');
