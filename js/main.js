@@ -5,8 +5,9 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, openFavors, holidayFavors,
 } from './money.js';
+import { holidayLine } from './cal.js';
 import { askJson } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { weekOf, weekSummary, monthSummary, yearSummary } from './summary.js';
@@ -583,6 +584,7 @@ function homeView() {
     h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
     milestoneCard(),
     paydayCard(),
+    favorHolidayCard(),
     spendLeftCard(hl, st),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
     h('div', { class: 'section-title' }, '健康指标（点开看解释）'),
@@ -713,11 +715,15 @@ function addView(q) {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
-    sub: category(d, editing.category)?.sub || null, what: editing.what || '', tax: editing.tax != null ? String(editing.tax) : '',
+    sub: category(d, editing.category)?.sub || null, what: editing.what || '', tax: editing.tax != null ? String(editing.tax) : '', favor: editing.favor || '',
   } : {
     type: q.type || 'expense', amount: q.amount || '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '',
+    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '', favor: '',
   };
+  // 从「这次要还的人情」点进来：类别先选聚餐请客，人情先选上
+  if (!editing && q.favor && d.favors.some((f) => f.id === q.favor && f.status !== 'done')) {
+    st.favor = q.favor; st.category = 'c-social'; st.sub = category(d, 'c-social')?.sub || null;
+  }
   if (!account(d, st.account)) st.account = firstCny;
   // Siri / 快捷指令带来的一句话：「午饭 18」→ 金额、类别、备注先填好，还是要点「记好了」
   const heard = !editing && q.text ? q.text.trim() : '';
@@ -823,6 +829,7 @@ function addView(q) {
         if (FREEFORM.includes(st.category)) {
           parts.push(h('label', { class: 'form-label' }, '具体是什么', whatInput));
         }
+        parts.push(...favorSection());
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
         if (st.category === 'i-job') {
@@ -861,12 +868,33 @@ function addView(q) {
     drawHint();
   };
 
+  // 请客、礼物、红包：可以对上「还的是谁的哪个人情」，记好了那个人情就算还上了
+  const favorSection = () => {
+    if (!FAVOR_CATEGORIES.includes(st.category) || st.split === 'paidby') { st.favor = ''; return []; }
+    const list = d.favors.filter((f) => f.dir === 'owe' && (f.status !== 'done' || f.id === editing?.favor));
+    if (!list.length) return [];
+    return [h('div', { class: 'label-sm' }, '还的是哪个人情（选填）'),
+      h('div', { class: 'chips favor-chips', role: 'group', 'aria-label': '还的人情' }, list.map((f) => h('button', {
+        type: 'button', class: `chip${st.favor === f.id ? ' on' : ''}`, 'aria-pressed': String(st.favor === f.id),
+        onclick: () => { st.favor = st.favor === f.id ? '' : f.id; draw(); },
+      }, `${personName(f.person)} · ${f.text}`)))];
+  };
+  // 记好以后：选上的人情算还了，换掉的那个重新算没还
+  const settleFavor = (data, txId, oldFavor, date) => {
+    if (oldFavor && oldFavor !== st.favor) {
+      const o = data.favors.find((f) => f.id === oldFavor);
+      if (o && o.doneTx === txId) { o.status = 'open'; delete o.doneAt; delete o.doneTx; }
+    }
+    const f = st.favor && data.favors.find((x) => x.id === st.favor);
+    if (f) Object.assign(f, { status: 'done', doneAt: date, doneTx: txId });
+  };
+
   const splitSection = () => {
     const out = [h('div', { class: 'label-sm' }, '和别人有关吗'),
       chips([{ id: 'none', name: '没有' }, { id: 'aa', name: 'AA / 帮人付' }, { id: 'paidby', name: '别人帮我付的' }].filter((x) => !editing || x.id !== 'aa'),
         st.split, (id) => { st.split = id; draw(); }, '和别人有关')];
     if (st.split === 'none') return out;
-    const everyone = [...d.people, ...aa.newPeople];
+    const everyone = [...d.people.filter((p) => !p.archived || p.id === st.person), ...aa.newPeople];
     const multi = st.split === 'aa';
     const isOn = (id) => (multi ? aa.people.has(id) : st.person === id);
     const pick = (id) => {
@@ -912,9 +940,11 @@ function addView(q) {
       await save(`AA：${st.category ? catName(st.category) : '帮人付'} ${n}`, (data) => {
         for (const p of aa.newPeople) if (ids.includes(p.id) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
         if (my > 0) {
-          data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
-            ...(FREEFORM.includes(st.category) ? { what: st.what.trim() } : {}),
+          const tid = newId('t');
+          data.tx.push({ id: tid, type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
+            ...(FREEFORM.includes(st.category) ? { what: st.what.trim() } : {}), ...(st.favor ? { favor: st.favor } : {}),
             group: g, createdAt: now, ...(usd ? { cny: round2(my * rate) } : {}) });
+          settleFavor(data, tid, '', st.date);
         }
         ids.forEach((pid, i) => {
           const amt = i === ids.length - 1 ? round2(others - each * (ids.length - 1)) : each;
@@ -980,6 +1010,7 @@ function addView(q) {
       if (st.type === 'expense' && FREEFORM.includes(st.category)) rec.what = st.what.trim();
       const tax = round2(num(st.tax) || 0);
       if (st.type === 'income' && st.category === 'i-job' && tax > 0) rec.tax = tax;
+      if (st.type === 'expense' && st.favor) rec.favor = st.favor;
     }
     const paidBy = st.type === 'expense' && st.split === 'paidby';
     if (paidBy) { rec.account = null; rec.person = st.person; delete rec.cny; }
@@ -1008,9 +1039,13 @@ function addView(q) {
           if (!rec.to) { delete data.tx[i].to; delete data.tx[i].toAmount; }
           if (!rec.what) delete data.tx[i].what;
           if (!rec.tax) delete data.tx[i].tax;
+          if (!rec.favor) delete data.tx[i].favor;
+          settleFavor(data, editing.id, editing.favor, rec.date);
         } else {
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
-          data.tx.push({ id: newId('t'), ...rec, createdAt: new Date().toISOString() });
+          const tid = newId('t');
+          data.tx.push({ id: tid, ...rec, createdAt: new Date().toISOString() });
+          settleFavor(data, tid, '', rec.date);
           if (st.type === 'transfer' && f > 0) {
             data.tx.push({ id: newId('t'), type: 'expense', date: st.date, account: st.account, amount: f, category: 'c-fee',
               note: `${title} 的手续费`, createdAt: new Date().toISOString(), ...(usd ? { cny: round2(f * usdRate()) } : {}) });
@@ -1032,6 +1067,8 @@ function addView(q) {
     const extra = group.length > 1;
     try {
       await saveUndoable(`删除：${txTitle(editing)} ${editing.amount}`, (data) => {
+        const gone = data.tx.filter((t) => t.id === editing.id || (editing.group && t.group === editing.group)).map((t) => t.id);
+        for (const f of data.favors) if (gone.includes(f.doneTx)) { f.status = 'open'; delete f.doneAt; delete f.doneTx; } // 还人情的那笔删了，人情回到没还
         data.tx = data.tx.filter((t) => t.id !== editing.id && !(editing.group && t.group === editing.group));
       }, `删掉了：${txTitle(editing)} ${exact(editing.amount, curOf(editing.account))}${extra ? `（连同 AA 的 ${group.length - 1} 笔）` : ''}`);
       history.back();
@@ -1162,7 +1199,7 @@ function receivablesCard() {
   const assets = totalAssets(d, usdRate());
   return h('div', { class: 'group' },
     rc.toMe ? cell({ href: rc.claims.some((c) => c.pending > 0) ? '#/claims' : '#/people', ic: 'arrowdown', color: 'var(--sage)', title: '别人欠你', meta: money(rc.toMe),
-      sub: [rc.claims.length ? `垫付 ${rc.claims.length} 件` : null, rc.people.filter((x) => x.net > 0).length ? `同学 ${rc.people.filter((x) => x.net > 0).length} 人` : null].filter(Boolean).join(' · ') }) : null,
+      sub: [rc.claims.length ? `垫付 ${rc.claims.length} 件` : null, rc.people.filter((x) => x.net > 0).length ? `${rc.people.filter((x) => x.net > 0).length} 个人` : null].filter(Boolean).join(' · ') }) : null,
     rc.iOwe ? cell({ href: '#/people', ic: 'swap', color: 'var(--danger)', title: '你欠别人', meta: money(rc.iOwe) }) : null,
     cell({ href: '#/accounts', title: '净资产', sub: '账户 + 别人欠你的 − 你欠别人的', meta: money(assets + rc.toMe - rc.iOwe) }));
 }
@@ -1244,7 +1281,7 @@ function moreView() {
     h('div', { class: 'group' },
       cell({ href: '#/accounts', ic: 'wallet', color: 'var(--accent)', title: '账户', meta: money(totalAssets(store.data, usdRate())) }),
       cell({ href: '#/claims', ic: 'suitcase', color: 'var(--blue)', title: '垫付报销', meta: store.data.claims.filter((c) => c.status !== 'settled').length ? `${store.data.claims.filter((c) => c.status !== 'settled').length} 件在报` : '' }),
-      cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : '' }),
+      cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : openFavors(store.data, 'owe').length ? `欠 ${openFavors(store.data, 'owe').length} 个人情` : '' }),
       cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' }),
       cell({ href: '#/bills', ic: 'search', color: 'var(--sage)', title: '账单查漏记', sub: '导入微信、支付宝账单，找出没记的' })),
     h('div', { class: 'group' },
@@ -1493,15 +1530,17 @@ function claimView(id) {
 // ---------- 人情账 ----------
 
 const PEOPLE_HELP = [
-  ['记什么', ['和同学吃饭你先付、帮人代买、借钱给别人：别人欠你的。', '别人帮你付了：你欠别人的。']],
-  ['怎么记', ['吃饭 AA：在「记一笔」填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，其他人的记成欠你的（不算花销）。', '别人帮你付：在「记一笔」选「别人帮我付的」。算你的花销，但账户没动。', '还钱：点这个人，「他还我钱」或「我还他钱」。钱到了哪张卡、从哪张卡出都行，和当初是哪张卡没关系。']],
-  ['提醒', [`别人欠你、你欠别人超过 ${PERSON_REMIND_DAYS} 天，首页会提醒。`]],
+  ['记什么', ['钱：和同学吃饭你先付、帮人代买、借钱给别人，是别人欠你的；别人帮你付了，是你欠别人的。', '人情：不是钱的。别人帮了你一个忙，你记得找机会还，就是「我欠他一个人情」。']],
+  ['怎么记钱', ['吃饭 AA：在「记一笔」填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，其他人的记成欠你的（不算花销）。', '别人帮你付：在「记一笔」选「别人帮我付的」。算你的花销，但账户没动。', '还钱：点这个人，「他还我钱」或「我还他钱」。钱到了哪张卡、从哪张卡出都行，和当初是哪张卡没关系。']],
+  ['怎么记人情', ['点「记一个人情」：选人、谁欠谁、什么事。', '还人情：记聚餐请客、礼物、红包时，下面可以选「还的是哪个人情」，记好了就算还上了。没花钱的，在这个人的页面点「还了」。', '生活网站「身边的人」里也能记，记到的是同一份。']],
+  ['提醒', [`钱：别人欠你、你欠别人超过 ${PERSON_REMIND_DAYS} 天，首页会提醒。`, '人情：平时不催。只在元旦、春节、清明、劳动节、端午、中秋、国庆放假前一天起，首页问一句这次还不还；「这次不还」就等下个假期再问。周末不算。']],
+  ['名单', ['人的名字、分组在生活网站「身边的人」里管，两边是同一份名单。']],
 ];
 
 function newPerson(after) {
-  const name = h('input', { placeholder: '名字，比如 小王', 'aria-label': '名字' });
+  const name = h('input', { placeholder: '名字', 'aria-label': '名字' });
   openSheet({
-    title: '加一个人', body: name, confirmText: '加好',
+    title: '加一个人', body: h('div', {}, name, h('p', { class: 'muted small' }, '会同时出现在生活网站的「身边的人」里，在那边分组。')), confirmText: '加好',
     onConfirm: async () => {
       const n = name.value.trim();
       if (!n) { toast('写个名字', 'error'); return false; }
@@ -1514,21 +1553,106 @@ function newPerson(after) {
   });
 }
 
+const FAVOR_DIR = { owe: '我欠他', owed: '他欠我' };
+// 记一个人情 / 改一个
+function favorSheet({ person = '', favor = null } = {}) {
+  const d = store.data;
+  const st = { person: favor?.person || person, dir: favor?.dir || 'owe' };
+  const text = h('input', { placeholder: '什么事，比如 帮我改论文', 'aria-label': '什么事', value: favor?.text || '' });
+  const date = h('input', { type: 'date', 'aria-label': '哪天', value: favor?.date || today() });
+  const box = h('div', { class: 'form' });
+  const draw = () => {
+    const people = d.people.filter((p) => !p.archived || p.id === st.person);
+    box.replaceChildren(
+      h('div', { class: 'label-sm' }, '和谁'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '和谁' },
+        people.map((p) => h('button', { type: 'button', class: `chip${st.person === p.id ? ' on' : ''}`, 'aria-pressed': String(st.person === p.id), onclick: () => { st.person = p.id; draw(); } }, p.name)),
+        h('button', { type: 'button', class: 'chip add', onclick: () => newPerson((id) => { st.person = id; draw(); }) }, '+ 新的人')),
+      h('div', { class: 'label-sm' }, '谁欠谁'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '谁欠谁' }, Object.entries(FAVOR_DIR).map(([k, t]) =>
+        h('button', { type: 'button', class: `chip${st.dir === k ? ' on' : ''}`, 'aria-pressed': String(st.dir === k), onclick: () => { st.dir = k; draw(); } }, t))),
+      h('label', { class: 'form-label' }, '什么事', text),
+      h('label', { class: 'form-label' }, '哪天', date));
+  };
+  draw();
+  openSheet({
+    title: favor ? '改这个人情' : '记一个人情', body: box, confirmText: favor ? '保存' : '记好了',
+    onConfirm: async () => {
+      if (!st.person) { toast('选一下是谁', 'error'); return false; }
+      if (!text.value.trim()) { toast('写一下是什么事', 'error'); return false; }
+      const rec = { person: st.person, dir: st.dir, text: text.value.trim(), date: date.value || today() };
+      try {
+        await save(`人情：${personName(st.person)} ${FAVOR_DIR[st.dir]}`, (data) => {
+          if (favor) Object.assign(data.favors.find((f) => f.id === favor.id), rec);
+          else data.favors.push({ id: newId('f'), ...rec, createdAt: new Date().toISOString(), status: 'open' });
+        });
+      } catch { return false; }
+      render();
+      return true;
+    },
+  });
+}
+
+// 没花钱的还法（帮了他一个忙、他还了你）：点「还了」写一句怎么还的
+function favorDoneSheet(f) {
+  const how = h('input', { placeholder: f.dir === 'owe' ? '怎么还的（选填）' : '他怎么还的（选填）', 'aria-label': '怎么还的' });
+  openSheet({
+    title: f.dir === 'owe' ? '这个人情还了' : '他还了这个人情',
+    body: h('div', {}, h('p', { class: 'small' }, `${personName(f.person)} · ${f.text}`), how,
+      f.dir === 'owe' ? h('p', { class: 'muted small' }, '请客、送礼花了钱的，在「记一笔」里选上这个人情更好，钱和人情能对上。') : null),
+    confirmText: '还了',
+    onConfirm: () => save(`人情还了：${personName(f.person)}`, (data) => {
+      const x = data.favors.find((y) => y.id === f.id);
+      Object.assign(x, { status: 'done', doneAt: today(), ...(how.value.trim() ? { doneNote: how.value.trim() } : {}) });
+    }).then(() => { render(); return true; }).catch(() => false),
+  });
+}
+
+function favorRow(f, { withName = false } = {}) {
+  const done = f.status === 'done';
+  const tx = done && f.doneTx ? store.data.tx.find((t) => t.id === f.doneTx) : null;
+  const how = done ? [`${md(f.doneAt)}还了`, tx ? `${txTitle(tx)} ${exact(cny(tx))}` : f.doneNote].filter(Boolean).join(' · ') : null;
+  return h('div', { class: `favor-row${done ? ' done' : ''}` },
+    h('span', { class: `favor-dir ${f.dir}` }, f.dir === 'owe' ? '欠他' : '欠我'),
+    h('button', { type: 'button', class: 'grow favor-text', onclick: () => favorSheet({ favor: f }) },
+      withName ? h('b', {}, `${personName(f.person)} · `) : null, f.text,
+      h('span', { class: 'muted small block' }, [md(f.date), how].filter(Boolean).join(' · '))),
+    done ? null : h('button', { type: 'button', class: 'link small', onclick: () => favorDoneSheet(f) }, '还了'));
+}
+
+function favorsCard(list, title, opts) {
+  if (!list.length) return null;
+  return [h('div', { class: 'section-title' }, title), h('div', { class: 'card favor-list' }, list.map((f) => favorRow(f, opts)))];
+}
+
 function peopleView() {
   const d = store.data;
+  const favorPeople = new Set(d.favors.map((f) => f.person));
   const list = d.people.map((p) => ({ p, ...personStatus(d, p.id) }))
+    .filter((x) => x.tx.length || favorPeople.has(x.p.id))
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.p.name.localeCompare(b.p.name, 'zh'));
   const rc = receivables(d);
+  const open = openFavors(d).sort((a, b) => a.date.localeCompare(b.date));
+  const quiet = d.people.filter((p) => !p.archived).length - list.length;
   return h('div', {},
     header('人情账', h('button', { class: 'icon-btn', 'aria-label': '加一个人', onclick: () => newPerson((id) => go(`#/person/${id}`)) }, icon('plus')), helpButton('人情账怎么用', PEOPLE_HELP)),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '别人一共欠你'), h('div', { class: 'big-num' }, money(list.reduce((s, x) => s + Math.max(0, x.net), 0))),
-      rc.iOwe ? h('div', { class: 'small warn-text' }, `你欠别人 ${money(rc.iOwe)}`) : h('div', { class: 'muted small' }, '你不欠谁')),
-    list.length ? h('div', { class: 'group' }, list.map((x) => cell({
-      href: `#/person/${x.p.id}`, title: x.p.name,
-      sub: x.net > 0 ? `欠你 · ${daysSince(x.since)} 天` : x.net < 0 ? `你欠他 · ${daysSince(x.since)} 天` : '两清了',
-      meta: x.net ? money(Math.abs(x.net)) : '',
-    }))) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有人。在「记一笔」里选「AA / 帮人付」就会自动加上，也可以点右上角 ＋。')));
+      rc.iOwe ? h('div', { class: 'small warn-text' }, `你欠别人 ${money(rc.iOwe)}`) : h('div', { class: 'muted small' }, '你不欠谁钱')),
+    favorsCard(open.filter((f) => f.dir === 'owe'), '我欠的人情', { withName: true }),
+    favorsCard(open.filter((f) => f.dir === 'owed'), '别人欠我的人情', { withName: true }),
+    h('p', { class: 'center' }, h('button', { class: 'secondary', onclick: () => favorSheet() }, '记一个人情')),
+    list.length ? [h('div', { class: 'section-title' }, '和谁有来往'), h('div', { class: 'group' }, list.map((x) => {
+      const fo = openFavors(d).filter((f) => f.person === x.p.id);
+      return cell({
+        href: `#/person/${x.p.id}`, title: x.p.name,
+        sub: [x.net > 0 ? `欠你钱 · ${daysSince(x.since)} 天` : x.net < 0 ? `你欠他钱 · ${daysSince(x.since)} 天` : x.tx.length ? '钱两清了' : null,
+          fo.some((f) => f.dir === 'owe') ? `欠他 ${fo.filter((f) => f.dir === 'owe').length} 个人情` : null,
+          fo.some((f) => f.dir === 'owed') ? `他欠你 ${fo.filter((f) => f.dir === 'owed').length} 个人情` : null].filter(Boolean).join(' · '),
+        meta: x.net ? money(Math.abs(x.net)) : '',
+      });
+    }))] : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有来往。在「记一笔」里选「AA / 帮人付」就会自动记上，人情点上面的按钮。')),
+    quiet > 0 ? h('p', { class: 'muted small center' }, `名单里还有 ${quiet} 个人没有来往记录，在生活网站「身边的人」里看。`) : null);
 }
 
 function personView(id) {
@@ -1536,33 +1660,53 @@ function personView(id) {
   const p = d.people.find((x) => x.id === id);
   if (!p) return notFound();
   const ps = personStatus(d, id);
+  const favors = d.favors.filter((f) => f.person === id).sort((a, b) => (a.status === 'done') - (b.status === 'done') || b.date.localeCompare(a.date));
   const record = (type, title, hint, amount) => moneySheet({
     title, hint, amount, accountLabel: type === 'repay' ? '钱到了哪个账户' : '从哪个账户出',
     onSave: (f) => save(`${title}：${f.amount}`, (data) => { data.tx.push(moveTx(type, f, { person: id })); }),
   });
-  const rename = () => {
-    const name = h('input', { value: p.name, 'aria-label': '名字' });
-    openSheet({
-      title: '改名字', body: name, confirmText: '保存',
-      onConfirm: () => save(`人情账：${p.name} 改名 ${name.value.trim()}`, (data) => { data.people.find((x) => x.id === id).name = name.value.trim() || p.name; }).then(render).catch(() => false),
-    });
-  };
   const remove = () => {
-    if (ps.tx.length) return toast('和他还有记录，不能删', 'error');
+    if (ps.tx.length || favors.length) return toast('和他还有记录，不能删', 'error');
     save(`人情账：删除 ${p.name}`, (data) => { data.people = data.people.filter((x) => x.id !== id); }).then(() => go('#/people', true)).catch(() => {});
   };
   return h('div', {},
-    header(p.name, h('button', { class: 'icon-btn', 'aria-label': '改名字', onclick: rename }, icon('gear'))),
+    headerSub(p.name, '名字、分组在生活网站「身边的人」里改'),
+    p.archived ? h('p', { class: 'muted small' }, '已经不来往了（在生活网站里归档的）。') : null,
     h('div', { class: 'card spend-left' },
-      h('div', { class: 'muted small' }, ps.net > 0 ? '他欠你' : ps.net < 0 ? '你欠他' : '两清了'),
+      h('div', { class: 'muted small' }, ps.net > 0 ? '他欠你' : ps.net < 0 ? '你欠他' : '钱两清了'),
       h('div', { class: `big-num${ps.net < 0 ? ' warn-text' : ''}` }, money(Math.abs(ps.net))),
       ps.since ? h('div', { class: 'muted small' }, `最早一笔没结清的是 ${md(ps.since)}，${daysSince(ps.since)} 天前`) : null),
     h('div', { class: 'actions' },
       h('button', { onclick: () => record('repay', `${p.name}还我钱`, '钱到了哪个账户就选哪个，和当初从哪张卡付的没关系。', Math.max(0, ps.net)) }, '他还我钱'),
       h('button', { class: 'secondary', onclick: () => record('payback', `还给${p.name}`, '不算花销：那笔花销在他帮你付的时候已经算过了。', Math.max(0, -ps.net)) }, '我还他钱'),
       h('button', { class: 'secondary', onclick: () => record('advance', `借给${p.name} / 帮他付`, '不算你的花销，记成他欠你的。') }, '借给他')),
-    ps.tx.length ? h('div', { class: 'card tx-list' }, [...ps.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))
-      : [h('p', { class: 'muted' }, '还没有记录。'), h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这个人'))]);
+    h('div', { class: 'section-title' }, '人情'),
+    favors.length ? h('div', { class: 'card favor-list' }, favors.map((f) => favorRow(f))) : null,
+    h('p', { class: 'center' }, h('button', { class: 'link small', onclick: () => favorSheet({ person: id }) }, '+ 记一个人情')),
+    ps.tx.length ? [h('div', { class: 'section-title' }, '钱'), h('div', { class: 'card tx-list' }, [...ps.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))]
+      : !favors.length ? h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这个人')) : null);
+}
+
+// 放假前一天到假期结束：我欠的人情这次还不还。「这次还」留在这里直到还上或假期过完；「这次不还」下个假期再问
+function favorHolidayCard() {
+  const t = today();
+  const hf = holidayFavors(store.data, t);
+  if (!hf) return null;
+  const mark = (f, k) => save(k === 'plan' ? `人情：这个假期还 ${personName(f.person)}` : `人情：这次先不还 ${personName(f.person)}`, (data) => {
+    const x = data.favors.find((y) => y.id === f.id);
+    x[k] = hf.hol.key;
+  }).then(render).catch(() => {});
+  return h('div', { class: 'card favor-holiday' },
+    h('h3', {}, holidayLine(hf.hol, t)),
+    hf.ask.length ? h('p', { class: 'muted small' }, '还欠这些人情，这次还吗？') : null,
+    hf.ask.map((f) => h('div', { class: 'favor-ask' },
+      h('span', { class: 'grow' }, h('b', {}, personName(f.person)), ` · ${f.text}`, h('span', { class: 'muted small block' }, `${md(f.date)}的事`)),
+      h('button', { type: 'button', class: 'small', onclick: () => mark(f, 'plan') }, '这次还'),
+      h('button', { type: 'button', class: 'secondary small', onclick: () => mark(f, 'skip') }, '这次不还'))),
+    hf.plan.length ? [h('p', { class: 'muted small' }, '这个假期要还的：'), hf.plan.map((f) => h('div', { class: 'favor-ask' },
+      h('span', { class: 'grow' }, h('b', {}, personName(f.person)), ` · ${f.text}`),
+      h('a', { class: 'button small', href: `#/add?favor=${f.id}` }, '记一笔'),
+      h('button', { type: 'button', class: 'link small', onclick: () => favorDoneSheet(f) }, '没花钱')))] : null);
 }
 
 // ---------- 每月对账 ----------

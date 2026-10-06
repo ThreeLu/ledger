@@ -1200,6 +1200,89 @@ def fake_externals(page):
     page.route("https://api.deepseek.com/**", deepseek)
 
 
+@step("人情（不是钱的）：记一个、记礼物时对上就算还了、删了那笔又回到没还；节假日问这次还不还")
+def _(c):
+    p = c.page
+    sheet = p.locator(".sheet")
+
+    def favor(name, text, day):
+        c.go("#/people")
+        p.get_by_role("button", name="记一个人情").click()
+        sheet.get_by_role("group", name="和谁").get_by_role("button", name=name, exact=True).click()
+        expect(sheet.get_by_role("group", name="谁欠谁").get_by_role("button", name="我欠他")).to_have_attribute("aria-pressed", "true")
+        sheet.get_by_label("什么事").fill(text)
+        sheet.get_by_label("哪天").fill(day)
+        n = len(c.data()["favors"])
+        sheet.get_by_role("button", name="记好了").click()
+        for _ in range(50):
+            if len(c.data()["favors"]) == n + 1:
+                break
+            p.wait_for_timeout(200)
+        return c.data()["favors"][-1]
+
+    f1 = favor("小乙", "帮我搬书", "2026-09-01")
+    assert f1["dir"] == "owe" and f1["status"] == "open" and f1["person"] == person(c, "小乙")["id"], f1
+    expect(p.locator(".favor-list")).to_contain_text("小乙 · 帮我搬书")
+    # 记一笔礼物，选上「还的是哪个人情」
+    c.go("#/add")
+    p.get_by_label("金额", exact=True).fill("88")
+    p.get_by_role("button", name="人情社交", exact=True).click()
+    p.get_by_role("button", name="礼物", exact=True).first.click()
+    p.get_by_role("group", name="还的人情").get_by_role("button", name="小乙 · 帮我搬书").click()
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    f = next(x for x in c.data()["favors"] if x["id"] == f1["id"])
+    assert t["favor"] == f1["id"] and f["status"] == "done" and f["doneTx"] == t["id"], (t, f)
+    c.go(f"#/person/{f1['person']}")
+    expect(p.locator(".favor-row.done")).to_contain_text("礼物 ¥88")
+    # 删掉这笔：人情回到没还
+    c.go("#/list")
+    p.locator(".tx", has_text="礼物").first.click()
+    p.get_by_role("button", name="删除").click()
+    c.wait_saved(n)
+    f = next(x for x in c.data()["favors"] if x["id"] == f1["id"])
+    assert f["status"] == "open" and "doneTx" not in f, f
+    f2 = favor("小甲", "请我喝咖啡", "2026-09-02")
+    # 国庆前一天：问这次还不还
+    p.clock.set_fixed_time("2026-09-30T12:00:00")
+    c.go("#/")
+    card = p.locator(".favor-holiday")
+    expect(card).to_contain_text("明天开始放国庆了")
+    card.locator(".favor-ask", has_text="帮我搬书").get_by_role("button", name="这次还").click()
+    card.locator(".favor-ask", has_text="请我喝咖啡").get_by_role("button", name="这次不还").click()
+    expect(card).not_to_contain_text("请我喝咖啡")
+    card.screenshot(path=ART / "favor-holiday.png")
+    fs = {x["id"]: x for x in c.data()["favors"]}
+    assert fs[f1["id"]]["plan"] == "2026-国庆" and fs[f2["id"]]["skip"] == "2026-国庆", fs
+    # 这次要还的：点「记一笔」，聚餐请客和人情都先选好了
+    card.get_by_role("link", name="记一笔").click()
+    expect(p.get_by_role("group", name="还的人情").get_by_role("button", name="小乙 · 帮我搬书")).to_have_attribute("aria-pressed", "true")
+    p.get_by_label("金额", exact=True).fill("120")
+    p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    assert c.tx()[-1]["category"] == "c-social"
+    assert next(x for x in c.data()["favors"] if x["id"] == f1["id"])["status"] == "done"
+    # 平常的周末不问；下个假期（元旦前一天）再问「这次不还」的那个
+    p.clock.set_fixed_time("2026-11-14T12:00:00")
+    c.go("#/")
+    expect(p.locator(".favor-holiday")).to_have_count(0)
+    p.clock.set_fixed_time("2026-12-31T12:00:00")
+    c.go("#/")
+    expect(p.locator(".favor-holiday")).to_contain_text("请我喝咖啡")
+    # 没花钱的还法
+    c.go("#/people")
+    p.locator(".favor-row", has_text="请我喝咖啡").get_by_role("button", name="还了").click()
+    sheet.get_by_label("怎么还的").fill("帮他占了座")
+    sheet.get_by_role("button", name="还了").click()
+    expect(p.locator(".favor-row", has_text="请我喝咖啡")).to_have_count(0)
+    f = next(x for x in c.data()["favors"] if x["id"] == f2["id"])
+    assert f["status"] == "done" and f["doneNote"] == "帮他占了座", f
+    p.clock.set_fixed_time(date.today().isoformat() + "T12:00:00")
+
+
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")
 def _(c):
     p = c.page

@@ -21,12 +21,12 @@
   presets: [{ name, from, to }], recurring: [{ id, name, amount, account, category, day, since, lastPosted } | { yearly: 'MM-DD', remindOnly }],
   quick: [{ id, name, amount, category, account }],
   claims: [{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind: 'pdf'|'image', submitted }] }],
-  people: [{ id, name }], reconciled: { 预算月开始日: 对账日 },
+  people: [{ id, name, archived? }], favors: [{ id, person, dir: 'owe'|'owed', text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan? }], reconciled: { 预算月开始日: 对账日 },
   wishes: [{ id, name, price, want: 'bit'|'nice'|'want'|'very'|'most', kind: ''|'need'|'grow'|'joy'|'feel'|'gift', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice }],
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
-  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
+  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, favor?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
 ```
 
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
@@ -58,6 +58,9 @@
 - `migrate()` 给旧数据补字段，加功能时在这里补。
 - 导入小票（`#/receipt`，`js/receipt.js` 纯计算 + `main.js` 页面）：用户把小票照片和「复制提示词」（`receiptPrompt`，类别名从数据里取）发给手机上的 AI，回答贴回来（或快捷指令带 `?text=`，用完从网址去掉）。`parseReceipt` 先找 JSON，不是就按行认「名称 数量 价格 / 合计」。一样一样确认：名称、数量、实付、类别（`guessCategory`：AI 给的类别名 → 以前同名的 → 关键词 `BY_WORD` → 宿舍小物件）、物品档案怎么处理（`matchInventory` 同名 / 包含，消耗品优先；默认 `defaultInventoryAction`：消耗品补货、耐用的不动、没有的吃喝不进档案其他进待建档）。可以「这样不记」「剩下的都按推荐」。**按类别合并成几笔**（用户选的），整单优惠并进最大那笔，备注「店名：名称×数量、…」，每笔带 `receipt` 指纹（日期 + 名称价格），同一张再导时提醒。记账走本地队列；物品档案（`js/bridge.js`，同一个令牌直接提交 inventory.json，`applyToInventory`）要联网，失败了可以「再试一次」，账不受影响。
 - 生活网站（`../life`）的「想做到的事」可以往 `wishes` 直接加心愿（`reason` 是「为了：目标名」，`want: 'want'`），见 life/CLAUDE.md。
+- 人情（不是钱的，2026-10-06）：`favors`，「我欠他一个人情」`owe` / 「他欠我」`owed`，不写钱、不分轻重。还人情：记聚餐请客、礼物、红包（`FAVOR_CATEGORIES`）时可以选「还的是哪个人情」→ tx 带 `favor`，那个人情 `status: done`、`doneTx`；改掉 / 删掉那笔，人情回到没还。没花钱的在人情页点「还了」写一句（`doneNote`）。**只在法定节假日提醒**（`holidayFavors`，`js/cal.js` 的 `holidayAround`：放假前一天到假期最后一天，周末不算），首页 `favorHolidayCard` 一个个问「这次还 / 这次不还」：还 → `plan = 假期 key`，出「记一笔」（`#/add?favor=id` 预选聚餐请客和这个人情）；不还 → `skip = 假期 key`，下个假期再问。生活网站「今天」里也问同样的，也能记人情（直接提交 finance.json）。
+- 人的名单由生活网站「身边的人」管（同一个 id）：那边加人、改名、归档会写进 `people`（`archived` 的不出现在选人里）；账本里新加的人那边打开时会搬过去。账本里不改名字。人情账页只列有来往（钱或人情）的人。
+- `js/cal.js`（和 life 同一份，改了两边一起改）：法定节假日（`OFFICIAL` 按年补国务院公布的安排，没有的年份按节日估算）、农历（浏览器 `Intl` 中国历法，北京时间；`LUNAR_FIX` 修正朔月贴着半夜的年份）、生日。
 - 物品档案那边「买回来了」、新建物品填了价格时也会直接往 `tx` 加支出（带 `from: 'inventory'`），见 inventory/CLAUDE.md。
 - Siri（`#/siri` 有做快捷指令的步骤）：快捷指令打开 `#/add?text=一句话`，`parseSpoken` 认金额（「18块5」= 18.5）、类别（快捷记账名 → 类别名 → 常说的叫法 `SPOKEN` → 以前的备注 → 关键词），预填后还是要点「记好了」；`#/receipt?text=` 打开导入小票。快捷指令打开的是 Safari（和主屏幕图标各存各的），没令牌时记下要去的页面（`ledger-after-login`），填好令牌再跳过去。
 - 账单查漏记（`#/bills`，「更多」和对账页有入口）：`js/sheet.js` 读 CSV（UTF-8 / GBK 自动认）和 xlsx（自己解 zip，`DecompressionStream`）；`js/bills.js` 的 `parseBill` 按「交易时间 / 金额」那一行找表头，按列名取（微信、支付宝列名不同），`matchBills`：只看「支出」，退款 / 关闭 / 不计收支不算，开始记账前的不算，`bill` 单号相同直接认，否则账本里有账户的支出、垫付、转出、还钱（AA 按 group 合计）金额相同、日期差 ≤2 天的配上（每笔只用一次）。没配上的一笔笔确认：类别 `guessBillCategory`（同一 `billParty` 上次的类别 → 商家表 `MERCHANTS` → 商品名关键词），账户 `guessAccount`（`settings.payMethods` 记住的「来源:付款方式」→ 微信零钱找名字带「微信」的 → 上次用的），转账 / 红包 `isPersonal` 默认不记。补记的 tx 带 `bill`、`billParty`。

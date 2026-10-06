@@ -506,3 +506,17 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .donut-detail-box .budget-row:last-child { margin-bottom: 0; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .legend-row.glow, .donut-detail-box { animation: none; } }
+
+/* 人情（不是钱的）：人情账页、节假日问一句 */
+.favor-list { padding: 4px 14px; }
+.favor-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 0.5px solid var(--line); }
+.favor-row:last-child { border-bottom: 0; }
+.favor-row.done { opacity: 0.6; }
+.favor-row .favor-text { background: none; color: var(--text); padding: 0; min-height: 0; text-align: left; font-weight: 400; justify-content: flex-start; display: block; }
+.favor-row .link { flex: none; }
+.favor-dir { flex: none; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--card)); color: var(--accent); }
+.favor-dir.owed { background: color-mix(in srgb, var(--sage) 14%, var(--card)); color: var(--sage); }
+.favor-holiday { background: color-mix(in srgb, var(--accent) 9%, var(--card)); }
+.favor-ask { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 0.5px solid var(--line); }
+.favor-ask:last-child { border-bottom: 0; }
+.favor-ask > button, .favor-ask > a { flex: none; }

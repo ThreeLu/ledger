@@ -6,6 +6,8 @@
 // - 预算月从每月 periodStartDay 号开始（可以和发钱的日子对齐）。
 // - 「不占预算」组（手续费等）算花销、影响存钱，但不占吃饭 / 日常 / 自由钱 / 形象 / 订阅的预算。
 
+import { holidayAround } from './cal.js';
+
 export const GROUPS = [
   { id: 'food', name: '吃饭', color: 'var(--amber)' },
   { id: 'daily', name: '日常', color: 'var(--sage)' },
@@ -95,7 +97,8 @@ export function migrate(data) {
   data.recurring ||= [];
   data.tx ||= [];
   data.claims ||= []; // 垫付报销：{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind, submitted }] }
-  data.people ||= []; // 人情账：{ id, name }
+  data.people ||= []; // 人情账：{ id, name, archived? }（名单由生活网站「身边的人」管，同一个 id；archived 的不再出现在选人里）
+  data.favors ||= []; // 不是钱的人情：{ id, person, dir: 'owe' 我欠他 | 'owed' 他欠我, text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan? }
   data.reconciled ||= {}; // 每个预算月对过账没有：{ 预算月开始日: 对账日 }
   // 类别升级：按 EXPENSE_CATEGORIES 改名、分小组、补新的；老类别藏起来（以前的账照样显示）
   if ((data.categoryVersion || 1) < CATEGORY_VERSION) {
@@ -327,6 +330,19 @@ export function receivables(data) {
   const toMe = claims.reduce((s, c) => s + Math.max(0, c.pending), 0) + people.reduce((s, p) => s + Math.max(0, p.net), 0);
   const iOwe = people.reduce((s, p) => s + Math.max(0, -p.net), 0);
   return { claims, people, toMe, iOwe };
+}
+
+// ---------- 人情（不是钱的） ----------
+
+export const FAVOR_CATEGORIES = ['c-social', 'c-gift', 'c-hongbao']; // 记这几类花销时可以选「还的是哪个人情」
+export const openFavors = (data, dir = null) => data.favors.filter((f) => f.status !== 'done' && (!dir || f.dir === dir));
+// 法定节假日（放假前一天到假期最后一天）问一次：我欠的人情这次还不还。「这次不还」记 skip = 假期，下个假期再问
+export function holidayFavors(data, today) {
+  const hol = holidayAround(today);
+  if (!hol) return null;
+  const list = openFavors(data, 'owe').filter((f) => f.skip !== hol.key && f.date <= today);
+  if (!list.length) return null;
+  return { hol, ask: list.filter((f) => f.plan !== hol.key), plan: list.filter((f) => f.plan === hol.key) };
 }
 
 export const CLAIM_REMIND_DAYS = 30; // 垫付多久没报回来提醒
