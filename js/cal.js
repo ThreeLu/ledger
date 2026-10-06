@@ -98,3 +98,29 @@ export function holidayAround(today) {
   return [...holidays(y), ...holidays(y + 1)].find((x) => addDay(x.start, -1) <= today && today <= x.end) || null;
 }
 export const holidayLine = (x, today) => (today < x.start ? `明天开始放${x.name}了` : `${x.name}假期`);
+
+// ---------- 过节问候 ----------
+
+export const GREET_DAYS = { newyear: '元旦', spring: '春节', duanwu: '端午', mid: '中秋', teacher: '教师节' };
+export function festivalDay(key, year) {
+  switch (key) {
+    case 'newyear': return `${year}-01-01`;
+    case 'spring': return nextLunar(1, 1, `${year}-01-15`);
+    case 'duanwu': return nextLunar(5, 5, `${year}-05-01`);
+    case 'mid': return nextLunar(8, 15, `${year}-08-25`);
+    case 'teacher': return `${year}-09-10`;
+    default: return null;
+  }
+}
+// 今天是哪个节的前一天或当天：[{ key, name, day, fkey: '年-key' }]
+export function festivalsAround(today) {
+  const y = Number(today.slice(0, 4));
+  const out = [];
+  for (const yy of [y, y + 1]) {
+    for (const [key, name] of Object.entries(GREET_DAYS)) {
+      const day = festivalDay(key, yy);
+      if (day && addDay(day, -1) <= today && today <= day) out.push({ key, name, day, fkey: `${yy}-${key}` });
+    }
+  }
+  return out;
+}

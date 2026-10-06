@@ -5,7 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, openFavors, holidayFavors,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { askJson } from './ai.js';
@@ -646,7 +646,8 @@ function txTitle(t) {
     case 'writeoff': return `${catName(t.category)} · ${claimName(t.claim)}`;
     default: {
       const name = t.what || catName(t.category); // 「其他」显示自己写的名字
-      return t.person && !t.account ? `${name}（${personName(t.person)}代付）` : name;
+      const w = t.who ? (t.type === 'income' ? ` · ${personName(t.who)}给的` : ` · 给${personName(t.who)}`) : '';
+      return t.person && !t.account ? `${name}（${personName(t.person)}代付）${w}` : name + w;
     }
   }
 }
@@ -715,14 +716,14 @@ function addView(q) {
     type: editing.type === 'adjust' ? 'adjust' : editing.type, amount: String(editing.amount), account: editing.account, to: editing.to,
     toAmount: editing.toAmount != null ? String(editing.toAmount) : '', category: editing.category, date: editing.date, note: editing.note || '',
     split: editing.type === 'expense' && editing.person && !editing.account ? 'paidby' : 'none', person: editing.person || '',
-    sub: category(d, editing.category)?.sub || null, what: editing.what || '', tax: editing.tax != null ? String(editing.tax) : '', favor: editing.favor || '',
+    sub: category(d, editing.category)?.sub || null, what: editing.what || '', tax: editing.tax != null ? String(editing.tax) : '', favor: editing.favor || '', who: editing.who || '',
   } : {
     type: q.type || 'expense', amount: q.amount || '', account: q.account || last.account || 'a-wechat', to: '', toAmount: '',
-    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '', favor: '',
+    category: '', date: today(), note: q.note || '', split: 'none', person: '', sub: null, what: '', tax: '', favor: '', who: '',
   };
   // 从「这次要还的人情」点进来：类别先选聚餐请客，人情先选上
   if (!editing && q.favor && d.favors.some((f) => f.id === q.favor && f.status !== 'done')) {
-    st.favor = q.favor; st.category = 'c-social'; st.sub = category(d, 'c-social')?.sub || null;
+    st.favor = q.favor; st.who = d.favors.find((f) => f.id === q.favor).person; st.category = 'c-social'; st.sub = category(d, 'c-social')?.sub || null;
   }
   if (!account(d, st.account)) st.account = firstCny;
   // Siri / 快捷指令带来的一句话：「午饭 18」→ 金额、类别、备注先填好，还是要点「记好了」
@@ -829,9 +830,10 @@ function addView(q) {
         if (FREEFORM.includes(st.category)) {
           parts.push(h('label', { class: 'form-label' }, '具体是什么', whatInput));
         }
-        parts.push(...favorSection());
+        parts.push(...favorSection(), ...whoSection());
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
+        parts.push(...whoSection());
         if (st.category === 'i-job') {
           parts.push(h('label', { class: 'form-label' }, '被预扣的个税（选填）', taxInput),
             h('p', { class: 'muted small' }, '金额填到手的钱。单位先扣了个税的话填在这里（看工资条或到账短信），每年 3～6 月会提醒你申请退回来。'));
@@ -876,8 +878,20 @@ function addView(q) {
     return [h('div', { class: 'label-sm' }, '还的是哪个人情（选填）'),
       h('div', { class: 'chips favor-chips', role: 'group', 'aria-label': '还的人情' }, list.map((f) => h('button', {
         type: 'button', class: `chip${st.favor === f.id ? ' on' : ''}`, 'aria-pressed': String(st.favor === f.id),
-        onclick: () => { st.favor = st.favor === f.id ? '' : f.id; draw(); },
+        onclick: () => { st.favor = st.favor === f.id ? '' : f.id; if (st.favor) st.who = f.person; draw(); },
       }, `${personName(f.person)} · ${f.text}`)))];
+  };
+  // 礼尚往来：送礼、红包、请客「给谁的」，收到的红包礼金「谁给的」
+  const whoSection = () => {
+    const ok = st.type === 'expense' ? FAVOR_CATEGORIES.includes(st.category) && st.split !== 'paidby' : GIFT_IN.includes(st.category);
+    if (!ok) { st.who = ''; return []; }
+    const people = d.people.filter((p) => !p.archived || p.id === st.who);
+    if (!people.length) return [];
+    return [h('div', { class: 'label-sm' }, st.type === 'expense' ? '给谁的（选填，记进礼尚往来）' : '谁给的（选填，记进礼尚往来）'),
+      h('div', { class: 'chips who-chips', role: 'group', 'aria-label': st.type === 'expense' ? '给谁的' : '谁给的' }, people.map((p) => h('button', {
+        type: 'button', class: `chip${st.who === p.id ? ' on' : ''}`, 'aria-pressed': String(st.who === p.id),
+        onclick: () => { st.who = st.who === p.id ? '' : p.id; draw(); },
+      }, p.name)))];
   };
   // 记好以后：选上的人情算还了，换掉的那个重新算没还
   const settleFavor = (data, txId, oldFavor, date) => {
@@ -942,7 +956,7 @@ function addView(q) {
         if (my > 0) {
           const tid = newId('t');
           data.tx.push({ id: tid, type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
-            ...(FREEFORM.includes(st.category) ? { what: st.what.trim() } : {}), ...(st.favor ? { favor: st.favor } : {}),
+            ...(FREEFORM.includes(st.category) ? { what: st.what.trim() } : {}), ...(st.favor ? { favor: st.favor } : {}), ...(st.who ? { who: st.who } : {}),
             group: g, createdAt: now, ...(usd ? { cny: round2(my * rate) } : {}) });
           settleFavor(data, tid, '', st.date);
         }
@@ -1011,6 +1025,7 @@ function addView(q) {
       const tax = round2(num(st.tax) || 0);
       if (st.type === 'income' && st.category === 'i-job' && tax > 0) rec.tax = tax;
       if (st.type === 'expense' && st.favor) rec.favor = st.favor;
+      if (st.who) rec.who = st.who;
     }
     const paidBy = st.type === 'expense' && st.split === 'paidby';
     if (paidBy) { rec.account = null; rec.person = st.person; delete rec.cny; }
@@ -1040,6 +1055,7 @@ function addView(q) {
           if (!rec.what) delete data.tx[i].what;
           if (!rec.tax) delete data.tx[i].tax;
           if (!rec.favor) delete data.tx[i].favor;
+          if (!rec.who) delete data.tx[i].who;
           settleFavor(data, editing.id, editing.favor, rec.date);
         } else {
           for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
@@ -1534,6 +1550,7 @@ const PEOPLE_HELP = [
   ['怎么记钱', ['吃饭 AA：在「记一笔」填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，其他人的记成欠你的（不算花销）。', '别人帮你付：在「记一笔」选「别人帮我付的」。算你的花销，但账户没动。', '还钱：点这个人，「他还我钱」或「我还他钱」。钱到了哪张卡、从哪张卡出都行，和当初是哪张卡没关系。']],
   ['怎么记人情', ['点「记一个人情」：选人、谁欠谁、什么事。', '还人情：记聚餐请客、礼物、红包时，下面可以选「还的是哪个人情」，记好了就算还上了。没花钱的，在这个人的页面点「还了」。', '生活网站「身边的人」里也能记，记到的是同一份。']],
   ['提醒', [`钱：别人欠你、你欠别人超过 ${PERSON_REMIND_DAYS} 天，首页会提醒。`, '人情：平时不催。只在元旦、春节、清明、劳动节、端午、中秋、国庆放假前一天起，首页问一句这次还不还；「这次不还」就等下个假期再问。周末不算。']],
+  ['礼尚往来', ['记礼物、红包、聚餐请客时，可以选「给谁的」；收到红包礼金记收入，类别选「收到的红包礼金」，选「谁给的」。', '点开一个人能看到你们之间来回送过什么、随过多少。生活网站「身边的人」里也能看到。']],
   ['名单', ['人的名字、分组在生活网站「身边的人」里管，两边是同一份名单。']],
 ];
 
@@ -1629,7 +1646,7 @@ function peopleView() {
   const d = store.data;
   const favorPeople = new Set(d.favors.map((f) => f.person));
   const list = d.people.map((p) => ({ p, ...personStatus(d, p.id) }))
-    .filter((x) => x.tx.length || favorPeople.has(x.p.id))
+    .filter((x) => x.tx.length || favorPeople.has(x.p.id) || giftsWith(d, x.p.id).length)
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.p.name.localeCompare(b.p.name, 'zh'));
   const rc = receivables(d);
   const open = openFavors(d).sort((a, b) => a.date.localeCompare(b.date));
@@ -1666,7 +1683,7 @@ function personView(id) {
     onSave: (f) => save(`${title}：${f.amount}`, (data) => { data.tx.push(moveTx(type, f, { person: id })); }),
   });
   const remove = () => {
-    if (ps.tx.length || favors.length) return toast('和他还有记录，不能删', 'error');
+    if (ps.tx.length || favors.length || giftsWith(d, id).length) return toast('和他还有记录，不能删', 'error');
     save(`人情账：删除 ${p.name}`, (data) => { data.people = data.people.filter((x) => x.id !== id); }).then(() => go('#/people', true)).catch(() => {});
   };
   return h('div', {},
@@ -1683,6 +1700,7 @@ function personView(id) {
     h('div', { class: 'section-title' }, '人情'),
     favors.length ? h('div', { class: 'card favor-list' }, favors.map((f) => favorRow(f))) : null,
     h('p', { class: 'center' }, h('button', { class: 'link small', onclick: () => favorSheet({ person: id }) }, '+ 记一个人情')),
+    giftsWith(d, id).length ? [h('div', { class: 'section-title' }, '礼尚往来'), h('div', { class: 'card tx-list' }, giftsWith(d, id).sort(txOrder).map((t) => txRow(t)))] : null,
     ps.tx.length ? [h('div', { class: 'section-title' }, '钱'), h('div', { class: 'card tx-list' }, [...ps.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))]
       : !favors.length ? h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这个人')) : null);
 }

@@ -65,7 +65,7 @@ export function defaultData(today) {
     categoryVersion: CATEGORY_VERSION,
     categories: [
       ...EXPENSE_CATEGORIES.map((c) => ({ ...c })),
-      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-other', '其他收入'),
+      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-gift', '收到的红包礼金'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
     notes: {}, // 预算每组的说明（「我们的花钱方式」里显示）
@@ -120,6 +120,10 @@ export function migrate(data) {
   if (!data.categories.some((c) => c.id === 'i-tax')) {
     const at = data.categories.findIndex((c) => c.id === 'i-other');
     data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-tax', '个税退税'));
+  }
+  if (!data.categories.some((c) => c.id === 'i-gift')) {
+    const at = data.categories.findIndex((c) => c.id === 'i-other');
+    data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-gift', '收到的红包礼金'));
   }
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
@@ -335,6 +339,9 @@ export function receivables(data) {
 // ---------- 人情（不是钱的） ----------
 
 export const FAVOR_CATEGORIES = ['c-social', 'c-gift', 'c-hongbao']; // 记这几类花销时可以选「还的是哪个人情」
+// 礼尚往来：送出去的（这几类支出）和收到的（红包礼金）可以记「给谁 / 谁给的」→ tx.who
+export const GIFT_IN = ['i-gift'];
+export const giftsWith = (data, id) => data.tx.filter((t) => t.who === id && (t.type === 'expense' || t.type === 'income'));
 export const openFavors = (data, dir = null) => data.favors.filter((f) => f.status !== 'done' && (!dir || f.dir === dir));
 // 法定节假日（放假前一天到假期最后一天）问一次：我欠的人情这次还不还。「这次不还」记 skip = 假期，下个假期再问
 export function holidayFavors(data, today) {

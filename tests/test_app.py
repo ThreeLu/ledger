@@ -1236,7 +1236,7 @@ def _(c):
     f = next(x for x in c.data()["favors"] if x["id"] == f1["id"])
     assert t["favor"] == f1["id"] and f["status"] == "done" and f["doneTx"] == t["id"], (t, f)
     c.go(f"#/person/{f1['person']}")
-    expect(p.locator(".favor-row.done")).to_contain_text("礼物 ¥88")
+    expect(p.locator(".favor-row.done")).to_contain_text("礼物 · 给小乙 ¥88")
     # 删掉这笔：人情回到没还
     c.go("#/list")
     p.locator(".tx", has_text="礼物").first.click()
@@ -1259,11 +1259,12 @@ def _(c):
     # 这次要还的：点「记一笔」，聚餐请客和人情都先选好了
     card.get_by_role("link", name="记一笔").click()
     expect(p.get_by_role("group", name="还的人情").get_by_role("button", name="小乙 · 帮我搬书")).to_have_attribute("aria-pressed", "true")
+    expect(p.get_by_role("group", name="给谁的").get_by_role("button", name="小乙")).to_have_attribute("aria-pressed", "true")
     p.get_by_label("金额", exact=True).fill("120")
     p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 1)
-    assert c.tx()[-1]["category"] == "c-social"
+    assert c.tx()[-1]["category"] == "c-social" and c.tx()[-1]["who"] == f1["person"]
     assert next(x for x in c.data()["favors"] if x["id"] == f1["id"])["status"] == "done"
     # 平常的周末不问；下个假期（元旦前一天）再问「这次不还」的那个
     p.clock.set_fixed_time("2026-11-14T12:00:00")
@@ -1281,6 +1282,18 @@ def _(c):
     f = next(x for x in c.data()["favors"] if x["id"] == f2["id"])
     assert f["status"] == "done" and f["doneNote"] == "帮他占了座", f
     p.clock.set_fixed_time(date.today().isoformat() + "T12:00:00")
+    # 礼尚往来：收到的红包礼金，选谁给的
+    c.go("#/add")
+    p.locator(".segmented").get_by_role("button", name="收入", exact=True).click()
+    p.get_by_label("金额", exact=True).fill("66")
+    p.get_by_role("group", name="收入来源").get_by_role("button", name="收到的红包礼金").click()
+    p.get_by_role("group", name="谁给的").get_by_role("button", name="小甲").click()
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    assert c.tx()[-1]["who"] == f2["person"] and c.tx()[-1]["category"] == "i-gift"
+    c.go(f"#/person/{f2['person']}")
+    expect(p.locator(".tx-list").first).to_contain_text("收到的红包礼金 · 小甲给的")
 
 
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")

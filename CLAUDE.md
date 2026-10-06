@@ -26,7 +26,7 @@
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
-  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, favor?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
+  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, favor?, who?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
 ```
 
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
@@ -59,6 +59,7 @@
 - 导入小票（`#/receipt`，`js/receipt.js` 纯计算 + `main.js` 页面）：用户把小票照片和「复制提示词」（`receiptPrompt`，类别名从数据里取）发给手机上的 AI，回答贴回来（或快捷指令带 `?text=`，用完从网址去掉）。`parseReceipt` 先找 JSON，不是就按行认「名称 数量 价格 / 合计」。一样一样确认：名称、数量、实付、类别（`guessCategory`：AI 给的类别名 → 以前同名的 → 关键词 `BY_WORD` → 宿舍小物件）、物品档案怎么处理（`matchInventory` 同名 / 包含，消耗品优先；默认 `defaultInventoryAction`：消耗品补货、耐用的不动、没有的吃喝不进档案其他进待建档）。可以「这样不记」「剩下的都按推荐」。**按类别合并成几笔**（用户选的），整单优惠并进最大那笔，备注「店名：名称×数量、…」，每笔带 `receipt` 指纹（日期 + 名称价格），同一张再导时提醒。记账走本地队列；物品档案（`js/bridge.js`，同一个令牌直接提交 inventory.json，`applyToInventory`）要联网，失败了可以「再试一次」，账不受影响。
 - 生活网站（`../life`）的「想做到的事」可以往 `wishes` 直接加心愿（`reason` 是「为了：目标名」，`want: 'want'`），见 life/CLAUDE.md。
 - 人情（不是钱的，2026-10-06）：`favors`，「我欠他一个人情」`owe` / 「他欠我」`owed`，不写钱、不分轻重。还人情：记聚餐请客、礼物、红包（`FAVOR_CATEGORIES`）时可以选「还的是哪个人情」→ tx 带 `favor`，那个人情 `status: done`、`doneTx`；改掉 / 删掉那笔，人情回到没还。没花钱的在人情页点「还了」写一句（`doneNote`）。**只在法定节假日提醒**（`holidayFavors`，`js/cal.js` 的 `holidayAround`：放假前一天到假期最后一天，周末不算），首页 `favorHolidayCard` 一个个问「这次还 / 这次不还」：还 → `plan = 假期 key`，出「记一笔」（`#/add?favor=id` 预选聚餐请客和这个人情）；不还 → `skip = 假期 key`，下个假期再问。生活网站「今天」里也问同样的，也能记人情（直接提交 finance.json）。
+- 礼尚往来：礼物 / 红包 / 聚餐请客的支出选「给谁的」、收入「收到的红包礼金」（`i-gift`，`GIFT_IN`）选「谁给的」→ tx `who`（不影响欠款，`person` 才是欠款）；选了还的人情会自动带上那个人。人情账的人页面有「礼尚往来」，生活网站「身边的人」也读它。
 - 人的名单由生活网站「身边的人」管（同一个 id）：那边加人、改名、归档会写进 `people`（`archived` 的不出现在选人里）；账本里新加的人那边打开时会搬过去。账本里不改名字。人情账页只列有来往（钱或人情）的人。
 - `js/cal.js`（和 life 同一份，改了两边一起改）：法定节假日（`OFFICIAL` 按年补国务院公布的安排，没有的年份按节日估算）、农历（浏览器 `Intl` 中国历法，北京时间；`LUNAR_FIX` 修正朔月贴着半夜的年份）、生日。
 - 物品档案那边「买回来了」、新建物品填了价格时也会直接往 `tx` 加支出（带 `from: 'inventory'`），见 inventory/CLAUDE.md。
