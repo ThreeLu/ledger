@@ -550,7 +550,7 @@ def _(c):
         sheet = p.locator(".sheet")
         sheet.get_by_label("想要什么").fill(name)
         sheet.get_by_label("价格").fill(price)
-        sheet.get_by_role("button", name=want).click()
+        sheet.get_by_role("button", name=want, exact=True).click()
         if name == "降噪耳机":
             sheet.get_by_role("button", name="提升幸福感").click()
         sheet.get_by_role("button", name="加进心愿单").click()
@@ -587,6 +587,29 @@ def _(c):
         p.wait_for_timeout(200)
     big_order = order()
     assert big_order == ["机械键盘", "降噪耳机"], big_order
+    # 排序只改显示：按价格、想要程度排时没有 ↑↓，攒钱顺序不变
+    names = lambda: p.locator(".wish .wish-name").all_inner_texts()  # noqa: E731
+    p.locator(".wish-sort").get_by_role("button", name="价格").click()
+    expect(p.locator(".wish-sort")).to_contain_text("价格 低→高")
+    expect(p.get_by_role("button", name="机械键盘 往前排")).to_have_count(0)
+    assert [n for n in names() if n in ("机械键盘", "降噪耳机")] == ["机械键盘", "降噪耳机"], names()
+    p.locator(".wish-sort").get_by_role("button", name="价格").click()
+    expect(p.locator(".wish-sort")).to_contain_text("价格 高→低")
+    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("降噪耳机")
+    p.locator(".wish-sort").get_by_role("button", name="想要程度").click()
+    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("降噪耳机")
+    assert order() == ["机械键盘", "降噪耳机"]
+    # 改成情怀、非常想要
+    p.locator(".wish", has_text="机械键盘").get_by_role("button", name="改").click()
+    p.locator(".sheet").get_by_role("button", name="非常想要").click()
+    p.locator(".sheet").get_by_role("button", name="情怀").click()
+    p.locator(".sheet").get_by_role("button", name="保存").click()
+    expect(p.locator(".wish", has_text="机械键盘").locator(".wish-tags")).to_contain_text("情怀")
+    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("机械键盘")
+    kb = next(w for w in c.data()["wishes"] if w["name"] == "机械键盘")
+    assert (kb["want"], kb["kind"]) == ("most", "feel"), kb
+    p.locator(".wish-sort").get_by_role("button", name="攒钱顺序").click()
+    expect(p.get_by_role("button", name="机械键盘 往前排")).to_be_visible()
     # DeepSeek
     p.get_by_role("button", name="问问 DeepSeek").click()
     expect(p.locator(".ai-summary")).to_contain_text("先买闲书")
