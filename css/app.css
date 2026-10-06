@@ -486,3 +486,23 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .ring.over::before { background: var(--danger); }
 .ring b { display: block; font-size: 17px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .ring.over b { color: var(--danger); }
+
+/* 花在哪了：点圆环 */
+.donut .seg { cursor: pointer; transition: opacity .25s, stroke-width .25s; }
+.donut.has-sel .seg { opacity: .25; }
+.donut.has-sel .seg.on { opacity: 1; stroke-width: 24; }
+.donut-num, .donut-sub { transition: opacity .2s; }
+.legend-row { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; width: 100%; min-height: 0; margin: 0 -8px; padding: 4px 8px; background: transparent; color: var(--text); font: inherit; font-weight: 400; text-align: left; border-radius: 10px; transition: background .25s, box-shadow .25s; }
+.legend-row > :last-child { grid-column: 1 / -1; }
+.legend-row b { font-weight: 700; }
+.legend-row.on { background: color-mix(in srgb, var(--c) 16%, transparent); }
+.legend-row.glow { animation: legend-glow .9s ease-out; }
+@keyframes legend-glow {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent); }
+  40% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--c) 25%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+.donut-detail-box { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--c) 8%, var(--card)); border-left: 3px solid var(--c); animation: fade-in .3s ease-out; }
+.donut-detail-box .budget-row:last-child { margin-bottom: 0; }
+@keyframes fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .legend-row.glow, .donut-detail-box { animation: none; } }

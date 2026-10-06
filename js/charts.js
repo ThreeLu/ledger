@@ -47,6 +47,7 @@ export function barChart(bars, { line = null, lineLabel = '', height = 150, colo
 }
 
 // 环形图：segments = [{ name, v, color }]，中间写总数
+// 每一段带 data-key（seg.key），中间两行文字有 class，方便点选时换
 export function donut(segments, { center = '', sub = '', title = '' } = {}) {
   const size = 150;
   const r = 52;
@@ -59,13 +60,13 @@ export function donut(segments, { center = '', sub = '', title = '' } = {}) {
     if (!total || seg.v <= 0) continue;
     const len = (seg.v / total) * c;
     svg.append(s('circle', {
-      cx: size / 2, cy: size / 2, r, fill: 'none', style: `stroke:${seg.color}`, 'stroke-width': 18,
+      cx: size / 2, cy: size / 2, r, fill: 'none', style: `stroke:${seg.color}`, 'stroke-width': 18, ...(seg.key ? { 'data-key': seg.key, class: 'seg' } : {}),
       'stroke-dasharray': `${len} ${c - len}`, 'stroke-dashoffset': -off, transform: `rotate(-90 ${size / 2} ${size / 2})`,
     }));
     off += len;
   }
   svg.append(s('text', { x: size / 2, y: size / 2 + 2, 'text-anchor': 'middle', class: 'donut-num', text: center }));
-  if (sub) svg.append(s('text', { x: size / 2, y: size / 2 + 20, 'text-anchor': 'middle', class: 'chart-label', text: sub }));
+  if (sub) svg.append(s('text', { x: size / 2, y: size / 2 + 20, 'text-anchor': 'middle', class: 'chart-label donut-sub', text: sub }));
   return svg;
 }
 

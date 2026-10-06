@@ -478,6 +478,21 @@ def _(c):
     expect(p.locator(".summary-head")).to_contain_text("这周")
     if c.tx():
         expect(p.get_by_role("img", name="花在哪了")).to_be_visible()
+    if p.locator(".legend-row").count():
+        # 点一行：圆环里那一段突出，这一行亮一下，下面列出这一组的类别；再点一下收起
+        row = p.locator(".legend-row").first
+        total = p.locator(".donut-num").text_content()
+        row.click()
+        expect(row).to_have_attribute("aria-pressed", "true")
+        expect(p.locator(".donut.has-sel .seg.on")).to_have_count(1)
+        expect(p.locator(".donut-detail-box")).to_contain_text("里花在哪")
+        expect(p.locator(".donut-sub")).to_contain_text("%")
+        row.click()
+        expect(p.locator(".donut-detail-box")).to_have_count(0)
+        expect(p.locator(".donut-num")).to_have_text(total)
+        # 点圆环的一段也行
+        p.locator(".donut .seg").first.dispatch_event("click")
+        expect(p.locator(".legend-row.on")).to_have_count(1)
     p.get_by_role("link", name="月", exact=True).click()
     expect(p.get_by_role("img", name="花钱曲线")).to_be_visible()
     expect(p.locator(".advice")).to_contain_text("下个月可以试试")

@@ -1647,10 +1647,7 @@ function summaryView(q) {
         barChart(ws.days.map((x, i) => ({ label: `周${WEEKDAYS[i]}`, v: x.v, color: x.v > ws.perDay ? 'var(--amber)' : 'var(--accent)' })),
           { line: ws.perDay, lineLabel: `每天预算 ${money(ws.perDay)}`, title: '每天的生活花销' })),
       h('div', { class: 'card' }, h('h3', {}, '花在哪了'),
-        ws.st.total ? h('div', { class: 'donut-row' },
-          donut(GROUPS.map((g) => ({ name: g.name, v: ws.st.byGroup[g.id], color: g.color })), { center: money(ws.st.total), sub: '这周花销', title: '花在哪了' }),
-          h('div', { class: 'donut-legend' }, groups.map((g) => h('div', {},
-            h('span', {}, h('i', { style: `background:${g.color}` }), g.name), h('b', {}, money(ws.st.byGroup[g.id])), arrow(ws.st.byGroup[g.id], ws.prev.byGroup[g.id])))))
+        ws.st.total ? spendDonut(ws.st, groups, { sub: '这周花销', title: '花在哪了', extra: (g) => arrow(ws.st.byGroup[g.id], ws.prev.byGroup[g.id]) })
           : h('p', { class: 'muted small' }, '这周还没有花销。')),
       ws.top.length ? h('div', { class: 'card tx-list' }, h('h3', {}, '这周最大的几笔'), ws.top.map((t) => txRow(t))) : null);
   }
@@ -1760,9 +1757,7 @@ function yearView(d, year, head, seg, navRow) {
       barChart(ys.months.filter((m) => m.active).map((m) => ({ label: `${m.m}月`, v: Math.round(m.saved), color: m.saved >= 0 ? 'var(--sage)' : 'var(--danger)' })), { title: '每月存下' }),
       h('p', { class: 'muted small' }, '按自然月算；7、8 月没有收入，是负的很正常。')),
     h('div', { class: 'card' }, h('h3', {}, '钱花在哪了'),
-      h('div', { class: 'donut-row' },
-        donut(GROUPS.map((g) => ({ name: g.name, v: ys.st.byGroup[g.id], color: g.color })), { center: money(ys.st.total), sub: '这一年', title: '钱花在哪了' }),
-        h('div', { class: 'donut-legend' }, groups.map((g) => h('div', {}, h('span', {}, h('i', { style: `background:${g.color}` }), g.name), h('b', {}, money(ys.st.byGroup[g.id]))))))),
+      spendDonut(ys.st, groups, { sub: '这一年', title: '钱花在哪了' })),
     ys.cats.length ? h('div', { class: 'card' }, h('h3', {}, '花得最多的类别'),
       ys.cats.map(([id, v]) => h('div', { class: 'budget-row' },
         h('div', { class: 'budget-top' }, h('span', {}, catName(id)), h('span', { class: 'muted' }, money(v))),
@@ -2280,6 +2275,59 @@ async function aiConfig() {
   try { inv = JSON.parse(localStorage.getItem('inventory-settings')) || {}; } catch { /* 没有物品档案 */ }
   aiCache = (await read(gh)) || (await read(new GitHub({ token: settings.token, repo: inv.repo || 'ThreeLu/inventory-data' }))) || {};
   return aiCache;
+}
+
+// 花在哪了：圆环 + 每组一行。点圆环的一段或者一行：这一段突出、其他变淡，对应那一行亮一下，
+// 中间换成这一组的钱和占比，下面列出这一组里花在哪些类别。再点一下（或点空白）回到全部
+function spendDonut(st, groups, { sub, title, extra = () => null }) {
+  const d = store.data;
+  const ring = donut(groups.map((g) => ({ key: g.id, name: g.name, v: st.byGroup[g.id], color: g.color })), { center: money(st.total), sub, title });
+  ring.setAttribute('aria-label', `${title}，点一段看这一组`);
+  const num = ring.querySelector('.donut-num');
+  const subEl = ring.querySelector('.donut-sub');
+  const detail = h('div', { class: 'donut-detail', 'aria-live': 'polite' });
+  const rows = {};
+  let sel = null;
+  const pick = (id) => {
+    sel = sel === id ? null : id;
+    ring.classList.toggle('has-sel', Boolean(sel));
+    for (const c of ring.querySelectorAll('.seg')) c.classList.toggle('on', c.dataset.key === sel);
+    for (const [k, el] of Object.entries(rows)) {
+      el.classList.toggle('on', k === sel);
+      el.setAttribute('aria-pressed', String(k === sel));
+      el.classList.remove('glow');
+    }
+    if (!sel) {
+      num.textContent = money(st.total);
+      if (subEl) subEl.textContent = sub;
+      detail.replaceChildren();
+      return;
+    }
+    const g = groups.find((x) => x.id === sel);
+    const v = st.byGroup[sel];
+    num.textContent = money(v);
+    if (subEl) subEl.textContent = `${g.name} · ${st.total ? Math.round((v / st.total) * 100) : 0}%`;
+    void rows[sel].offsetWidth; // 重新触发动画
+    rows[sel].classList.add('glow');
+    const cats = Object.entries(st.byCat || {}).filter(([id]) => (category(d, id)?.group || 'daily') === sel).sort((a, b) => b[1].v - a[1].v);
+    const max = cats[0]?.[1].v || 1;
+    detail.replaceChildren(h('div', { class: 'donut-detail-box', style: `--c:${g.color}` },
+      h('div', { class: 'small muted' }, `${g.name}里花在哪`),
+      cats.length ? null : h('p', { class: 'muted small' }, '这段时间这一组没有花销。'),
+      cats.map(([id, c]) => h('div', { class: 'budget-row' },
+        h('div', { class: 'budget-top' }, h('span', {}, catName(id), h('span', { class: 'muted small' }, `　${c.n} 笔`)), h('span', { class: 'muted' }, money(c.v))),
+        bar(c.v / max, g.color)))));
+  };
+  ring.addEventListener('click', (e) => {
+    const key = e.target.closest?.('.seg')?.dataset.key;
+    pick(key || sel); // 点中间空白 = 收起
+  });
+  const legend = h('div', { class: 'donut-legend' }, groups.map((g) => {
+    rows[g.id] = h('button', { type: 'button', class: 'legend-row', style: `--c:${g.color}`, 'aria-pressed': 'false', onclick: () => pick(g.id) },
+      h('span', {}, h('i', { style: `background:${g.color}` }), g.name), h('b', {}, money(st.byGroup[g.id])), extra(g));
+    return rows[g.id];
+  }));
+  return h('div', {}, h('div', { class: 'donut-row' }, ring, legend), detail);
 }
 
 // ---------- 心愿单 ----------

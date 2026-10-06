@@ -20,14 +20,19 @@ export function weekOf(day) {
 export function rangeStats(data, from, to) {
   const tx = data.tx.filter((t) => t.date >= from && t.date <= to);
   const byGroup = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
+  const byCat = {}; // 类别 → { v, n }（点圆环时看这一组里花在哪）
   let income = 0;
   for (const t of tx) {
-    if (isSpend(t)) byGroup[groupOf(data, t)] += cny(t);
+    if (isSpend(t)) {
+      byGroup[groupOf(data, t)] += cny(t);
+      const c = (byCat[t.category || ''] ||= { v: 0, n: 0 });
+      c.v += cny(t); c.n += 1;
+    }
     else if (t.type === 'income') income += cny(t);
   }
   const total = Object.values(byGroup).reduce((a, b) => a + b, 0);
   const living = LIVING.reduce((s, g) => s + byGroup[g], 0);
-  return { tx, byGroup, income, total, living };
+  return { tx, byGroup, byCat, income, total, living };
 }
 
 // 每天的生活花销（吃饭 + 日常 + 自由钱）
