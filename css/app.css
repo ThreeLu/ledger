@@ -209,6 +209,7 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
   padding: 10px 16px; border-radius: 12px; background: var(--text); color: var(--bg); font-size: 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
 }
+.toast.raised { bottom: calc(144px + env(safe-area-inset-bottom)); }
 .toast.error { background: var(--danger); color: #fff; }
 .toast.undo { display: flex; align-items: center; gap: 14px; }
 .toast-undo { flex: none; min-height: 0; padding: 2px 0; border: 0; background: none; color: var(--accent-soft); font-weight: 700; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
@@ -574,3 +575,25 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .ring-in small { font-size: 9px; color: var(--muted); margin-top: 1px; }
 .health-tile.wide { grid-column: 1 / -1; }
 .health-tile.wide .tile-sub { -webkit-line-clamp: 3; }
+
+/* 首页「要做的事」：几件事合成一张卡，一件一行，细线隔开，不再各自上色叠起来 */
+.todo { padding: 4px 16px 6px; }
+.todo > h3 { margin: 12px 0 2px; }
+.todo-part { display: block; margin: 0; padding: 12px 0; border-top: 0.5px solid var(--line); border-radius: 0; background: none; box-shadow: none; }
+.todo > h3 + .todo-part { border-top: 0; }
+.todo-part.milestone { display: flex; background: none; }
+.todo-part.milestone .milestone-icon { width: 30px; height: 30px; border-radius: 15px; background: var(--accent-soft); color: var(--accent); }
+.todo-part.payday, .todo-part.favor-holiday { background: none; }
+.todo-part h3 { margin: 0 0 4px; font-size: 14px; }
+.todo-part.summary { padding: 12px 0; background: none; box-shadow: none; }
+.todo-part.summary .summary-title { font-size: 16px; }
+.todo-part.summary .summary-text { font-size: 14px; }
+.todo-part.summary .link { padding: 0; min-height: 28px; }
+.todo-part.token-banner { color: var(--danger); font-weight: 600; font-size: 15px; }
+.todo-more { display: block; margin: 0 auto 6px; }
+
+/* 一切正常时，结论是「还能花」卡片最上面一行小字 */
+.hero > .summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 0 0 12px; padding: 0 0 10px; border-radius: 0; background: none; box-shadow: none; border-bottom: 0.5px solid var(--line); }
+.hero > .summary .summary-title { font-size: 15px; }
+.hero > .summary .summary-text { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.summary.soft .summary-title { color: var(--amber); }

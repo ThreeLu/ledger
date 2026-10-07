@@ -812,7 +812,10 @@ export function health(data, today, rate = data.settings.usdRate) {
   }
 
   const worst = out.some((x) => x.level === 'bad') ? 'bad' : out.some((x) => x.level === 'warn') ? 'warn' : 'good';
-  return { period: p, stats: st, assets, items: out, level: worst, left, perDay: left / daysLeft, daysLeft };
+  // 单独某一组超了（整体还在预算里）：首页那句话不说「一切正常」，轻轻提一句
+  const overGroups = GROUPS.filter((g) => LIVING.includes(g.id) && data.budget?.[g.id] && st.spent[g.id] > data.budget[g.id] * part.factor)
+    .map((g) => ({ id: g.id, name: g.name, over: st.spent[g.id] - data.budget[g.id] * part.factor }));
+  return { period: p, stats: st, assets, items: out, level: worst, left, perDay: left / daysLeft, daysLeft, overGroups };
 }
 
 // 首页最上面那一句话
@@ -823,5 +826,9 @@ export function headline(hl) {
   if (warn.length) return { title: `有 ${warn.length} 件事留意一下`, text: warn[0].action || warn[0].text };
   const pace = hl.items.find((x) => x.key === 'pace');
   const how = pace.ratio < 0.9 ? '比计划慢一些' : '和计划差不多';
+  const over = hl.overGroups || [];
+  if (over.length) {
+    return { title: '整体还在计划里', text: `${over.map((g) => `${g.name}超了 ${money(g.over)}`).join('，')}，别的组省下的能补上。` };
+  }
   return { title: '一切正常 ✓', text: `这个月钱花得${how}，存钱进度正常，不需要做什么。` };
 }

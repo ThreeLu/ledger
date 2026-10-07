@@ -114,7 +114,7 @@ function milestoneCard() {
   const ok = () => save('里程碑：看到了', (data) => {
     data.milestones.seen = { ...(data.milestones.seen || {}), ...Object.fromEntries(fresh.map(([k]) => [k, true])) };
   }).then(render).catch(() => {});
-  return h('div', { class: 'card milestone' },
+  return h('div', { class: 'todo-part milestone' },
     h('div', { class: 'milestone-icon' }, icon('sparkle')),
     h('div', { class: 'grow' },
       fresh.map(([, x]) => h('b', { class: 'block' }, x.text)),
@@ -285,8 +285,10 @@ const curOf = (accId) => (isUsd(store.data, accId) ? '$' : '¥');
 const accName = (id) => account(store.data, id)?.name || '（账户已删除）';
 const catName = (id) => category(store.data, id)?.name || '未分类';
 
+// 一次只出一条提示：新的换掉旧的；底部有「撤销」时放在它上面，不压住
 function toast(message, kind = 'ok') {
-  const el = h('div', { class: `toast ${kind}` }, message);
+  for (const x of document.querySelectorAll('.toast:not(.undo)')) x.remove();
+  const el = h('div', { class: `toast ${kind}${document.querySelector('.toast.undo') ? ' raised' : ''}` }, message);
   document.body.append(el);
   setTimeout(() => el.remove(), kind === 'error' ? 6000 : 2500);
 }
@@ -316,7 +318,7 @@ async function save(message, fn, opts) {
 
 // 常用的操作不先问「确定吗」：直接做，底部提示几秒，点「撤销」改回去
 function undoToast(text, onUndo) {
-  for (const el of document.querySelectorAll('.toast.undo')) el.remove();
+  for (const el of document.querySelectorAll('.toast')) el.remove();
   const el = h('div', { class: 'toast undo', role: 'status' }, h('span', {}, text),
     h('button', { type: 'button', class: 'toast-undo', onclick: () => { el.remove(); onUndo(); } }, '撤销'));
   document.body.append(el);
@@ -460,7 +462,8 @@ function openExplain(x, hl) {
 }
 
 const HOME_HELP = [
-  ['最上面那句话', ['先说结论：一切正常、有事留意、还是有事要处理。要处理的时候会直接告诉你做什么。']],
+  ['一句结论', ['一切正常时，在「这个月还能花」最上面一行。有事留意或要处理时，放在下面的「要做的事」里，直接告诉你做什么，点「为什么」看解释。']],
+  ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里。事多时先露 3 件，点「还有 N 件」看全部。']],
   ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条是这个预算月过了多少天，竖线是钱用到哪了：竖线在紫色里面，说明花得比日子慢。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
   ['健康指标', ['每一格一个小圆环：绿 = 很好，黄 = 留意一下，红 = 需要做点什么。', '圆环有多满：安全垫按 3 个月算满，应急钱按底线算满，花钱节奏是生活预算用了多少（小白点是按日子该用到哪），本月存钱是离目标多近。其他的只看颜色。', '每一格都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
@@ -545,7 +548,7 @@ function paydayCard() {
     });
   };
   const skip = () => save('发钱日：这个月不用转生活费', (data) => { (data.payday[pd.p.start] ||= {}).noTransfer = true; }).then(render).catch(() => {});
-  return h('div', { class: 'card payday' },
+  return h('div', { class: 'todo-part payday' },
     h('h3', {}, pd.transfer?.summer ? '暑假生活费' : '发钱日'),
     pd.waiting.map((x) => h('div', { class: 'payday-row' },
       h('span', { class: 'grow' }, h('b', {}, `${x.plan.name}的 ${money(x.plan.amount)} 到了吗？`), x.plan.when ? h('span', { class: 'muted small' }, x.plan.when) : null),
@@ -567,8 +570,29 @@ function tokenNotice() {
   if (!exp) return null;
   const left = Math.round((new Date(exp.replace(/-/g, '/')) - new Date(today().replace(/-/g, '/'))) / 86400000);
   if (left > 14) return null;
-  return h('a', { class: 'banner warn token-banner', href: '/inventory/#/settings' },
+  return h('a', { class: 'todo-part token-banner', href: '/inventory/#/settings' },
     left < 0 ? 'GitHub 令牌已经过期了，账本和物品档案都打不开，点这里去换新的' : `GitHub 令牌还有 ${left} 天过期（账本和物品档案共用），点这里去续期`);
+}
+
+// 要做的事：要处理的指标、令牌、发钱日、节假日人情、里程碑合成一张卡（不再一张张叠在「还能花」上面）；先露 3 件，其余点开
+let todoMore = false;
+function todoCard(hl, hd) {
+  const first = hl.items.find((x) => x.level === 'bad') || hl.items.find((x) => x.level === 'warn');
+  const parts = [
+    first ? h('div', { class: `todo-part summary ${hl.level}` },
+      h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text),
+      h('button', { type: 'button', class: 'link small', onclick: () => openExplain(first, hl) }, '为什么 ›')) : null,
+    tokenNotice(),
+    favorHolidayCard(), // 假期只有几天，排在发钱日（整个月都在）前面
+    paydayCard(),
+    milestoneCard(),
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  const hidden = todoMore ? 0 : Math.max(0, parts.length - 3);
+  return h('div', { class: 'card todo' },
+    h('h3', {}, '要做的事'),
+    parts.slice(0, parts.length - hidden),
+    hidden ? h('button', { type: 'button', class: 'link small todo-more', onclick: () => { todoMore = true; render(); } }, `还有 ${hidden} 件`) : null);
 }
 
 function homeView() {
@@ -578,25 +602,26 @@ function homeView() {
   const p = hl.period;
   const st = hl.stats;
   const part = partial(d, p);
+  // 健康指标两列：单出来的最后一格占一整行，不留半行空
+  const tiles = hl.items.map((x) => healthTile(x, hl));
+  const narrow = tiles.filter((el) => !el.classList.contains('wide'));
+  if (narrow.length % 2) narrow[narrow.length - 1].classList.add('wide');
+  const advice = budgetAdvice(d, today(), usdRate()).items.length;
 
   const recent = [...d.tx].sort(txOrder).slice(0, 5);
   return h('div', {},
     homeHeader(p),
-    tokenNotice(),
-    h('div', { class: `summary ${hl.level}` }, h('div', { class: 'summary-title' }, hd.title), h('div', { class: 'summary-text' }, hd.text)),
-    milestoneCard(),
-    paydayCard(),
-    favorHolidayCard(),
-    socialCard({ compact: true }),
-    spendLeftCard(hl, st),
+    spendLeftCard(hl, st, hl.level === 'good' ? hd : null),
+    todoCard(hl, hd),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
     h('div', { class: 'section-title' }, '健康指标', h('span', { class: 'muted' }, ' · 点一下看解释')),
-    h('div', { class: 'health-grid' }, hl.items.map((x) => healthTile(x, hl))),
+    h('div', { class: 'health-grid' }, tiles),
     summaryLinks(p),
-    budgetAdvice(d, today(), usdRate()).items.length ? h('div', { class: 'group' }, cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)',
-      title: `预算有 ${budgetAdvice(d, today(), usdRate()).items.length} 条调整建议`, sub: '根据你最近几个月实际的花销' })) : null,
+    advice ? h('div', { class: 'group' }, cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)',
+      title: `预算有 ${advice} 条调整建议`, sub: '根据你最近几个月实际的花销' })) : null,
     flowCard(st, part),
     budgetCard(st, part),
+    socialCard({ compact: true }),
     recent.length ? [h('div', { class: 'section-title' }, '最近记的'), h('div', { class: 'card tx-list' }, recent.map((t) => txRow(t))),
       h('p', { class: 'center' }, h('a', { href: '#/list' }, '全部流水'))]
       : h('div', { class: 'card' }, h('p', {}, '还没有记账。点底部中间的 ＋ 记第一笔。')),
@@ -621,7 +646,8 @@ function homeHeader(p) {
 const cents = (n) => `${n < 0 ? '−' : ''}¥${Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // 这个月还能花：左边圆环是生活预算用了多少（超了变红），右边是精确的还能花多少；下面一条是预算月过了多少天，和圆环比一比快慢
-function spendLeftCard(hl, st) {
+// ok：一切正常时那句结论放在卡片最上面一行（有事要做时结论在「要做的事」里）
+function spendLeftCard(hl, st, ok = null) {
   const lb = hl.left + st.living;
   const used = lb > 0 ? Math.min(100, Math.max(0, (st.living / lb) * 100)) : 0;
   const over = hl.left < 0;
@@ -630,6 +656,7 @@ function spendLeftCard(hl, st) {
   const timePct = Math.min(100, (p.dayIndex / p.days) * 100);
   const [yuan, fen] = cents(Math.abs(hl.left)).replace('¥', '').split('.');
   return h('div', { class: 'card spend-left hero' },
+    ok ? h('div', { class: `summary ${hl.overGroups?.length ? 'soft' : 'good'}` }, h('span', { class: 'summary-title' }, ok.title), h('span', { class: 'summary-text' }, ok.text)) : null,
     h('div', { class: 'hero-top' },
       lb > 0 ? h('div', { class: `ring big${over ? ' over' : ''}`, style: `--v:${over ? 100 : used.toFixed(1)}%`, 'aria-label': `生活预算用了 ${Math.round(used)}%` },
         h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,
@@ -1789,7 +1816,7 @@ function favorHolidayCard() {
     const x = data.favors.find((y) => y.id === f.id);
     x[k] = hf.hol.key;
   }).then(render).catch(() => {});
-  return h('div', { class: 'card favor-holiday' },
+  return h('div', { class: 'todo-part favor-holiday' },
     h('h3', {}, holidayLine(hf.hol, t)),
     hf.ask.length ? h('p', { class: 'muted small' }, '还欠这些人情，这次还吗？') : null,
     hf.ask.map((f) => h('div', { class: 'favor-ask' },

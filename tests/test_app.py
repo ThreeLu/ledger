@@ -1350,6 +1350,25 @@ def _(c):
     expect(p.locator(".tx-list").first).to_contain_text("收到的红包礼金 · 小甲给的")
 
 
+@step("首页：还能花在最上面，要做的事合成一张卡，单独超支的组不说「一切正常」，健康指标不留半行")
+def _(c):
+    p = c.page
+    c.go("#/")
+    expect(p.locator(".hero")).to_be_visible()
+    # 「还能花」在「要做的事」前面
+    assert p.evaluate("() => { const t = document.querySelector('.todo'); return !t || !!(document.querySelector('.hero').compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING); }")
+    if p.locator(".todo").count():
+        expect(p.locator(".todo > h3")).to_have_text("要做的事")
+        assert p.locator(".todo > .todo-part").count() <= 3 or p.locator(".todo-more").count() == 0
+    expect(p.locator(".summary-title")).to_have_count(1)
+    # 健康指标两列：窄的格子是双数
+    assert p.locator(".health-tile:not(.wide)").count() % 2 == 0
+    hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [{ name: '日常', over: 540 }] }))""")
+    assert hd["title"] == "整体还在计划里" and "日常超了 ¥540" in hd["text"], hd
+    hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [] }))""")
+    assert hd["title"].startswith("一切正常"), hd
+
+
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")
 def _(c):
     p = c.page
