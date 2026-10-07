@@ -480,6 +480,41 @@ def _(c):
     c.go("#/summary")
     expect(p.get_by_role("img", name="每天的生活花销")).to_be_visible()
     expect(p.locator(".summary-head")).to_contain_text("这周")
+    # 最上面那张：大字花了多少、和计划比的标签和进度条、上周多少（先加两笔，看完还原）
+    d0 = c.data()
+    d = json.loads(json.dumps(d0))
+    food = next(x["id"] for x in d["categories"] if x.get("group") == "food" and x["kind"] == "expense")
+    acc = d["accounts"][0]["id"]
+    monday = date.today() - timedelta(days=date.today().weekday())
+    for i, (day, amt) in enumerate([(monday, 88), (monday - timedelta(days=3), 50)]):
+        d["tx"].append({"id": f"wk{i}", "type": "expense", "date": day.isoformat(), "account": acc, "amount": amt, "category": food, "note": "", "createdAt": f"{day.isoformat()}T12:00:00Z"})
+    try:
+        c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+        c.go("#/summary")
+        head = p.locator(".week-head")
+        expect(head.locator(".big-num")).to_have_text(re.compile(r"^¥[\d,]+$"))
+        expect(head.locator(".wh-tag")).to_have_text(re.compile("节奏正常|花得有点快|下周收一收"))
+        expect(head.locator(".time-legend")).to_contain_text("计划 ¥")
+        expect(head.locator(".hero-foot")).to_contain_text("上周 ¥")
+        head.screenshot(path=str(ART / "week-head.png"))
+        # 月总结最上面也是一张卡：存下多少、收入 / 花了 / 其中生活、生活预算进度条、建议
+        inc = next(x["id"] for x in d["categories"] if x["kind"] == "income")
+        d["tx"].append({"id": "wk-in", "type": "income", "date": TODAY, "account": acc, "amount": 1000, "category": inc, "note": "", "createdAt": f"{TODAY}T12:00:00Z"})
+        c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+        c.go("#/summary?mode=month")
+        p.reload()  # 只换了 # 后面，要刷新才读到刚写的数据
+        head = p.locator(".week-head")
+        expect(head).to_contain_text(re.compile("这个月存下|这个月比收入多花了"))
+        expect(head.locator(".mh-stats")).to_contain_text("收入")
+        expect(head.locator(".time-legend")).to_contain_text("生活预算 ¥")
+        expect(head.locator(".advice")).to_contain_text("下个月可以试试")
+        head.screenshot(path=str(ART / "month-head.png"))
+    finally:
+        c.data()  # 等网页把要上传的传完，再还原
+        c.repo.external_write("finance.json", json.dumps(d0, ensure_ascii=False).encode())
+        c.go("#/summary")
+        p.reload()
+    assert not any(t["id"].startswith("wk") for t in c.tx())
     if c.tx():
         expect(p.get_by_role("img", name="花在哪了")).to_be_visible()
     if p.locator(".legend-row").count():

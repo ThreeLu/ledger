@@ -54,19 +54,25 @@ export function dailyBudget(data, p) {
   return part.days ? (livingBudget(data) * part.factor) / part.days : 0;
 }
 
-export function weekSummary(data, day) {
+export function weekSummary(data, day, now = ymd(new Date())) {
   const w = weekOf(day);
   const st = rangeStats(data, w.start, w.end);
   const prevW = weekOf(addDays(w.start, -1));
   const prev = rangeStats(data, prevW.start, prevW.end);
   const perDay = dailyBudget(data, periodFor(data, w.start));
   // 开始记账之前的那几天不算计划（第一周只算记账以后的天数）
-  const tracked = Array.from({ length: 7 }, (_, i) => addDays(w.start, i)).filter((x) => !data.openingDate || x >= data.openingDate).length;
-  const plan = perDay * tracked;
+  const counted = (x) => !data.openingDate || x >= data.openingDate;
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(w.start, i));
+  const plan = perDay * weekDays.filter(counted).length;
+  // 这周还没过完时，按「到今天该花多少」看节奏
+  const ongoing = w.start <= now && now < w.end;
+  const soFar = ongoing ? perDay * weekDays.filter((x) => counted(x) && x <= now).length : plan;
   const diff = st.living - plan;
+  const pace = st.living <= soFar * 1.1 ? 'good' : 'warn';
   const headline = !st.total ? '这周还没有花销记录。'
-    : `这周生活花了 ${money(st.living)}，${Math.abs(diff) < plan * 0.05 ? '和计划差不多' : diff < 0 ? `比计划少 ${money(-diff)}` : `比计划多 ${money(diff)}`}${diff <= plan * 0.1 ? '，节奏正常' : '，下周稍微收一收'}。`;
-  return { ...w, st, prev, perDay, plan, headline, days: dailyLiving(data, w.start, 7), top: topSpends(data, w.start, w.end), prevLabel: prevW.label };
+    : ongoing ? `这周生活花了 ${money(st.living)}，${diff < 0 ? `还能花 ${money(-diff)}` : `超了 ${money(diff)}`}`
+      : `这周生活花了 ${money(st.living)}，${Math.abs(diff) < plan * 0.05 ? '和计划差不多' : diff < 0 ? `比计划少 ${money(-diff)}` : `比计划多 ${money(diff)}`}`;
+  return { ...w, st, prev, perDay, plan, soFar, ongoing, diff, pace, headline, days: dailyLiving(data, w.start, 7), top: topSpends(data, w.start, w.end), prevLabel: prevW.label };
 }
 
 // 预算月里生活花销的累计曲线和「按计划该花多少」的直线
@@ -124,7 +130,7 @@ export function advice(data, p, st, prevSt) {
   return '保持每天记账的习惯，下个月的数据会更准，建议也会更具体。';
 }
 
-export function monthSummary(data, day, rate) {
+export function monthSummary(data, day, rate, now = ymd(new Date())) {
   const p = periodFor(data, day);
   const st = periodStats(data, p);
   const prevP = shiftPeriod(data, p, -1);
@@ -133,9 +139,14 @@ export function monthSummary(data, day, rate) {
   const lb = livingBudget(data) * part.factor;
   const headline = !st.total && !st.income ? '这个预算月还没有记录。'
     : `收入 ${money(st.income)}，花了 ${money(st.total)}${st.income ? `，存下 ${money(st.income - st.total)}` : ''}。生活花销${st.living <= lb ? `在预算内（${money(st.living)} / ${money(lb)}）` : `超了 ${money(st.living - lb)}`}。`;
+  const curve = cumulative(data, p);
+  // 这个预算月还没过完时，按「到今天该花多少」看生活花销的节奏
+  const ongoing = p.start <= now && now < p.end;
+  const soFar = ongoing ? (curve.find((x) => x.day === now)?.planned ?? lb) : lb;
+  const pace = st.living <= soFar * 1.1 ? 'good' : 'warn';
   return {
-    p, st, prevSt, part, headline,
-    curve: cumulative(data, p),
+    p, st, prevSt, part, headline, lb, ongoing, soFar, pace,
+    curve,
     hist: history(data, p, 6, rate),
     owedStart: owedAt(data, addDays(p.start, -1)),
     owedEnd: owedAt(data, p.end),

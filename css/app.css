@@ -328,6 +328,20 @@ button.chip:not(.on):not(.quick-chip) { background: var(--chip); color: var(--te
 .donut-legend > div > :last-child { grid-column: 1 / -1; }
 .donut-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
 .summary-head p { margin: 0; font-size: 16px; line-height: 1.65; }
+/* 周总结最上面那张 */
+.wh-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.week-head .big-num { font-size: 34px; }
+.wh-tag { flex: none; margin-top: 2px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+.wh-tag.good { background: color-mix(in srgb, var(--sage) 14%, var(--card)); color: var(--sage); }
+.wh-tag.warn { background: color-mix(in srgb, var(--amber) 14%, var(--card)); color: var(--amber); }
+.week-head .time-bar { margin-top: 12px; }
+.week-head .wh-fill { background: var(--accent); }
+.week-head .wh-fill.over { background: var(--amber); }
+.wh-over { color: var(--amber); }
+.mh-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.mh-stats > div { display: flex; flex-direction: column; gap: 1px; }
+.mh-stats b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.week-head .advice { margin-top: 14px; }
 .advice { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); font-size: 15px; line-height: 1.6; }
 .good-text { color: var(--good) !important; }
 a.seg { display: flex; align-items: center; justify-content: center; text-decoration: none; }

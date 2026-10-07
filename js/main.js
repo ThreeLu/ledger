@@ -1874,9 +1874,67 @@ function reconcileView() {
 
 // ---------- 总结 ----------
 
+// 周总结最上面：这周花了多少（大字）、和计划比的进度条、上周多少
+function weekHead(ws) {
+  if (!ws.st.total) return h('div', { class: 'card summary-head' }, h('p', {}, ws.headline));
+  const { st, plan, diff } = ws;
+  const used = plan > 0 ? st.living / plan : 0;
+  const over = diff > 0;
+  const tag = ws.pace === 'good' ? '节奏正常' : ws.ongoing ? '花得有点快' : '下周收一收';
+  const left = ws.ongoing ? (over ? `超了 ${money(diff)}` : `还能花 ${money(-diff)}`)
+    : Math.abs(diff) < plan * 0.05 ? '和计划差不多' : over ? `比计划多 ${money(diff)}` : `比计划少 ${money(-diff)}`;
+  const prevDiff = st.living - ws.prev.living;
+  return h('div', { class: 'card summary-head week-head', 'aria-label': ws.headline },
+    h('div', { class: 'wh-top' },
+      h('div', {},
+        h('div', { class: 'muted small' }, '这周生活花了'),
+        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(st.living).toLocaleString('zh-CN'))),
+      h('span', { class: `wh-tag ${ws.pace}` }, tag)),
+    plan > 0 ? h('div', { class: 'time-bar' },
+      h('div', { class: 'time-track', 'aria-label': `用了这周计划的 ${Math.round(used * 100)}%` },
+        h('span', { class: `time-fill wh-fill${over ? ' over' : ''}`, style: `width:${Math.min(100, used * 100).toFixed(1)}%` }),
+        ws.ongoing ? h('span', { class: 'spend-mark', style: `left:${Math.min(100, (ws.soFar / plan) * 100).toFixed(1)}%`, title: '按日子到今天该花到这' }) : null),
+      h('div', { class: 'time-legend small' },
+        h('span', { class: over ? 'wh-over' : '' }, left),
+        h('span', { class: 'muted' }, `计划 ${money(plan)}`))) : null,
+    ws.prev.living ? h('div', { class: 'hero-foot muted small' },
+      `上周 ${money(ws.prev.living)}`, Math.abs(prevDiff) >= 1 ? ` · 这周${prevDiff > 0 ? '多' : '少'}花 ${money(Math.abs(prevDiff))}` : ' · 和上周一样') : null);
+}
+
+// 月总结最上面：存下多少（没收入时是花了多少）、收入和花销、生活预算的进度条、一条建议
+function monthHead(ms) {
+  const { st, lb } = ms;
+  const advice = h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), ms.advice);
+  if (!st.total && !st.income) return h('div', { class: 'card summary-head' }, h('p', {}, ms.headline), advice);
+  const saved = st.income - st.total;
+  const [label, big] = !st.income ? ['这个月花了', st.total] : saved >= 0 ? ['这个月存下', saved] : ['这个月比收入多花了', -saved];
+  const used = lb > 0 ? st.living / lb : 0;
+  const over = st.living > lb;
+  const tag = ms.pace === 'good' ? (ms.ongoing ? '节奏正常' : '生活在预算内') : ms.ongoing ? '花得有点快' : '生活超了一点';
+  const left = over ? `生活超了 ${money(st.living - lb)}` : ms.ongoing ? `生活还能花 ${money(lb - st.living)}` : `生活省下 ${money(lb - st.living)}`;
+  return h('div', { class: 'card summary-head week-head', 'aria-label': ms.headline },
+    h('div', { class: 'wh-top' },
+      h('div', {},
+        h('div', { class: 'muted small' }, label),
+        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(big).toLocaleString('zh-CN'))),
+      lb > 0 ? h('span', { class: `wh-tag ${ms.pace}` }, tag) : null),
+    st.income ? h('div', { class: 'mh-stats' },
+      h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
+      h('div', {}, h('span', { class: 'muted small' }, '花了'), h('b', {}, money(st.total))),
+      h('div', {}, h('span', { class: 'muted small' }, '其中生活'), h('b', {}, money(st.living)))) : null,
+    lb > 0 ? h('div', { class: 'time-bar' },
+      h('div', { class: 'time-track', 'aria-label': `生活预算用了 ${Math.round(used * 100)}%` },
+        h('span', { class: `time-fill wh-fill${over ? ' over' : ''}`, style: `width:${Math.min(100, used * 100).toFixed(1)}%` }),
+        ms.ongoing ? h('span', { class: 'spend-mark', style: `left:${Math.min(100, (ms.soFar / lb) * 100).toFixed(1)}%`, title: '按日子到今天该花到这' }) : null),
+      h('div', { class: 'time-legend small' },
+        h('span', { class: over ? 'wh-over' : '' }, left),
+        h('span', { class: 'muted' }, `生活预算 ${money(lb)}`))) : null,
+    advice);
+}
+
 const SUMMARY_HELP = [
-  ['周总结', ['一周从周一到周日。柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
-  ['月总结', ['按预算月算（和发钱对齐）。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
+  ['周总结', ['一周从周一到周日。最上面是这周生活花了多少：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
+  ['月总结', ['按预算月算（和发钱对齐）。', '最上面是这个月存下多少（暑假没收入时是花了多少），进度条是生活预算用了多少；这个月还没过完时，竖线是按日子到今天该花到哪。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
   ['月度小信', ['每个预算月结束后，打开那个月的总结，DeepSeek 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
   ['年总结', ['按自然年：一年存了多少、储蓄率、总资产多了多少、每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
@@ -1906,7 +1964,7 @@ function summaryView(q) {
     };
     return h('div', {}, head, seg,
       navRow(ws.label, ws.end >= today() && ws.start <= today() ? '这周' : null, addDays(ws.start, -1), addDays(ws.end, 1)),
-      h('div', { class: 'card summary-head' }, h('p', {}, ws.headline)),
+      weekHead(ws),
       h('div', { class: 'card' }, h('h3', {}, '每天的生活花销'),
         barChart(ws.days.map((x, i) => ({ label: `周${WEEKDAYS[i]}`, v: x.v, color: x.v > ws.perDay ? 'var(--amber)' : 'var(--accent)' })),
           { line: ws.perDay, lineLabel: `每天预算 ${money(ws.perDay)}`, title: '每天的生活花销' })),
@@ -1925,8 +1983,7 @@ function summaryView(q) {
   const hist = ms.hist;
   return h('div', {}, head, seg,
     navRow(p.label, p.start <= today() && p.end >= today() ? '这个预算月' : null, addDays(p.start, -1), p.next),
-    h('div', { class: 'card summary-head' }, h('p', {}, ms.headline),
-      h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), ms.advice)),
+    monthHead(ms),
     letterCard(p),
     flowCard(ms.st, ms.part, '钱怎么分的'),
     budgetAdvice(d, today(), usdRate()).items.length ? h('a', { class: 'card link-card', href: '#/budget' }, `预算有调整建议，去看看 →`) : null,
