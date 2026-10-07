@@ -1360,6 +1360,8 @@ def _(c):
     expect(p.locator(".hero .big-num")).to_have_text(re.compile(r"^¥[\d,]+\.\d\d$"))  # 精确到分
     expect(p.locator(".hero .time-legend")).to_contain_text("天")
     expect(p.locator(".health-tile").first.locator(".ring.mini")).to_be_visible()
+    if p.locator(".health-tile", has_text="即将扣款").count():
+        expect(p.locator(".health-tile", has_text="即将扣款")).to_have_class(re.compile("wide"))
     expect(p.locator(".whisper")).to_have_count(1)
     p.wait_for_timeout(600)
     p.screenshot(path=ART / "look-home.png", full_page=True)
