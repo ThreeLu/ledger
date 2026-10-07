@@ -650,7 +650,7 @@ const LEVEL_COLOR = { good: 'var(--sage)', warn: 'var(--amber)', bad: 'var(--dan
 function healthTile(x, hl) {
   const g = x.gauge == null ? 1 : x.gauge;
   const short = x.short ?? (x.level === 'good' ? '✓' : '!');
-  return h('button', { type: 'button', class: `health-tile ${x.level}${x.key === 'charges' ? ' wide' : ''}`, // 即将扣款字多，占一整行 onclick: () => openExplain(x, hl), 'aria-label': `${x.name}：${LEVEL_TEXT[x.level]}，${x.text}` },
+  return h('button', { type: 'button', class: `health-tile ${x.level}${x.key === 'charges' ? ' wide' : ''}`, /* 即将扣款字多，占一整行 */ onclick: () => openExplain(x, hl), 'aria-label': `${x.name}：${LEVEL_TEXT[x.level]}，${x.text}` },
     h('span', { class: `ring mini${x.gauge == null ? ' solid' : ''}`, style: `--v:${(g * 100).toFixed(1)}%;--c:${LEVEL_COLOR[x.level]}` },
       x.mark != null ? h('i', { class: 'ring-mark', style: `--m:${(x.mark * 360).toFixed(1)}deg` }) : null,
       h('span', { class: 'ring-in' }, h('b', { class: String(short).length > 4 ? 'long' : '' }, short), x.unit && x.short != null ? h('small', {}, x.unit) : null)),
