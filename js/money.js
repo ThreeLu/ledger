@@ -6,7 +6,8 @@
 // - 预算月从每月 periodStartDay 号开始（可以和发钱的日子对齐）。
 // - 「不占预算」组（手续费等）算花销、影响存钱，但不占吃饭 / 日常 / 自由钱 / 形象 / 订阅的预算。
 
-import { holidayAround } from './cal.js';
+import { holidayAround, nextHoliday } from './cal.js';
+import { FAVOR_BIG } from './renqing.js';
 
 export const GROUPS = [
   { id: 'food', name: '吃饭', color: 'var(--amber)' },
@@ -98,7 +99,8 @@ export function migrate(data) {
   data.tx ||= [];
   data.claims ||= []; // 垫付报销：{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind, submitted }] }
   data.people ||= []; // 人情账：{ id, name, archived? }（名单由生活网站「身边的人」管，同一个 id；archived 的不再出现在选人里）
-  data.favors ||= []; // 不是钱的人情：{ id, person, dir: 'owe' 我欠他 | 'owed' 他欠我, text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan? }
+  data.favors ||= []; // 不是钱的人情：{ id, person, dir: 'owe' 我欠他 | 'owed' 他欠我, text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan?,
+  //   cost?（他为我花了多少）, estimate?（预计要准备多少）, due?（有日子的，比如婚礼）, kind?: 'date', dateId?（生活网站「重要的日子」来的） }
   data.reconciled ||= {}; // 每个预算月对过账没有：{ 预算月开始日: 对账日 }
   // 类别升级：按 EXPENSE_CATEGORIES 改名、分小组、补新的；老类别藏起来（以前的账照样显示）
   if ((data.categoryVersion || 1) < CATEGORY_VERSION) {
@@ -347,9 +349,21 @@ export const openFavors = (data, dir = null) => data.favors.filter((f) => f.stat
 export function holidayFavors(data, today) {
   const hol = holidayAround(today);
   if (!hol) return null;
-  const list = openFavors(data, 'owe').filter((f) => f.skip !== hol.key && f.date <= today);
+  const list = openFavors(data, 'owe').filter((f) => !f.due && f.skip !== hol.key && f.date <= today); // 有日子的（婚礼）到日子再说，节假日不问
   if (!list.length) return null;
   return { hol, ask: list.filter((f) => f.plan !== hol.key), plan: list.filter((f) => f.plan === hol.key) };
+}
+
+// 要准备的人情钱：有日子的按那天，没日子的按下一个假期；过了日子还没还的算今天。300 以上是大额（自动变成存款目标），以下从日常里出
+export function favorDue(f, today) {
+  const due = f.due || nextHoliday(today)?.start || today;
+  return due < today ? today : due;
+}
+export function socialPlan(data, today) {
+  const name = (id) => data.people.find((p) => p.id === id)?.name || '某人';
+  return openFavors(data, 'owe').filter((f) => Number(f.estimate) > 0)
+    .map((f) => ({ f, name: name(f.person), due: favorDue(f, today), amount: Number(f.estimate), big: Number(f.estimate) >= FAVOR_BIG }))
+    .sort((a, b) => a.due.localeCompare(b.due));
 }
 
 export const CLAIM_REMIND_DAYS = 30; // 垫付多久没报回来提醒
@@ -502,7 +516,10 @@ export function goalStatus(data, today) {
   const bigSaved = data.wishes.filter((w) => w.status === 'open').reduce((s, w) => s + (big.saved[w.id] || 0), 0);
   let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0) - bigSaved);
   const sg = summerGoal(data, today);
-  return [...(sg ? [sg] : []), ...data.goals].map((g) => {
+  // 大额人情（婚礼随礼……）自动变成目标，排在暑假生活费后面
+  const fg = socialPlan(data, today).filter((x) => x.big).map((x) => ({ id: `auto-favor-${x.f.id}`, auto: true, favor: x.f.id, name: `人情：${x.name} · ${x.f.text}`, target: x.amount, by: x.due,
+    note: x.f.due ? '到那天要用' : '下一个假期还', autoText: '从人情账里来的：预计 300 以上的人情自动算成目标。还上了（记那笔钱时选上这个人情）就没了。' }));
+  return [...(sg ? [sg] : []), ...fg, ...data.goals].map((g) => {
     const have = Math.min(pool, Number(g.target) || 0);
     pool -= have;
     const months = g.by ? Math.max(1, Math.round(daysBetween(today, g.by) / 30.4)) : null;

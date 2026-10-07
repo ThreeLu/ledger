@@ -1184,6 +1184,9 @@ def fake_externals(page):
         system = body["messages"][0]["content"]
         LAST_AI.clear()
         LAST_AI.append(body)
+        if "估一下" in system:
+            ans = {"estimate": 150, "why": "编的估法"}
+            return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
         if "理财小伙伴" in system:
             ans = {"letter": "这个月你把吃饭控制得很好，比预算少花了一些。下个月试试每周日看一眼周总结。"}
             return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
@@ -1287,6 +1290,49 @@ def _(c):
     f = next(x for x in c.data()["favors"] if x["id"] == f2["id"])
     assert f["status"] == "done" and f["doneNote"] == "帮他占了座", f
     p.clock.set_fixed_time(date.today().isoformat() + "T12:00:00")
+    # 要准备多少钱：DeepSeek 估一个；300 以上自动变成存款目标；买不买也算进去
+    c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
+    c.go("#/people")
+    p.reload()
+    p.get_by_role("button", name="记一个人情").click()
+    sheet.get_by_label("和谁", exact=True).fill("乙")
+    sheet.get_by_role("option", name="小乙").click()
+    sheet.get_by_label("什么事").fill("请我吃火锅")
+    sheet.get_by_label("他为我花了多少").fill("120")
+    sheet.get_by_role("button", name="估一个").click()
+    expect(sheet.get_by_label("预计要准备多少")).to_have_value("150")
+    expect(sheet.get_by_text("DeepSeek：编的估法")).to_be_visible()
+    assert "他为我花了大约 ¥120" in json.dumps(LAST_AI[-1], ensure_ascii=False)
+    sheet.get_by_role("button", name="记好了").click()
+    for _ in range(50):
+        if any(x["text"] == "请我吃火锅" for x in c.data()["favors"]):
+            break
+        p.wait_for_timeout(200)
+    f3 = next(x for x in c.data()["favors"] if x["text"] == "请我吃火锅")
+    assert f3["cost"] == 120 and f3["estimate"] == 150, f3
+    p.get_by_role("button", name="记一个人情").click()
+    sheet.get_by_label("和谁", exact=True).fill("甲")
+    sheet.get_by_role("option", name="小甲").click()
+    sheet.get_by_label("什么事").fill("婚礼随礼")
+    sheet.get_by_label("预计要准备多少").fill("500")
+    sheet.get_by_role("button", name="记好了").click()
+    plan = p.locator(".social-plan")
+    expect(plan).to_contain_text("日常里出")
+    expect(plan).to_contain_text("小乙 · 请我吃火锅")
+    expect(plan).to_contain_text("大额，存款目标")
+    c.go("#/goals")
+    expect(p.locator(".card.goal", has_text="人情：小甲 · 婚礼随礼")).to_contain_text("¥500")
+    c.go("#/")
+    expect(p.locator(".social-plan")).to_contain_text("¥150")
+    c.go("#/ask")
+    p.get_by_label("想问什么").fill("想买个 100 的台灯")
+    p.get_by_role("button", name="发送").click()
+    for _ in range(50):
+        if LAST_AI and "理财小助手" in LAST_AI[-1]["messages"][0]["content"]:
+            break
+        p.wait_for_timeout(200)
+    sent = json.dumps(LAST_AI[-1], ensure_ascii=False)
+    assert "要准备的人情钱" in sent and "婚礼随礼" in sent and "人情（随礼）要用" in sent, sent[:3000]
     # 礼尚往来：收到的红包礼金，选谁给的
     c.go("#/add")
     p.locator(".segmented").get_by_role("button", name="收入", exact=True).click()

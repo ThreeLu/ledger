@@ -5,10 +5,11 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
+import { FAVOR_BIG, estimatePrompt, cleanEstimate } from './renqing.js';
 import { askJson } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { weekOf, weekSummary, monthSummary, yearSummary } from './summary.js';
@@ -586,6 +587,7 @@ function homeView() {
     milestoneCard(),
     paydayCard(),
     favorHolidayCard(),
+    socialCard({ compact: true }),
     spendLeftCard(hl, st),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
     h('div', { class: 'section-title' }, '健康指标（点开看解释）'),
@@ -1538,6 +1540,7 @@ const PEOPLE_HELP = [
   ['怎么记钱', ['吃饭 AA：在「记一笔」填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，其他人的记成欠你的（不算花销）。', '别人帮你付：在「记一笔」选「别人帮我付的」。算你的花销，但账户没动。', '还钱：点这个人，「他还我钱」或「我还他钱」。钱到了哪张卡、从哪张卡出都行，和当初是哪张卡没关系。']],
   ['怎么记人情', ['点「记一个人情」：选人、谁欠谁、什么事。', '还人情：记聚餐请客、礼物、红包时，下面可以选「还的是哪个人情」，记好了就算还上了。没花钱的，在这个人的页面点「还了」。', '生活网站「身边的人」里也能记，记到的是同一份。']],
   ['提醒', [`钱：别人欠你、你欠别人超过 ${PERSON_REMIND_DAYS} 天，首页会提醒。`, '人情：平时不催。只在元旦、春节、清明、劳动节、端午、中秋、国庆放假前一天起，首页问一句这次还不还；「这次不还」就等下个假期再问。周末不算。']],
+  ['要准备的钱', ['欠的人情可以写「他为我花了多少」和「还的时候大概要准备多少」，点「估一个」让 DeepSeek 按以前来回的钱给个参考。', `${FAVOR_BIG} 以下的从日常里出，按月列在上面；${FAVOR_BIG} 以上的（比如婚礼随礼）自动变成存款目标，到日子前留好。`, '「买不买」也会把这些钱算进去。']],
   ['礼尚往来', ['记礼物、红包、聚餐请客时，可以选「给谁的」；收到红包礼金记收入，类别选「收到的红包礼金」，选「谁给的」。', '点开一个人能看到你们之间来回送过什么、随过多少。生活网站「身边的人」里也能看到。']],
   ['名单', ['人的名字、分组在生活网站「身边的人」里管，两边是同一份名单。']],
 ];
@@ -1565,8 +1568,23 @@ function favorSheet({ person = '', favor = null } = {}) {
   const st = { person: favor?.person || person, dir: favor?.dir || 'owe' };
   const text = h('input', { placeholder: '什么事，比如 帮我改论文', 'aria-label': '什么事', value: favor?.text || '' });
   const date = h('input', { type: 'date', 'aria-label': '哪天', value: favor?.date || today() });
+  const cost = h('input', { inputmode: 'decimal', placeholder: '不知道就空着', 'aria-label': '他为我花了多少', value: favor?.cost ? String(favor.cost) : '' });
+  const est = h('input', { inputmode: 'decimal', placeholder: '大概要准备多少', 'aria-label': '预计要准备多少', value: favor?.estimate ? String(favor.estimate) : '' });
+  const why = h('p', { class: 'muted small' });
   const box = h('div', { class: 'form' });
   const fresh = [];
+  const guess = async (btn) => {
+    if (!st.person) { toast('先选是谁', 'error'); return; }
+    if (!text.value.trim()) { toast('先写是什么事', 'error'); return; }
+    btn.disabled = true; btn.textContent = '正在估……';
+    try {
+      const p = [...d.people, ...fresh].find((x) => x.id === st.person);
+      const r = await estimateFavor(p, { text: text.value.trim(), dir: st.dir, cost: Number(cost.value) || 0 });
+      if (r.estimate) est.value = String(r.estimate);
+      why.textContent = r.why ? `DeepSeek：${r.why}` : '';
+    } catch (e) { toast(e.message, 'error'); }
+    btn.disabled = false; btn.textContent = '估一个';
+  };
   const draw = () => {
     box.replaceChildren(
       h('div', { class: 'label-sm' }, '和谁'),
@@ -1576,7 +1594,10 @@ function favorSheet({ person = '', favor = null } = {}) {
       h('div', { class: 'chips', role: 'group', 'aria-label': '谁欠谁' }, Object.entries(FAVOR_DIR).map(([k, t]) =>
         h('button', { type: 'button', class: `chip${st.dir === k ? ' on' : ''}`, 'aria-pressed': String(st.dir === k), onclick: () => { st.dir = k; draw(); } }, t))),
       h('label', { class: 'form-label' }, '什么事', text),
-      h('label', { class: 'form-label' }, '哪天', date));
+      h('label', { class: 'form-label' }, '哪天', date),
+      st.dir === 'owe' ? h('div', { class: 'form' }, h('label', { class: 'form-label' }, '他为我花了多少（选填）', cost),
+        h('label', { class: 'form-label' }, '还的时候大概要准备多少（选填）', h('div', { class: 'inline-add' }, est, h('button', { type: 'button', class: 'small secondary', onclick: (e) => guess(e.currentTarget) }, '估一个'))), why,
+        h('p', { class: 'muted small' }, `${FAVOR_BIG} 以上的会自动算进存款目标，以下的从日常里出。`)) : '');
   };
   draw();
   openSheet({
@@ -1585,11 +1606,15 @@ function favorSheet({ person = '', favor = null } = {}) {
       if (!st.person) { toast('选一下是谁', 'error'); return false; }
       if (!text.value.trim()) { toast('写一下是什么事', 'error'); return false; }
       const rec = { person: st.person, dir: st.dir, text: text.value.trim(), date: date.value || today() };
+      const c = Number(cost.value.replace(/[，,\s¥]/g, '')); const e = Number(est.value.replace(/[，,\s¥]/g, ''));
       try {
         await save(`人情：${[...d.people, ...fresh].find((p) => p.id === st.person)?.name || ''} ${FAVOR_DIR[st.dir]}`, (data) => {
           for (const p of fresh) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
-          if (favor) Object.assign(data.favors.find((f) => f.id === favor.id), rec);
-          else data.favors.push({ id: newId('f'), ...rec, createdAt: new Date().toISOString(), status: 'open' });
+          let x = favor && data.favors.find((f) => f.id === favor.id);
+          if (x) Object.assign(x, rec);
+          else data.favors.push(x = { id: newId('f'), ...rec, createdAt: new Date().toISOString(), status: 'open' });
+          if (st.dir === 'owe' && c > 0) x.cost = round2(c); else delete x.cost;
+          if (st.dir === 'owe' && e > 0) x.estimate = round2(e); else delete x.estimate;
         });
       } catch { return false; }
       render();
@@ -1621,7 +1646,7 @@ function favorRow(f, { withName = false } = {}) {
     h('span', { class: `favor-dir ${f.dir}` }, f.dir === 'owe' ? '欠他' : '欠我'),
     h('button', { type: 'button', class: 'grow favor-text', onclick: () => favorSheet({ favor: f }) },
       withName ? h('b', {}, `${personName(f.person)} · `) : null, f.text,
-      h('span', { class: 'muted small block' }, [md(f.date), how].filter(Boolean).join(' · '))),
+      h('span', { class: 'muted small block' }, [md(f.date), f.cost ? `${f.dir === 'owe' ? '他' : '你'}花了 ${money(f.cost)}` : null, !done && f.estimate ? `预计要准备 ${money(f.estimate)}${f.estimate >= FAVOR_BIG ? '（存款目标）' : ''} · ${f.due ? `${md(f.due)}要用` : `${md(favorDue(f, today()))}前后`}` : null, how].filter(Boolean).join(' · '))),
     done ? null : h('button', { type: 'button', class: 'link small', onclick: () => favorDoneSheet(f) }, '还了'));
 }
 
@@ -1644,6 +1669,7 @@ function peopleView() {
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '别人一共欠你'), h('div', { class: 'big-num' }, money(list.reduce((s, x) => s + Math.max(0, x.net), 0))),
       rc.iOwe ? h('div', { class: 'small warn-text' }, `你欠别人 ${money(rc.iOwe)}`) : h('div', { class: 'muted small' }, '你不欠谁钱')),
+    socialCard(),
     favorsCard(open.filter((f) => f.dir === 'owe'), '我欠的人情', { withName: true }),
     favorsCard(open.filter((f) => f.dir === 'owed'), '别人欠我的人情', { withName: true }),
     h('p', { class: 'center' }, h('button', { class: 'secondary', onclick: () => favorSheet() }, '记一个人情')),
@@ -1691,6 +1717,42 @@ function personView(id) {
     giftsWith(d, id).length ? [h('div', { class: 'section-title' }, '礼尚往来'), h('div', { class: 'card tx-list' }, giftsWith(d, id).sort(txOrder).map((t) => txRow(t)))] : null,
     ps.tx.length ? [h('div', { class: 'section-title' }, '钱'), h('div', { class: 'card tx-list' }, [...ps.tx].sort(txOrder).map((t) => txRow(t, txActions(t))))]
       : !favors.length ? h('p', { class: 'center' }, h('button', { class: 'link danger-text small', onclick: remove }, '删掉这个人')) : null);
+}
+
+// 估一个要准备多少：带上和这个人以前来回的钱
+async function estimateFavor(p, f) {
+  const d = store.data;
+  const history = [
+    ...giftsWith(d, p.id).map((t) => `${t.date} ${t.type === 'income' ? '他给我' : '我给他'} ${catName(t.category)} ¥${cny(t)}`),
+    ...d.favors.filter((x) => x.person === p.id && x.status === 'done').map((x) => {
+      const tx = x.doneTx && d.tx.find((t) => t.id === x.doneTx);
+      return `${x.doneAt} 还过人情「${x.text}」${tx ? `花了 ¥${cny(tx)}` : x.doneNote ? `（${x.doneNote}）` : ''}${x.cost ? `，当时他花了 ¥${x.cost}` : ''}`;
+    }),
+  ];
+  const { system, user } = estimatePrompt({ who: { name: p.name, hint: p.hint }, f, history, budget: d.budget.daily });
+  return cleanEstimate(await askJson(await aiConfig(), system, user, { maxTokens: 1000, timeout: 60000 }));
+}
+
+// 要准备的人情钱：小额从日常出（按月列），大额在存款目标里
+function socialCard({ compact = false } = {}) {
+  const t = today();
+  const plan = socialPlan(store.data, t);
+  if (!plan.length) return null;
+  const soon = compact ? plan.filter((x) => x.due <= addDays(t, 45)) : plan;
+  if (!soon.length) return null;
+  const small = soon.filter((x) => !x.big);
+  const big = soon.filter((x) => x.big);
+  const months = {};
+  for (const x of small) (months[x.due.slice(0, 7)] ||= []).push(x);
+  return h('div', { class: 'card social-plan' },
+    h('h3', {}, compact ? '人情：接下来要准备的钱' : '要准备的钱'),
+    Object.entries(months).map(([m, list]) => h('div', { class: 'plan-row' },
+      h('span', { class: 'grow' }, `${Number(m.slice(5))} 月 · 日常里出`, h('span', { class: 'muted small block' }, list.map((x) => `${x.name} · ${x.f.text}`).join('、'))),
+      h('b', {}, money(list.reduce((a, x) => a + x.amount, 0))))),
+    big.map((x) => h('a', { class: 'plan-row', href: '#/goals' },
+      h('span', { class: 'grow' }, `${md(x.due)} · 大额，存款目标`, h('span', { class: 'muted small block' }, `${x.name} · ${x.f.text}`)),
+      h('b', {}, money(x.amount)))),
+    compact ? h('a', { class: 'small', href: '#/people' }, '人情账 ›') : null);
 }
 
 // 放假前一天到假期结束：我欠的人情这次还不还。「这次还」留在这里直到还上或假期过完；「这次不还」下个假期再问
@@ -2791,13 +2853,15 @@ function priceFacts(d, price) {
   const free = Number(d.budget.free) || 0;
   const yearSave = plan.yearIn ? plan.yearIn - plan.yearOut : 0;
   // 能动用的钱：所有账户 − 应急钱底线 − 这个月还要花的生活费
-  const usable = hl.assets - (d.settings.emergencyFloor || 0) - Math.max(0, hl.left);
+  const social = socialPlan(d, t).filter((x) => x.big && x.due <= addDays(t, 90)).reduce((a, x) => a + x.amount, 0); // 三个月内的大额人情：这笔钱已经有用处了
+  const usable = hl.assets - (d.settings.emergencyFloor || 0) - Math.max(0, hl.left) - social;
   const big = price > (d.settings.wishBigFrom ?? 300);
   const facts = [];
   if (perDayFood) facts.push(`相当于 ${(price / perDayFood).toFixed(price / perDayFood < 10 ? 1 : 0)} 天的饭钱`);
   if (free) facts.push(`相当于 ${(price / free).toFixed(1)} 个月的自由钱`);
   if (hl.left > 0) facts.push(`是这个月还能花的 ${money(hl.left)} 的 ${Math.round((price / hl.left) * 100)}%`);
   if (yearSave > 0) facts.push(`如果从存款出，一年存钱目标晚 ${Math.max(1, Math.round(price / (yearSave / 365)))} 天左右达成`);
+  if (social) facts.push(`三个月内还有 ${money(social)} 的人情（随礼）要用，已经从能动用的钱里扣掉了`);
   if (big && d.settings.wishMonthlyCap) facts.push(`按大额心愿每月最多攒 ${money(d.settings.wishMonthlyCap)}，要攒 ${Math.ceil(price / d.settings.wishMonthlyCap)} 个月`);
   return {
     price, facts, big,
@@ -2831,6 +2895,7 @@ function moneyContext(d) {
     `总资产 ${Math.round(hl.assets)}，应急钱底线 ${d.settings.emergencyFloor || 0}，安全垫 ${hl.items.find((x) => x.key === 'cushion')?.value || ''}。`,
     rc.toMe || rc.iOwe ? `待收回 ${Math.round(rc.toMe)}（还不在手里，不能当能花的钱），欠别人 ${Math.round(rc.iOwe)}。` : '',
     ups.length ? `接下来要扣：${ups.join('；')}。` : '',
+    socialPlan(d, t).length ? `要准备的人情钱（${FAVOR_BIG} 以上的已经算进存款目标，要从存款里留出来；以下的从日常预算里出）：${socialPlan(d, t).map((x) => `${x.due} ${x.name}「${x.f.text}」约 ${Math.round(x.amount)}${x.big ? '（大额）' : ''}`).join('；')}。买东西时要把这些钱考虑进去。` : '',
     `心愿基金（小额用）${Math.round(f.small)}；大额心愿每月最多攒 ${d.settings.wishMonthlyCap}，${d.settings.wishBigFrom} 以上算大额。心愿单：${wishes.join('、') || '空'}。`,
     hist.length ? `最近几个预算月：${hist.join('；')}。` : '刚开始记账，还没有完整的预算月。',
     decisions.length ? `以前问过的：${decisions.join('；')}。` : '',
@@ -3245,6 +3310,7 @@ function goalsView() {
       ['是什么', ['以后一定会用到的一大笔钱，比如毕业到第一笔工资之间的过渡金。和心愿不一样：心愿是「想要」，这是「到时候必须有」。']],
       ['进度怎么算', [`不用另外存，就看${floorName}：扣掉应急钱底线 ${money(d.settings.emergencyFloor)} 和大额心愿已经攒的，剩下的按顺序算进目标（排前面的先算）。`, '每月按计划存钱，进度会自己往上走。旁边的「每月要留」是还差的钱平均到剩下的月份。']],
       ['暑假生活费', ['没有收入的那几个月（暑假）的生活费，网站自动算成一个目标，排在最前面。到了暑假，首页会提醒你从存钱卡转生活费出来。']],
+      ['人情', [`人情账里预计要准备 ${FAVOR_BIG} 以上的（比如婚礼随礼），自动算成一个目标，到那天（没日子的按下一个假期）前留好。还上了就没了。`]],
     ])),
     list.length ? list.map(({ g, have, need, months, perMonth }) => h('div', { class: 'card goal' },
       h('div', { class: 'wish-top' },
@@ -3253,7 +3319,7 @@ function goalsView() {
         h('div', { class: 'wish-price' }, money(g.target))),
       bar(g.target ? have / g.target : 0, 'var(--sage)'),
       h('div', { class: 'muted small wish-progress' }, need > 0 ? `已经有 ${money(have)}，还差 ${money(need)}；还有 ${months} 个月，平均每月留 ${money(perMonth)} 就够` : `已经够了 ✓（${money(have)}）`),
-      g.auto ? h('p', { class: 'muted small' }, '按每月预算和没有收入的月份自动算，改预算它会跟着变。排在最前面，因为它最先用到。')
+      g.auto ? h('p', { class: 'muted small' }, g.autoText || '按每月预算和没有收入的月份自动算，改预算它会跟着变。排在最前面，因为它最先用到。')
         : h('div', { class: 'wish-actions' }, h('span', { class: 'grow' }),
           h('button', { class: 'link', onclick: () => edit(g) }, '改'),
           h('button', { class: 'link danger-text', onclick: () => remove(g) }, '删掉'))))

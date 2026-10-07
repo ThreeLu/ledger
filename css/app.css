@@ -537,3 +537,5 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .picker-opt b { font-weight: 500; }
 .picker-opt.new { color: var(--accent); }
 .picker-opt.gone { opacity: 0.55; }
+.social-plan .plan-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--line); color: var(--text); text-decoration: none; }
+.social-plan .plan-row:last-of-type { border-bottom: 0; }

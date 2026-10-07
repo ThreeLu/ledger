@@ -124,3 +124,9 @@ export function festivalsAround(today) {
   }
   return out;
 }
+
+// 下一个假期（正在放的也算）：没日期的人情按它算在哪个月还
+export function nextHoliday(today) {
+  const y = Number(today.slice(0, 4));
+  return [...holidays(y), ...holidays(y + 1)].find((x) => x.end >= today) || null;
+}
