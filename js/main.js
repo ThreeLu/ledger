@@ -8,6 +8,7 @@ import {
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, goalStatus, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors,
 } from './money.js';
 import { holidayLine } from './cal.js';
+import { personPicker, recentIds } from './picker.js';
 import { askJson } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { weekOf, weekSummary, monthSummary, yearSummary } from './summary.js';
@@ -634,6 +635,8 @@ function spendLeftCard(hl, st) {
 const txOrder = (a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '');
 
 const personName = (id) => store.data.people.find((p) => p.id === id)?.name || '某人';
+// 选人用：最近和谁有来往（钱、礼、人情）
+const recentPeople = (d) => recentIds([...d.tx.filter((t) => t.person || t.who).map((t) => ({ id: t.person || t.who, day: t.date })), ...d.favors.map((f) => ({ id: f.person, day: f.date }))]);
 const claimName = (id) => store.data.claims.find((c) => c.id === id)?.name || '垫付';
 
 function txTitle(t) {
@@ -885,13 +888,10 @@ function addView(q) {
   const whoSection = () => {
     const ok = st.type === 'expense' ? FAVOR_CATEGORIES.includes(st.category) && st.split !== 'paidby' : GIFT_IN.includes(st.category);
     if (!ok) { st.who = ''; return []; }
-    const people = d.people.filter((p) => !p.archived || p.id === st.who);
-    if (!people.length) return [];
-    return [h('div', { class: 'label-sm' }, st.type === 'expense' ? '给谁的（选填，记进礼尚往来）' : '谁给的（选填，记进礼尚往来）'),
-      h('div', { class: 'chips who-chips', role: 'group', 'aria-label': st.type === 'expense' ? '给谁的' : '谁给的' }, people.map((p) => h('button', {
-        type: 'button', class: `chip${st.who === p.id ? ' on' : ''}`, 'aria-pressed': String(st.who === p.id),
-        onclick: () => { st.who = st.who === p.id ? '' : p.id; draw(); },
-      }, p.name)))];
+    const label = st.type === 'expense' ? '给谁的' : '谁给的';
+    return [h('div', { class: 'label-sm' }, `${label}（选填，记进礼尚往来）`),
+      personPicker({ people: [...d.people, ...aa.newPeople], value: st.who ? [st.who] : [], label, recent: recentPeople(d),
+        onNew: (name) => { const p = { id: newId('p'), name }; aa.newPeople.push(p); return p; }, onChange: (v) => { st.who = v; } })];
   };
   // 记好以后：选上的人情算还了，换掉的那个重新算没还
   const settleFavor = (data, txId, oldFavor, date) => {
@@ -908,25 +908,13 @@ function addView(q) {
       chips([{ id: 'none', name: '没有' }, { id: 'aa', name: 'AA / 帮人付' }, { id: 'paidby', name: '别人帮我付的' }].filter((x) => !editing || x.id !== 'aa'),
         st.split, (id) => { st.split = id; draw(); }, '和别人有关')];
     if (st.split === 'none') return out;
-    const everyone = [...d.people.filter((p) => !p.archived || p.id === st.person), ...aa.newPeople];
     const multi = st.split === 'aa';
-    const isOn = (id) => (multi ? aa.people.has(id) : st.person === id);
-    const pick = (id) => {
-      if (!multi) st.person = id;
-      else if (aa.people.has(id)) aa.people.delete(id);
-      else aa.people.add(id);
-      draw();
-    };
-    const addPerson = () => {
-      const name = prompt('名字（比如 小王）')?.trim();
-      if (!name) return;
-      let p = everyone.find((x) => x.name === name);
-      if (!p) { p = { id: newId('p'), name }; aa.newPeople.push(p); }
-      pick(p.id);
-    };
-    out.push(h('div', { class: 'chips', role: 'group', 'aria-label': multi ? '和谁 AA' : '谁帮我付的' },
-      everyone.map((p) => h('button', { type: 'button', class: `chip${isOn(p.id) ? ' on' : ''}`, 'aria-pressed': String(isOn(p.id)), onclick: () => pick(p.id) }, p.name)),
-      h('button', { type: 'button', class: 'chip add', onclick: addPerson }, '+ 新的人')));
+    const onNew = (name) => { const p = { id: newId('p'), name }; aa.newPeople.push(p); return p; };
+    out.push(personPicker({
+      people: [...d.people, ...aa.newPeople], value: multi ? [...aa.people] : st.person ? [st.person] : [], multi, label: multi ? '和谁 AA' : '谁帮我付的',
+      recent: recentPeople(d), onNew,
+      onChange: (v) => { if (multi) { aa.people = new Set(v); drawSplit(); } else st.person = v; },
+    }));
     if (multi) {
       out.push(h('label', { class: 'form-label' }, '我那份', myInput), splitHint);
       setTimeout(drawSplit);
@@ -952,7 +940,7 @@ function addView(q) {
     const note = st.note.trim();
     try {
       await save(`AA：${st.category ? catName(st.category) : '帮人付'} ${n}`, (data) => {
-        for (const p of aa.newPeople) if (ids.includes(p.id) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
+        for (const p of aa.newPeople) if ((ids.includes(p.id) || p.id === st.who) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
         if (my > 0) {
           const tid = newId('t');
           data.tx.push({ id: tid, type: 'expense', date: st.date, account: st.account, amount: my, category: st.category, note,
@@ -1050,7 +1038,7 @@ function addView(q) {
           data.tx[i] = { ...old, ...rec, ...(keepCny ? { cny: old.cny } : {}) };
           if (!rec.cny && !keepCny) delete data.tx[i].cny;
           if (!paidBy && old.person && old.type === 'expense' && !old.group) delete data.tx[i].person;
-          for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
+          for (const p of aa.newPeople) if ((p.id === rec.person || p.id === rec.who) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           if (!rec.to) { delete data.tx[i].to; delete data.tx[i].toAmount; }
           if (!rec.what) delete data.tx[i].what;
           if (!rec.tax) delete data.tx[i].tax;
@@ -1058,7 +1046,7 @@ function addView(q) {
           if (!rec.who) delete data.tx[i].who;
           settleFavor(data, editing.id, editing.favor, rec.date);
         } else {
-          for (const p of aa.newPeople) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
+          for (const p of aa.newPeople) if ((p.id === rec.person || p.id === rec.who) && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           const tid = newId('t');
           data.tx.push({ id: tid, ...rec, createdAt: new Date().toISOString() });
           settleFavor(data, tid, '', rec.date);
@@ -1578,13 +1566,12 @@ function favorSheet({ person = '', favor = null } = {}) {
   const text = h('input', { placeholder: '什么事，比如 帮我改论文', 'aria-label': '什么事', value: favor?.text || '' });
   const date = h('input', { type: 'date', 'aria-label': '哪天', value: favor?.date || today() });
   const box = h('div', { class: 'form' });
+  const fresh = [];
   const draw = () => {
-    const people = d.people.filter((p) => !p.archived || p.id === st.person);
     box.replaceChildren(
       h('div', { class: 'label-sm' }, '和谁'),
-      h('div', { class: 'chips', role: 'group', 'aria-label': '和谁' },
-        people.map((p) => h('button', { type: 'button', class: `chip${st.person === p.id ? ' on' : ''}`, 'aria-pressed': String(st.person === p.id), onclick: () => { st.person = p.id; draw(); } }, p.name)),
-        h('button', { type: 'button', class: 'chip add', onclick: () => newPerson((id) => { st.person = id; draw(); }) }, '+ 新的人')),
+      personPicker({ people: [...d.people, ...fresh], value: st.person ? [st.person] : [], label: '和谁', recent: recentPeople(d),
+        onNew: (name) => { const p = { id: newId('p'), name }; fresh.push(p); return p; }, onChange: (v) => { st.person = v; } }),
       h('div', { class: 'label-sm' }, '谁欠谁'),
       h('div', { class: 'chips', role: 'group', 'aria-label': '谁欠谁' }, Object.entries(FAVOR_DIR).map(([k, t]) =>
         h('button', { type: 'button', class: `chip${st.dir === k ? ' on' : ''}`, 'aria-pressed': String(st.dir === k), onclick: () => { st.dir = k; draw(); } }, t))),
@@ -1599,7 +1586,8 @@ function favorSheet({ person = '', favor = null } = {}) {
       if (!text.value.trim()) { toast('写一下是什么事', 'error'); return false; }
       const rec = { person: st.person, dir: st.dir, text: text.value.trim(), date: date.value || today() };
       try {
-        await save(`人情：${personName(st.person)} ${FAVOR_DIR[st.dir]}`, (data) => {
+        await save(`人情：${[...d.people, ...fresh].find((p) => p.id === st.person)?.name || ''} ${FAVOR_DIR[st.dir]}`, (data) => {
+          for (const p of fresh) if (p.id === rec.person && !data.people.some((x) => x.id === p.id)) data.people.push({ ...p });
           if (favor) Object.assign(data.favors.find((f) => f.id === favor.id), rec);
           else data.favors.push({ id: newId('f'), ...rec, createdAt: new Date().toISOString(), status: 'open' });
         });

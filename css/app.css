@@ -520,3 +520,20 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .favor-ask { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 0.5px solid var(--line); }
 .favor-ask:last-child { border-bottom: 0; }
 .favor-ask > button, .favor-ask > a { flex: none; }
+
+/* 选人：输入一个字出补全（js/picker.js，两个网站同一份） */
+.picker { position: relative; margin-top: 6px; }
+.picker-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
+.picker-tokens:not(:empty) { margin-bottom: 8px; }
+.picker-token { display: inline-flex; align-items: center; gap: 2px; padding: 4px 4px 4px 12px; border-radius: 999px; font-size: 14px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
+.picker-x { background: none; color: inherit; min-height: 0; padding: 0 6px; font-size: 16px; line-height: 1; font-weight: 400; }
+.picker-list { margin-top: 6px; border-radius: 12px; background: var(--card); box-shadow: 0 4px 16px rgb(0 0 0 / 10%); overflow: hidden; }
+.picker-list[hidden] { display: none; }
+.picker-cap { font-size: 12px; color: var(--muted); padding: 8px 14px 2px; }
+.picker-opt { display: flex; width: 100%; align-items: baseline; gap: 8px; justify-content: flex-start; text-align: left; background: none; color: var(--text);
+  font-weight: 400; min-height: 42px; padding: 0 14px; border-radius: 0; border-bottom: 0.5px solid var(--line); }
+.picker-opt:last-child { border-bottom: 0; }
+.picker-opt b { font-weight: 500; }
+.picker-opt.new { color: var(--accent); }
+.picker-opt.gone { opacity: 0.55; }

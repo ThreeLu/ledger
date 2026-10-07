@@ -339,8 +339,9 @@ def _(c):
     p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
     p.get_by_role("group", name="和别人有关").get_by_role("button", name="AA / 帮人付").click()
     for name in ("小甲", "小乙"):
-        c.prompt = name
-        p.get_by_role("button", name="+ 新的人").click()
+        p.get_by_label("和谁 AA").fill(name)
+        p.get_by_role("option", name=f"＋ 新加「{name}」").click()
+    expect(p.locator(".picker-token")).to_have_count(2)
     expect(p.get_by_label("我那份")).to_have_value("66.67")
     p.get_by_label("我那份").fill("50")
     expect(p.locator(".split-hint")).to_contain_text("其他 2 人各约 ¥75")
@@ -359,7 +360,9 @@ def _(c):
     p.get_by_role("button", name="午餐", exact=True).first.click()
     p.get_by_role("group", name="和别人有关").get_by_role("button", name="别人帮我付的").click()
     expect(p.get_by_role("group", name="账户")).to_have_count(0)
-    p.get_by_role("group", name="谁帮我付的").get_by_role("button", name="小乙").click()
+    p.get_by_label("谁帮我付的").fill("乙")
+    p.get_by_role("option", name="小乙").click()
+    expect(p.locator(".picker-token")).to_have_text("小乙×")
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 4)
     t = c.tx()[-1]
@@ -1208,7 +1211,8 @@ def _(c):
     def favor(name, text, day):
         c.go("#/people")
         p.get_by_role("button", name="记一个人情").click()
-        sheet.get_by_role("group", name="和谁").get_by_role("button", name=name, exact=True).click()
+        sheet.get_by_label("和谁", exact=True).fill(name[-1])
+        sheet.get_by_role("option", name=name).click()
         expect(sheet.get_by_role("group", name="谁欠谁").get_by_role("button", name="我欠他")).to_have_attribute("aria-pressed", "true")
         sheet.get_by_label("什么事").fill(text)
         sheet.get_by_label("哪天").fill(day)
@@ -1259,7 +1263,7 @@ def _(c):
     # 这次要还的：点「记一笔」，聚餐请客和人情都先选好了
     card.get_by_role("link", name="记一笔").click()
     expect(p.get_by_role("group", name="还的人情").get_by_role("button", name="小乙 · 帮我搬书")).to_have_attribute("aria-pressed", "true")
-    expect(p.get_by_role("group", name="给谁的").get_by_role("button", name="小乙")).to_have_attribute("aria-pressed", "true")
+    expect(p.locator(".picker-token")).to_have_text("小乙×")
     p.get_by_label("金额", exact=True).fill("120")
     p.get_by_role("group", name="账户").get_by_role("button", name="微信", exact=True).click()
     p.get_by_role("button", name="记好了").click()
@@ -1287,7 +1291,10 @@ def _(c):
     p.locator(".segmented").get_by_role("button", name="收入", exact=True).click()
     p.get_by_label("金额", exact=True).fill("66")
     p.get_by_role("group", name="收入来源").get_by_role("button", name="收到的红包礼金").click()
-    p.get_by_role("group", name="谁给的").get_by_role("button", name="小甲").click()
+    p.get_by_label("谁给的").click()
+    expect(p.locator(".picker-cap")).to_have_text("最近")
+    p.get_by_label("谁给的").fill("甲")
+    p.get_by_role("option", name="小甲").click()
     n = len(c.tx())
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 1)
