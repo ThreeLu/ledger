@@ -36,7 +36,7 @@ export function personPicker({ people, value = [], multi = false, label = '找�
     const q = input.value.trim();
     const found = open ? matches(q) : [];
     const canNew = open && onNew && q && !all().some((p) => p.name === q);
-    list.replaceChildren(
+    list.replaceChildren(...[
       !q && found.length ? h('div', { class: 'picker-cap' }, '最近') : null,
       ...found.map((p) => h('button', { type: 'button', role: 'option', class: `picker-opt${p.archived ? ' gone' : ''}`, onmousedown: (e) => e.preventDefault(), onclick: () => pick(p) },
         h('b', {}, p.name), p.hint ? h('span', { class: 'muted small' }, p.hint) : null)),
@@ -46,7 +46,7 @@ export function personPicker({ people, value = [], multi = false, label = '找�
         if (!people.some((x) => x.id === p.id)) extra.push(p);
         pick(p);
       } }, `＋ 新加「${q}」`) : null,
-      open && q && !found.length && !canNew ? h('div', { class: 'picker-cap' }, '没找到') : null);
+      open && q && !found.length && !canNew ? h('div', { class: 'picker-cap' }, '没找到') : null].filter(Boolean)); // replaceChildren 遇到 null 会印出「null」两个字
     list.hidden = !list.childElementCount;
   };
   const drawTokens = () => {

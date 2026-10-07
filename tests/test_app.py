@@ -361,6 +361,7 @@ def _(c):
     p.get_by_role("group", name="和别人有关").get_by_role("button", name="别人帮我付的").click()
     expect(p.get_by_role("group", name="账户")).to_have_count(0)
     p.get_by_label("谁帮我付的").fill("乙")
+    expect(p.locator(".picker-list")).not_to_contain_text("null")
     p.get_by_role("option", name="小乙").click()
     expect(p.locator(".picker-token")).to_have_text("小乙×")
     p.get_by_role("button", name="记好了").click()
