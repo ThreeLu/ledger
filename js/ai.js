@@ -1,10 +1,13 @@
 // 调用 DeepSeek（和物品档案同一套写法）。密钥由调用方传进来：先找账本仓库的 config/ai.json，没有就用物品档案仓库里的。
 
+import { profileText, withProfile } from './profile.js';
+
 export class AiError extends Error {}
 
 // 返回解析好的 JSON 对象。system / user 是提示词；会先思考再回答的模型（如 deepseek-flash）思考也占 max_tokens
 export async function askJson({ key, model }, system, user, { maxTokens = 8000, timeout = 150000, history = [] } = {}) {
   if (!key) throw new AiError('还没有 DeepSeek 密钥（在物品档案的「设置 → AI」里填过就会自动用）');
+  const profile = await profileText(); // 「我的故事」里的简介，每次都带上
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   let res;
@@ -14,7 +17,7 @@ export async function askJson({ key, model }, system, user, { maxTokens = 8000, 
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: model || 'deepseek-flash',
-        messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: user }],
+        messages: [{ role: 'system', content: withProfile(system, profile) }, ...history, { role: 'user', content: user }],
         response_format: { type: 'json_object' },
         temperature: 0.6,
         max_tokens: maxTokens,

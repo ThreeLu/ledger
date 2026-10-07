@@ -34,6 +34,7 @@
 - 类别：`EXPENSE_CATEGORIES`（大组 group 管预算，小组 sub 只为好找，日常先点小组再点类别）。改类别时提高 `CATEGORY_VERSION`，`migrate()` 会给老账本改名、补新的、按默认顺序排；不用的老类别 `hidden`（老账照样显示名字）。`c-wish`、`c-trip` 只由心愿单、垫付自动记。选「其他」（`FREEFORM`）必须写 `what`（具体是什么），流水里显示它。
 - 心愿单：`settings.wishBigFrom`（300）以内是小额，用「心愿基金」= 每个结束的预算月生活预算的结余（超支扣回，最低 0）减去小额心愿花的；以上是大额，每个结束的预算月按心愿单顺序攒，合计不超过 `wishMonthlyCap`（400）。都是现算的（`wishFunds`、`bigWishPlan`），钱不挪账户。买了记 `c-wish`（不占预算）；小额超出基金的部分记 `c-like`（自由钱）。冷静 `coolDays` 天。分类 `kind`（选填，`WISH_KIND`）：生活必需品、提升自己、提升幸福感、情怀、送人（送人时日期框改成「哪天前送出去」），卡片上显示，也发给 DeepSeek。想要程度 5 档（`WANT`，从低到高：有点想、有了更好、想要、很想要、非常想要；老数据只有 very / nice，键名没变）。排序（`WISH_SORTS`：攒钱顺序、冷静期、价格（再点一下高低切换）、想要程度、加入时间、DeepSeek 建议）只改显示，存 localStorage `ledger-wish-sort`；只有「攒钱顺序」时显示 ↑↓。
 - DeepSeek：密钥先读账本仓库 `config/ai.json`，没有就读物品档案仓库的（同一个令牌）。只发心愿单和汇总数字，不发流水明细；建议存 `wishAdvice`，密钥不进 finance.json。
+- 「我的故事」的简介（2026-10-06）：`js/profile.js`（物品档案、账本、生活三边同一份）读 `story-data/profile.json`（一天一次，缓存 localStorage `story-profile`，读不到就不带），`js/ai.js` 的 `askJson` 每次都把它加在 system 后面（`withProfile`）。令牌要授权 story-data。
 - 买不买（`#/ask`）：话里有价格时网站先算 `priceFacts`（几天饭钱、几个月自由钱、存钱目标晚几天、大额要攒几个月）和硬规则（价格 > 总资产 − 应急底线 − 本月还要花的生活费 → 一定「不建议」，前端强制；大额建议先冷静），连同 `moneyContext`（只有汇总数字，不发流水明细和备注）给 DeepSeek。聊天只在内存，决定存 `decisions`，买了的 30 天后回访。理财小课堂（`lessons()`）是写死的大白话 + 他自己的数字，不推荐具体产品。
 - 个税退税：兼职收入（`i-job`）可填 `tax`（被预扣的个税），`taxYear()` 按年汇总；每年 3/1–6/30（`taxSeason`）上一年有预扣且没办（`taxYears[年].done`）就首页提醒、推送（3/1、3/15、4/15、5/15、6/15、6/25）；办好后记一笔 `i-tax` 收入。
 - 订阅体检：`subReview.last` 起满 90 天提醒（首页 + 推送：当天、之后每 14 天），`#/subs` 可改金额、加每月 / 每年的订阅、停掉（只停自动记账，订阅本身要去 App Store 取消）。
