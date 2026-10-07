@@ -49,7 +49,7 @@
 - 年度总结 `yearSummary()`（自然年），总结页「年」；1 月 1 日推送、1 月头一周首页提醒。
 - 令牌到期：读物品档案设置里的 `tokenExpires`，14 天内首页提示。
 - 存款目标 `goals`（比如毕业过渡金）：不另外挪钱，存钱卡余额 − 应急底线 − 大额心愿已攒的，按顺序算进度和每月要留多少（`goalStatus`）。
-- 推送：`js/push.js`（账本自己的 VAPID 公钥，和物品档案不是一对）+ `sw.js`，订阅存账本仓库 `config/push.json`；账本仓库 `.github/workflows/push.yml` 每天 13:00 UTC（北京 21 点）跑 `.github/ledger_push.py`：没记账提醒、周日加周总结、预算月最后一天加月总结，合成一条。私钥只在账本仓库 secret `VAPID_PRIVATE_KEY`。
+- 推送：`js/push.js`（账本自己的 VAPID 公钥，和物品档案不是一对）+ `sw.js`，订阅存账本仓库 `config/push.json`；账本仓库 `.github/workflows/push.yml` 每天 13:00 UTC（北京 21 点）跑 `.github/ledger_push.py`：没记账提醒、周日加周总结、预算月最后一天加月总结，合成一条。私钥只在账本仓库 secret `VAPID_PRIVATE_KEY`。（2026-10-07 起**只在时间段里发**：GitHub 定时实测晚 6 小时、凌晨两三点才跑，曾在凌晨发出并占掉当天。`once(key, now, earliest, latest)` 不在北京时间段里就跳过、不记成发过；定时和外部触发都按这个规则，只有测试推送不受限。记账 20:30–23、洗衣 19:30–22:30、购物周日 8:30–12。pywebpush 固定 2.5.0。脚本只在数据仓库 `.github/` 里，改的时候直接改那边。）
 - 发票存私有仓库 `claims/<claimId>/<随机>.pdf|jpg`（照片压缩），删除时一起删文件。
 
 - 余额 = `opening` + 每笔的进出（`money.js` 的 `delta`）。**转账不算收支**；美元账户金额按美元，花销另存 `cny`（记账当时的汇率，Frankfurter 接口每天查一次，存在 localStorage）。`adjust` 是「校准」产生的对账差额，不算预算。
