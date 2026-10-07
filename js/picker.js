@@ -1,4 +1,4 @@
-// 选人：输入一个字就出补全（「黄」→ 黄雨申），点一下选上；不用在一大排名字里找。
+// 选人：输入一个字就出补全，点一下选上；不用在一大排名字里找。
 // 账本和「生活」（life/js/picker.js）同一份，改了两边一起改。
 //
 // personPicker({ people: [{ id, name, hint?, archived? }], value: [id], multi, label, recent: [id], onChange(ids), onNew?(name) → { id, name } })
