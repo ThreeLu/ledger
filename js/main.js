@@ -461,8 +461,8 @@ function openExplain(x, hl) {
 
 const HOME_HELP = [
   ['最上面那句话', ['先说结论：一切正常、有事留意、还是有事要处理。要处理的时候会直接告诉你做什么。']],
-  ['这个月还能花', ['吃饭 + 日常 + 自由钱这三项预算，减去这个预算月已经花的。下面的「每天约」= 还能花的 ÷ 剩下的天数。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。']],
-  ['健康指标', ['绿 = 很好，不用管；黄 = 留意一下；红 = 需要做点什么。', '每一行都能点开，看它是什么、为什么重要、你现在怎么样。']],
+  ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条是这个预算月过了多少天，竖线是钱用到哪了：竖线在紫色里面，说明花得比日子慢。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
+  ['健康指标', ['每一格一个小圆环：绿 = 很好，黄 = 留意一下，红 = 需要做点什么。', '圆环有多满：安全垫按 3 个月算满，应急钱按底线算满，花钱节奏是生活预算用了多少（小白点是按日子该用到哪），本月存钱是离目标多近。其他的只看颜色。', '每一格都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
   ['总结', ['底部「总结」看每周、每个预算月的图表。']],
   ['里程碑', ['总资产第一次超过 2 万、3 万、5 万……，或者连续几个月存钱达标，首页会出现一张祝贺卡片。']],
@@ -590,11 +590,8 @@ function homeView() {
     socialCard({ compact: true }),
     spendLeftCard(hl, st),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
-    h('div', { class: 'section-title' }, '健康指标（点开看解释）'),
-    h('div', { class: 'group' }, hl.items.map((x) => h('button', { class: 'cell indicator', type: 'button', onclick: () => openExplain(x, hl) },
-      h('span', { class: `light ${x.level}`, 'aria-label': LEVEL_TEXT[x.level] }),
-      h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, x.text)),
-      h('span', { class: 'meta' }, x.value), icon('chev', 'i chev')))),
+    h('div', { class: 'section-title' }, '健康指标', h('span', { class: 'muted' }, ' · 点一下看解释')),
+    h('div', { class: 'health-grid' }, hl.items.map((x) => healthTile(x, hl))),
     summaryLinks(p),
     budgetAdvice(d, today(), usdRate()).items.length ? h('div', { class: 'group' }, cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)',
       title: `预算有 ${budgetAdvice(d, today(), usdRate()).items.length} 条调整建议`, sub: '根据你最近几个月实际的花销' })) : null,
@@ -620,18 +617,46 @@ function homeHeader(p) {
         !p.summer && toPay > 0 ? h('span', { class: 'tag' }, `离发工资还有 ${toPay} 天`) : null)),
     h('div', { class: 'head-actions' }, helpButton('首页怎么看', HOME_HELP)));
 }
-// 这个月还能花：左边圆环是生活预算用了多少（超了变红），右边是还能花的钱
+// 精确到分：首页「还能花」「每天约」用它（用户 2026-10-06 要的，不四舍五入到元）
+const cents = (n) => `${n < 0 ? '−' : ''}¥${Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// 这个月还能花：左边圆环是生活预算用了多少（超了变红），右边是精确的还能花多少；下面一条是预算月过了多少天，和圆环比一比快慢
 function spendLeftCard(hl, st) {
   const lb = hl.left + st.living;
   const used = lb > 0 ? Math.min(100, Math.max(0, (st.living / lb) * 100)) : 0;
   const over = hl.left < 0;
-  return h('div', { class: 'card spend-left' },
-    lb > 0 ? h('div', { class: `ring${over ? ' over' : ''}`, style: `--v:${over ? 100 : Math.round(used)}%`, 'aria-label': `生活预算用了 ${Math.round(used)}%` },
-      h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,
-    h('div', { class: 'spend-text' },
-      h('div', { class: 'muted small' }, '这个月还能花'),
-      h('div', { class: `big-num${over ? ' warn-text' : ''}` }, over ? `超了 ${money(-hl.left)}` : money(hl.left)),
-      h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天，每天约 ${money(hl.perDay)}` : `剩 ${hl.daysLeft} 天`)));
+  const p = hl.period;
+  const part = partial(store.data, p);
+  const timePct = Math.min(100, (p.dayIndex / p.days) * 100);
+  const [yuan, fen] = cents(Math.abs(hl.left)).replace('¥', '').split('.');
+  return h('div', { class: 'card spend-left hero' },
+    h('div', { class: 'hero-top' },
+      lb > 0 ? h('div', { class: `ring big${over ? ' over' : ''}`, style: `--v:${over ? 100 : used.toFixed(1)}%`, 'aria-label': `生活预算用了 ${Math.round(used)}%` },
+        h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,
+      h('div', { class: 'spend-text' },
+        h('div', { class: 'muted small' }, over ? '这个月超了' : '这个月还能花'),
+        h('div', { class: `big-num exact${over ? ' warn-text' : ''}` }, h('span', { class: 'cur' }, '¥'), yuan, h('span', { class: 'fen' }, `.${fen}`)),
+        h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天 · 每天约 ${cents(hl.perDay)}` : `剩 ${hl.daysLeft} 天`))),
+    h('div', { class: 'time-bar', 'aria-label': `预算月过了 ${Math.round(timePct)}%` },
+      h('div', { class: 'time-track' }, h('span', { class: 'time-fill', style: `width:${timePct.toFixed(1)}%` }), h('span', { class: 'spend-mark', style: `left:${Math.min(100, used).toFixed(1)}%` })),
+      h('div', { class: 'time-legend muted small' },
+        h('span', {}, `第 ${p.dayIndex} / ${p.days} 天`),
+        h('span', {}, used <= timePct ? '花得比日子慢 ✓' : '花得比日子快'))),
+    h('div', { class: 'hero-foot muted small' }, `生活预算 ${cents(lb)}，已花 ${cents(st.living)}${part.isPartial ? `（从 ${md(part.from)}开始记账，这个月预算按 ${part.days} 天折算）` : ''}`));
+}
+
+// 健康指标的一格：小圆环（按好 / 留意 / 要处理上色），中间一个短数字，右边名字和一句话
+const LEVEL_COLOR = { good: 'var(--sage)', warn: 'var(--amber)', bad: 'var(--danger)' };
+function healthTile(x, hl) {
+  const g = x.gauge == null ? 1 : x.gauge;
+  const short = x.short ?? (x.level === 'good' ? '✓' : '!');
+  return h('button', { type: 'button', class: `health-tile ${x.level}`, onclick: () => openExplain(x, hl), 'aria-label': `${x.name}：${LEVEL_TEXT[x.level]}，${x.text}` },
+    h('span', { class: `ring mini${x.gauge == null ? ' solid' : ''}`, style: `--v:${(g * 100).toFixed(1)}%;--c:${LEVEL_COLOR[x.level]}` },
+      x.mark != null ? h('i', { class: 'ring-mark', style: `--m:${(x.mark * 360).toFixed(1)}deg` }) : null,
+      h('span', { class: 'ring-in' }, h('b', { class: String(short).length > 4 ? 'long' : '' }, short), x.unit && x.short != null ? h('small', {}, x.unit) : null)),
+    h('span', { class: 'tile-text' },
+      h('span', { class: 'tile-name' }, x.name),
+      h('span', { class: 'tile-sub muted' }, x.text)));
 }
 
 const txOrder = (a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '');

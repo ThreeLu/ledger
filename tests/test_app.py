@@ -133,7 +133,7 @@ def _(c):
     d["incomePlan"] = [{"name": "收入甲", "amount": 4000, "when": "每月 15 号", "use": "过这个月"}, {"name": "收入乙", "amount": 4000, "use": "全部存下"}]
     d["settings"].update(periodStartDay=15, expectedIncome=8000, emergencyFloor=8000, summerMonths=[7, 8], sideIncomeSave=0.7, payNote="测试：支付宝记在生活费卡")
     d["budget"] = {"food": 1900, "daily": 700, "free": 300, "sub": 900}
-    expect(p.locator(".cell.indicator", has_text="安全垫")).to_be_visible()
+    expect(p.locator(".health-tile", has_text="安全垫")).to_be_visible()
     # 固定扣费先推到很远以后，免得今天刚好是扣费日、打乱后面的笔数（扣费单独测）
     for r in d["recurring"]:
         r["since"] = "2999-01-01"
@@ -242,7 +242,7 @@ def _(c):
 def _(c):
     p = c.page
     c.go("#/")
-    p.locator(".cell.indicator", has_text="安全垫").click()
+    p.locator(".health-tile", has_text="安全垫").click()
     sheet = p.locator(".sheet")
     for t in ("这是什么", "为什么重要", "你现在"):
         expect(sheet).to_contain_text(t)
@@ -385,7 +385,7 @@ def _(c):
     expect(p.locator(".big-num")).to_have_text("¥0")
     # 首页：待收回
     c.go("#/")
-    expect(p.locator(".cell.indicator", has_text="待收回")).to_contain_text("¥45")
+    expect(p.locator(".health-tile", has_text="待收回")).to_contain_text("¥45")
     # 删 AA 的那笔花销，连同记给别人的一起删
     c.go("#/list")
     p.locator(".tx").filter(has_text=re.compile(r"^出去吃")).click()
@@ -461,7 +461,7 @@ def _(c):
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.go("#/")
     p.reload()
-    expect(p.locator(".cell.indicator", has_text="对账")).to_be_visible()
+    expect(p.locator(".health-tile", has_text="对账")).to_be_visible()
     c.go("#/reconcile")
     live = c.balance("a-live")
     p.get_by_label("生活费卡实际余额").fill(str(round(live - 12.5, 2)))
@@ -471,7 +471,7 @@ def _(c):
     t = c.tx()[-1]
     assert t["type"] == "adjust" and t["amount"] == -12.5 and c.data()["reconciled"], t
     p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".cell.indicator", has_text="对账")).to_have_count(0)
+    expect(p.locator(".health-tile", has_text="对账")).to_have_count(0)
 
 
 @step("总结：周（每天柱状图、环形图、和上周比、最大几笔）、月（曲线、每月存下、总资产、建议）")
@@ -762,7 +762,7 @@ def _(c):
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.go("#/")
     p.reload()
-    expect(p.locator(".cell.indicator", has_text="订阅体检")).to_be_visible()
+    expect(p.locator(".health-tile", has_text="订阅体检")).to_be_visible()
     c.go("#/subs")
     expect(p.locator(".banner")).to_contain_text("该体检了")
     card = p.locator(".card.sub", has_text="订阅乙")
@@ -791,7 +791,7 @@ def _(c):
     expect(p.locator(".banner")).to_have_count(0)
     assert c.data()["subReview"]["last"] == TODAY
     c.go("#/")
-    expect(p.locator(".cell.indicator", has_text="订阅体检")).to_have_count(0)
+    expect(p.locator(".health-tile", has_text="订阅体检")).to_have_count(0)
 
 
 @step("存款目标：毕业过渡金的进度和每月要留多少")
@@ -1357,9 +1357,12 @@ def _(c):
     expect(p.locator(".today-head .greet")).to_have_text(re.compile("好|夜深"))
     expect(p.locator(".head-tags .tag").first).to_have_text(re.compile("月预算 · 第 \\d+ 天"))
     expect(p.locator(".spend-left .ring")).to_be_visible()
+    expect(p.locator(".hero .big-num")).to_have_text(re.compile(r"^¥[\d,]+\.\d\d$"))  # 精确到分
+    expect(p.locator(".hero .time-legend")).to_contain_text("天")
+    expect(p.locator(".health-tile").first.locator(".ring.mini")).to_be_visible()
     expect(p.locator(".whisper")).to_have_count(1)
     p.wait_for_timeout(600)
-    p.screenshot(path=ART / "look-home.png")
+    p.screenshot(path=ART / "look-home.png", full_page=True)
     c.go("#/add")
     expect(p.locator(".whisper")).to_have_count(0)
 

@@ -650,6 +650,9 @@ export function partial(data, p) {
   return { from, isPartial: from !== p.start, factor: Math.max(0, days) / p.days, days };
 }
 
+// 小圆环里放得下的钱：1.2万、860、−30
+const compactMoney = (n) => { const a = Math.abs(n); const t = a >= 10000 ? `${(a / 10000).toFixed(a >= 100000 ? 0 : 1)}万` : String(Math.round(a)); return `${n < 0 ? '−' : ''}${t}`; };
+
 export function health(data, today, rate = data.settings.usdRate) {
   const p = periodFor(data, today);
   const st = periodStats(data, p);
@@ -660,7 +663,7 @@ export function health(data, today, rate = data.settings.usdRate) {
   // 1. 安全垫
   const months = monthly ? assets / monthly : 0;
   out.push({
-    key: 'cushion', name: '安全垫', value: `${months.toFixed(1)} 个月`,
+    key: 'cushion', name: '安全垫', value: `${months.toFixed(1)} 个月`, gauge: Math.min(1, months / 3), short: months.toFixed(1), unit: '个月',
     level: months >= 2 ? 'good' : months >= 1 ? 'warn' : 'bad',
     text: months >= 3 ? '很稳' : months >= 2 ? '够用' : months >= 1 ? '偏薄' : '太薄了',
     action: months < 2 ? '这段时间少花点「想要」的东西，先把安全垫攒到 2 个月以上。' : null,
@@ -672,7 +675,7 @@ export function health(data, today, rate = data.settings.usdRate) {
     const b = balance(data, floorAcc.id);
     const ok = b >= data.settings.emergencyFloor;
     out.push({
-      key: 'floor', name: '应急钱', value: money(b),
+      key: 'floor', name: '应急钱', value: money(b), gauge: Math.min(1, Math.max(0, b / data.settings.emergencyFloor)), short: ok ? '够' : '不够', unit: '底线',
       level: ok ? 'good' : 'bad',
       text: ok ? `${floorAcc.name}高于底线 ${money(data.settings.emergencyFloor)}` : `${floorAcc.name}低于底线 ${money(data.settings.emergencyFloor)}`,
       action: ok ? null : `${floorAcc.name}只剩 ${money(b)}，先别从里面转钱出来花，等下一笔收入补上。`,
@@ -697,7 +700,7 @@ export function health(data, today, rate = data.settings.usdRate) {
   else text = '和计划差不多';
   out.push({
     key: 'pace', name: '花钱节奏', value: level === 'good' ? '正常' : level === 'warn' ? '偏快' : '超了',
-    level, text, ratio,
+    level, text, ratio, gauge: lb ? Math.min(1, st.living / lb) : 0, mark: lb ? Math.min(1, planned / lb) : null, short: lb ? `${Math.round((st.living / lb) * 100)}%` : '—', unit: '用了',
     action: level === 'bad' ? `剩下 ${daysLeft} 天尽量只花吃饭的钱；超出的部分这个月会从存钱里扣。`
       : level === 'warn' ? `接下来每天控制在 ${money(Math.max(0, left / daysLeft))} 以内就能回到计划。` : null,
   });
@@ -708,7 +711,7 @@ export function health(data, today, rate = data.settings.usdRate) {
   const projected = Math.max(st.income, expected) - Math.max(st.total, monthly);
   const incomeIn = st.income >= expected;
   out.push({
-    key: 'saving', name: '本月存钱', value: money(st.saved),
+    key: 'saving', name: '本月存钱', value: money(st.saved), gauge: target > 0 && !p.summer && !part.isPartial ? Math.min(1, Math.max(0, projected / target)) : null, short: compactMoney(st.saved), unit: '已存',
     level: p.summer || part.isPartial || !expected ? 'good' : projected >= target * 0.9 ? 'good' : 'warn',
     text: !expected && !p.summer ? `这个预算月收入 ${money(st.income)}，花了 ${money(st.total)}（在「预算」里填每月正常收入，就能估月底能存多少）`
       : part.isPartial ? `从 ${md(part.from)}开始记账，这个预算月只记了一部分；${md(p.next)}起完整统计`
