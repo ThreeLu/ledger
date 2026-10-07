@@ -16,6 +16,12 @@
   --blue: #5f7fa8;
   --good: #5f9a6a;
   --rose: #b97a92;
+  /* 花销分组：藤紫的深浅 + 暖灰，不用彩虹色；红色只留给超支 */
+  --g-food: #b2a4d6;
+  --g-daily: #574a86;
+  --g-look: #c9b28f;
+  --g-sub: #9a948a;
+  --g-none: #d3cdc2;
   --shadow: 0 1px 2px rgba(60, 55, 45, 0.06), 0 6px 20px rgba(60, 55, 45, 0.06);
   --radius: 16px;
   color-scheme: light;
@@ -38,6 +44,11 @@
     --blue: #8fa9cc;
     --good: #8cc49a;
     --rose: #dba6ba;
+    --g-food: #7c6db0;
+    --g-daily: #ddd4f6;
+    --g-look: #b39d7a;
+    --g-sub: #8a857c;
+    --g-none: #4d4a52;
     --shadow: none;
     color-scheme: dark;
   }
@@ -277,7 +288,7 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .amount-hint { min-height: 20px; margin: 0 4px 6px; }
 .label-sm { font-size: 13px; color: var(--muted); margin: 12px 4px 0; }
 .cat-group { display: flex; gap: 10px; align-items: flex-start; }
-.cat-group-name { flex: none; width: 4.4em; white-space: nowrap; font-size: 13px; font-weight: 600; padding-top: 16px; }
+.cat-group-name { flex: none; width: 4.4em; white-space: nowrap; font-size: 13px; font-weight: 600; padding-top: 16px; color: var(--muted); }
 .cat-group .chips { margin: 8px 0 0; }
 .chips.quick { margin-top: 6px; }
 .quick-chip { background: var(--accent-soft); color: var(--accent); }
@@ -597,3 +608,10 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .hero > .summary .summary-title { font-size: 15px; }
 .hero > .summary .summary-text { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .summary.soft .summary-title { color: var(--amber); }
+
+/* 按下去的手感（苹果的做法）：按钮、卡片轻轻缩一点，列表行底色深一点，底部导航变淡 */
+button, .button, .icon-btn, .chip, .tile .ph, a.card, nav#nav a { transition: transform .15s ease, opacity .15s ease, background-color .15s ease; }
+button:not(:disabled):active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: scale(.97); }
+a.cell:active, button.cell:not(:disabled):active, .cell.pick:not(:disabled):active, .cell.indicator:not(:disabled):active { background: var(--chip); transform: none; }
+button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: none; opacity: .55; }
+@media (prefers-reduced-motion: reduce) { button:active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: none !important; } }

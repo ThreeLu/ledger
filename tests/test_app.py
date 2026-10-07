@@ -1386,6 +1386,8 @@ def _(c):
     p.screenshot(path=ART / "look-home.png", full_page=True)
     c.go("#/add")
     expect(p.locator(".whisper")).to_have_count(0)
+    c.go("#/summary")   # 角落那句话只在首页
+    expect(p.locator(".whisper")).to_have_count(0)
 
 
 def main():

@@ -233,7 +233,7 @@ function setupNav() {
 }
 
 // 每页最下面角落的一句话（花钱观）。记账、拍小票、设置这些专心做事的页面不放
-const NO_WHISPER = /^\/(add|receipt|siri|settings|quick|lost)$/;
+// 角落那句话只放在首页，别的页安静一点
 function whisper(path) {
   return h('div', { class: 'whisper' }, h('p', {}, wordFor(today(), path)), h('small', {}, '今天的一句'));
 }
@@ -266,7 +266,7 @@ function render() {
     else content = fn(m[1], q);
     break;
   }
-  view.replaceChildren(...[content || notFound(), store?.data && !NO_WHISPER.test(path) ? whisper(path) : null].filter(Boolean));
+  view.replaceChildren(...[content || notFound(), store?.data && /^\/?$/.test(path) ? whisper(path) : null].filter(Boolean));
   if (path !== lastPath) { view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); lastPath = path; }
   document.documentElement.dataset.season = solarTerm(today()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
@@ -475,9 +475,9 @@ const HOME_HELP = [
 // 「这个月的钱」：收入分成 生活 / 订阅 / 其他花销 / 存下
 function flowCard(st, part, title = '这个月的钱') {
   const segs = [
-    { name: '生活', v: st.living, color: 'var(--amber)' },
-    { name: '订阅', v: st.spent.sub, color: 'var(--blue)' },
-    { name: '其他', v: st.spent.none, color: 'var(--muted)' },
+    { name: '生活', v: st.living, color: 'var(--accent)' },
+    { name: '订阅', v: st.spent.sub, color: 'var(--g-sub)' },
+    { name: '其他', v: st.spent.none, color: 'var(--g-none)' },
   ];
   const base = Math.max(st.income, st.total, 1);
   const kept = Math.max(0, st.income - st.total);
@@ -486,9 +486,9 @@ function flowCard(st, part, title = '这个月的钱') {
     h('div', { class: 'flow-line' }, `收入 ${money(st.income)} · 花了 ${money(st.total)}${st.income ? ` · 存下 ${money(st.income - st.total)}` : ''}`),
     h('div', { class: 'stack' },
       segs.filter((x) => x.v > 0).map((x) => h('span', { style: `width:${(x.v / base) * 100}%;background:${x.color}`, title: x.name })),
-      kept > 0 ? h('span', { style: `width:${(kept / base) * 100}%;background:var(--sage)`, title: '存下' }) : null),
+      kept > 0 ? h('span', { style: `width:${(kept / base) * 100}%;background:var(--g-food)`, title: '存下' }) : null),
     h('div', { class: 'legend' },
-      [...segs.filter((x) => x.v > 0), ...(kept > 0 ? [{ name: '存下', v: kept, color: 'var(--sage)' }] : [])]
+      [...segs.filter((x) => x.v > 0), ...(kept > 0 ? [{ name: '存下', v: kept, color: 'var(--g-food)' }] : [])]
         .map((x) => h('span', {}, h('i', { style: `background:${x.color}` }), `${x.name} ${money(x.v)}`))),
     !st.income ? h('p', { class: 'muted small' }, part.isPartial ? '这个预算月开始记账前到的收入没有记，下个预算月起就完整了。' : '这个预算月的收入还没到。') : null);
 }
@@ -881,7 +881,7 @@ function addView(q) {
               }, x))),
               open ? chips(list.filter((c) => c.sub === open), st.category, pickCat, `${open}类别`) : null);
           } else body = chips(list, st.category, pickCat, `${g.name}类别`);
-          parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name', style: `color:${g.color}` }, g.name), body));
+          parts.push(h('div', { class: 'cat-group' }, h('span', { class: 'cat-group-name' }, g.name), body));
         }
         drawMemo();
         if (FREEFORM.includes(st.category)) {
@@ -1902,7 +1902,7 @@ function summaryView(q) {
     const arrow = (now, before) => {
       const diff = now - before;
       if (Math.abs(diff) < 1) return h('span', { class: 'muted small' }, '和上周一样');
-      return h('span', { class: `small ${diff > 0 ? 'warn-text' : 'good-text'}` }, `${diff > 0 ? '↑' : '↓'} ${money(Math.abs(diff))}`);
+      return h('span', { class: 'muted small' }, `比上周${diff > 0 ? '多' : '少'} ${money(Math.abs(diff))}`);
     };
     return h('div', {}, head, seg,
       navRow(ws.label, ws.end >= today() && ws.start <= today() ? '这周' : null, addDays(ws.start, -1), addDays(ws.end, 1)),

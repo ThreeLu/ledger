@@ -10,12 +10,12 @@ import { holidayAround, nextHoliday } from './cal.js';
 import { FAVOR_BIG } from './renqing.js';
 
 export const GROUPS = [
-  { id: 'food', name: '吃饭', color: 'var(--amber)' },
-  { id: 'daily', name: '日常', color: 'var(--sage)' },
+  { id: 'food', name: '吃饭', color: 'var(--g-food)' },
+  { id: 'daily', name: '日常', color: 'var(--g-daily)' },
   { id: 'free', name: '自由钱', color: 'var(--accent)' },
-  { id: 'look', name: '形象', color: 'var(--rose)' },
-  { id: 'sub', name: '订阅', color: 'var(--blue)' },
-  { id: 'none', name: '不占预算', color: 'var(--muted)' },
+  { id: 'look', name: '形象', color: 'var(--g-look)' },
+  { id: 'sub', name: '订阅', color: 'var(--g-sub)' },
+  { id: 'none', name: '不占预算', color: 'var(--g-none)' },
 ];
 export const LIVING = ['food', 'daily', 'free', 'look']; // 每天都在花的几组，「花钱节奏」只看这些（订阅是固定日子扣的）
 
