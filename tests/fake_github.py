@@ -151,6 +151,7 @@ def make_handler(repos):
 
 
 def serve(repos, port: int):
+    ThreadingHTTPServer.request_queue_size = 128  # 默认只排 5 个等待连接，并发多时会丢请求
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repos))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

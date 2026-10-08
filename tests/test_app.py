@@ -1032,7 +1032,10 @@ def _(c):
     assert len(c.data()["budgetHistory"]) == 2
     # 年度总结
     c.go("#/summary?mode=year")
-    expect(p.locator(".summary-head")).to_contain_text(f"{date.today().year} 年收入")
+    head = p.locator(".summary-head")
+    expect(head).to_have_attribute("aria-label", re.compile(f"^{date.today().year} 年收入"))
+    for text in ("这一年", "收入", "储蓄率", "计划存", "总资产"):
+        expect(head).to_contain_text(text)
     expect(p.get_by_role("img", name="每月存下")).to_be_visible()
     expect(p.get_by_text("花得最多的类别")).to_be_visible()
 
@@ -1547,6 +1550,8 @@ def main():
     serve({REPO: repo, "x/inventory-data": inventory}, API_PORT)
     handler = partial(SimpleHTTPRequestHandler, directory=str(ROOT))
     handler.log_message = lambda *a: None
+    # 浏览器一次要并发拉二十多个脚本文件；默认只排 5 个等待连接，偶尔会丢掉请求、整页加载不出来
+    ThreadingHTTPServer.request_queue_size = 128
     app = ThreadingHTTPServer(("127.0.0.1", APP_PORT), handler)
     threading.Thread(target=app.serve_forever, daemon=True).start()
 

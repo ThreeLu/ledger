@@ -5,7 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED,
-  savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup,
+  savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, daysBetween,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
 import { holidayLine } from './cal.js';
@@ -1978,7 +1978,7 @@ const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。最上面是这周生活花了多少：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月总结', ['按预算月算（和发钱对齐）。', '最上面是这个月存下多少（暑假没收入时是花了多少），进度条是生活预算用了多少；这个月还没过完时，竖线是按日子到今天该花到哪。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
   ['月度小信', ['每个预算月结束后，打开那个月的总结，AI 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
-  ['年总结', ['按自然年：一年存了多少、储蓄率、总资产多了多少、每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
+  ['年总结', ['按自然年。最上面是这一年存下多少，下面是收入、花了、储蓄率；进度条是存下了计划的多少（计划 = 每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」），这一年还没过完时，竖线是按日子到今天该存到哪。', '下面还有每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
   ['钱都在哪', ['右上角点「钱都在哪」，整页翻过来，看每一类钱有多少、存到哪了；再点「总结」翻回来。']],
 ];
@@ -2119,6 +2119,57 @@ function letterCard(p) {
 }
 
 // 年度总结
+// 年总结最上面：和周、月一样的卡片。大字这一年存下多少 + 收入 / 花了 / 储蓄率 + 和计划比的进度条
+// 计划 = 每个有收入的月（预计收入 − 预算）、暑假的月（− 预算），开始记账那个月按天数折算；竖线是按日子到今天该存到哪
+function yearPlanBetween(d, from, to) {
+  const inc = Number(d.settings.expectedIncome) || 0;
+  const out = budgetTotal(d);
+  const summer = d.settings.summerMonths || [];
+  let plan = 0;
+  for (let m = 1; m <= 12; m++) {
+    const ms = `${from.slice(0, 4)}-${String(m).padStart(2, '0')}-01`;
+    const days = new Date(Number(from.slice(0, 4)), m, 0).getDate();
+    const me = `${ms.slice(0, 8)}${String(days).padStart(2, '0')}`;
+    const a = ms > from ? ms : from;
+    const b = me < to ? me : to;
+    if (a > b) continue;
+    plan += ((daysBetween(a, b) + 1) / days) * ((summer.includes(m) ? 0 : inc) - out);
+  }
+  return Math.round(plan);
+}
+
+function yearHead(d, ys) {
+  const { st } = ys;
+  const t = today();
+  const ongoing = ys.to >= t && ys.from <= t;
+  const saved = ys.saved;
+  const [label, big] = !st.income ? ['这一年花了', st.total] : saved >= 0 ? ['这一年存下', saved] : ['这一年比收入多花了', -saved];
+  const planAll = d.settings.expectedIncome ? yearPlanBetween(d, ys.from, ys.to) : 0;
+  const planNow = ongoing ? yearPlanBetween(d, ys.from, t) : planAll;
+  const good = saved >= planNow * 0.95;
+  const diff = Math.round(saved - planNow);
+  const assetDiff = ys.assetsEnd - ys.assetsStart;
+  return h('div', { class: 'card summary-head week-head', 'aria-label': `${ys.year} 年收入 ${money(st.income)}，花了 ${money(st.total)}，存下 ${money(saved)}` },
+    h('div', { class: 'wh-top' },
+      h('div', {},
+        h('div', { class: 'muted small' }, label),
+        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(big).toLocaleString('zh-CN'))),
+      planAll > 0 ? h('span', { class: `wh-tag ${good ? 'good' : 'warn'}` }, good ? (ongoing ? '存钱在计划里' : '存够了计划') : (ongoing ? '比计划慢一点' : '比计划少存了')) : null),
+    h('div', { class: 'mh-stats' },
+      h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
+      h('div', {}, h('span', { class: 'muted small' }, '花了'), h('b', {}, money(st.total))),
+      h('div', {}, h('span', { class: 'muted small' }, '储蓄率'), h('b', {}, ys.rate != null ? `${ys.rate}%` : '—'))),
+    planAll > 0 ? h('div', { class: 'time-bar' },
+      h('div', { class: 'time-track', 'aria-label': `存下了计划的 ${Math.round((Math.max(0, saved) / planAll) * 100)}%` },
+        h('span', { class: `time-fill wh-fill${good ? '' : ' over'}`, style: `width:${Math.min(100, (Math.max(0, saved) / planAll) * 100).toFixed(1)}%` }),
+        ongoing ? h('span', { class: 'spend-mark', style: `left:${Math.min(100, Math.max(0, planNow / planAll) * 100).toFixed(1)}%`, title: '按日子到今天该存到这' }) : null),
+      h('div', { class: 'time-legend small' },
+        h('span', { class: good ? '' : 'wh-over' }, Math.abs(diff) < Math.max(50, planNow * 0.05) ? '和计划差不多' : diff > 0 ? `比计划多存 ${money(diff)}` : `比计划少存 ${money(-diff)}`),
+        h('span', { class: 'muted' }, `${ys.from > `${ys.year}-01-01` ? '记账以来' : '一年'}计划存 ${money(planAll)}`))) : null,
+    h('div', { class: 'hero-foot muted small' },
+      `总资产 ${money(ys.assetsStart)} → ${money(ys.assetsEnd)}${Math.abs(assetDiff) >= 1 ? `（${assetDiff > 0 ? '多了' : '少了'} ${money(Math.abs(assetDiff))}）` : ''} · 记了 ${ys.days} 天账`));
+}
+
 function yearView(d, year, head, seg, navRow) {
   const ys = yearSummary(d, year, usdRate());
   const started = !d.openingDate || d.openingDate <= ys.to;
@@ -2128,9 +2179,7 @@ function yearView(d, year, head, seg, navRow) {
   const maxCat = Math.max(1, ...ys.cats.map(([, v]) => v));
   const dropSaved = ys.wishesDropped.reduce((a, w) => a + Number(w.price), 0);
   return h('div', {}, head, seg, nav,
-    h('div', { class: 'card summary-head' },
-      h('p', {}, `${year} 年收入 ${money(ys.st.income)}，花了 ${money(ys.st.total)}，存下 ${money(ys.saved)}${ys.rate != null ? `，储蓄率 ${ys.rate}%` : ''}。`),
-      h('p', { class: 'muted small' }, `总资产 ${money(ys.assetsStart)} → ${money(ys.assetsEnd)}（${ys.assetsEnd >= ys.assetsStart ? '多了' : '少了'} ${money(Math.abs(ys.assetsEnd - ys.assetsStart))}）· 记了 ${ys.days} 天账`)),
+    yearHead(d, ys),
     h('div', { class: 'card' }, h('h3', {}, '每月存下'),
       barChart(ys.months.filter((m) => m.active).map((m) => ({ label: `${m.m}月`, v: Math.round(m.saved), color: m.saved >= 0 ? 'var(--sage)' : 'var(--danger)' })), { title: '每月存下' }),
       h('p', { class: 'muted small' }, '按自然月算；7、8 月没有收入，是负的很正常。')),

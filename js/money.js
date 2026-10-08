@@ -155,7 +155,7 @@ const pad = (n) => String(n).padStart(2, '0');
 export const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 export const parseYmd = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 export const addDays = (s, n) => { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); };
-const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
+export const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
 const lastDay = (y, m) => new Date(y, m + 1, 0).getDate(); // m 从 0 开始
 
 // 某天所在的预算月：从 startDay 号到下个月 startDay-1 号
