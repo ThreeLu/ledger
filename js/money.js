@@ -135,6 +135,7 @@ export function migrate(data) {
   data.letters ||= {}; // 月度小信：{ 预算月开始日: { at, text } }
   data.payday ||= {}; // 发钱日卡片：{ 预算月开始日: { later: { 收入计划序号: 再问的日期 }, noTransfer: true } }
   // 心愿单
+  data.wishCart ||= []; // 预下单：[{ id: 心愿 id, price?: 改过的价格（只用来算账，买了按它记） }]
   data.wishes ||= []; // { id, name, price, want: bit|nice|want|very|most, kind: ""|need|grow|joy|feel|gift, reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
   data.settings.wishMonthlyCap ??= 400; // 每月最多给大额心愿攒多少
@@ -379,7 +380,8 @@ export function needsReconcile(data, today) {
 // ---------- 心愿单 ----------
 // 钱不挪地方，只是记着「这里面有多少是给心愿的」。
 // 小额心愿：心愿基金 = 每个结束的预算月，生活预算（吃饭 + 日常 + 自由钱）没花完的进来，超了从里面扣（扣到 0 为止）；买小额心愿从这里出。
-// 大额心愿：每个结束的预算月，按心愿单的顺序给还没攒够的大额心愿攒，合计不超过 wishMonthlyCap；攒够一个再攒下一个。
+// 大额心愿：每个结束的预算月，从这个月真正多存下的钱里（先扣掉进心愿基金的、暑假生活费和大额人情这个月该留的），
+//   按心愿单的顺序给还没攒够的大额心愿攒，合计不超过 wishMonthlyCap；攒够一个再攒下一个。没多存下钱的月份就不攒。
 
 const r2 = (n) => Math.round(n * 100) / 100;
 export const isBigWish = (data, w) => Number(w.price) > (data.settings.wishBigFrom ?? 300);
@@ -415,17 +417,56 @@ export function wishFunds(data, today) {
   const cap = Number(data.settings.wishMonthlyCap) || 0;
   const big = data.wishes.filter((w) => isBigWish(data, w) && w.status !== 'dropped');
   const saved = Object.fromEntries(big.map((w) => [w.id, 0]));
+  const bigLog = [];
   for (const p of periods) {
-    let left = cap;
+    const room = Math.max(0, Math.min(cap, wishRoom(data, p)));
+    let left = room;
     for (const w of big) {
       if (left <= 0) break;
       if (w.createdAt > p.end || (w.status === 'bought' && w.boughtAt <= p.end)) continue;
       const add = Math.min(left, Number(w.price) - saved[w.id]);
       if (add > 0) { saved[w.id] += add; left -= add; }
     }
+    bigLog.push({ p, room: r2(room), gave: r2(room - left) });
   }
-  return { small: r2(small), log, saved, cap, fromJobs: r2(fromJobs) };
+  const sum = (xs) => r2(xs.reduce((a, b) => a + b, 0));
+  const parts = {
+    saved: sum(log.map((x) => Math.max(0, x.change))),
+    over: sum(log.map((x) => Math.min(0, x.change))),
+    jobs: r2(fromJobs),
+    spent: sum(events.filter((e) => !e.p && !e.job).map((e) => e.v)),
+  };
+  return { small: r2(small), log, parts, saved, cap, bigLog, fromJobs: r2(fromJobs) };
 }
+
+// 「到日子一定要用」的钱，在预算月 p 里该留多少：暑假生活费（分摊到有收入的月份）、300 以上的人情（从记下那天到要还那天平摊）
+export function mustKeep(data, p) {
+  let n = 0;
+  const months = data.settings.summerMonths || [];
+  if (months.length && months.length < 12 && data.settings.expectedIncome && !p.summer) n += budgetTotal(data) * months.length / (12 - months.length);
+  for (const f of data.favors || []) {
+    if (f.dir !== 'owe' || !(Number(f.estimate) >= FAVOR_BIG)) continue;
+    const from = (f.createdAt || f.date || '').slice(0, 10);
+    if (!from || from > p.end || (f.status === 'done' && (f.doneAt || '').slice(0, 10) < p.start)) continue;
+    const due = f.due || nextHoliday(from)?.start || from;
+    if (due < p.start) continue;
+    n += Number(f.estimate) / Math.max(1, Math.round(daysBetween(from, due) / 30.4));
+  }
+  return r2(n);
+}
+
+// 结束的预算月 p 里能给大额心愿的钱：收入 − 花销（买心愿的不算，那是以前攒的）− 进了心愿基金的 − mustKeep
+export function wishRoom(data, p) {
+  const st = periodStats(data, p);
+  const leftover = Math.max(0, livingBudget(data) * partial(data, p).factor - st.living);
+  const jobs = data.settings.sideIncomeSave != null
+    ? st.tx.filter((t) => t.type === 'income' && t.category === 'i-job').reduce((s, t) => s + cny(t) * (1 - data.settings.sideIncomeSave), 0) : 0;
+  return r2(st.income - (st.total - (st.byCat['c-wish'] || 0)) - leftover - jobs - mustKeep(data, p));
+}
+
+// 还没结束的预算月大概能给大额心愿多少：按预计收入 − 预算 − mustKeep；没填预计收入就按每月上限
+const futureRoom = (data, p, cap) => (p.summer ? 0 : !data.settings.expectedIncome ? cap
+  : Math.max(0, Math.min(cap, data.settings.expectedIncome - budgetTotal(data) - mustKeep(data, p))));
 
 // 还没买的大额心愿：按现在的顺序、每月上限，大概哪个预算月能攒够
 export function bigWishPlan(data, today) {
@@ -435,7 +476,7 @@ export function bigWishPlan(data, today) {
   const done = open.map((w, i) => (left[i] <= 0 ? periodFor(data, today).start : null));
   let p = periodFor(data, today);
   for (let m = 0; m < 120 && done.some((x) => !x) && f.cap > 0; m++) {
-    let cap = f.cap;
+    let cap = futureRoom(data, p, f.cap);
     for (let i = 0; i < open.length && cap > 0; i++) {
       if (done[i]) continue;
       const add = Math.min(cap, left[i]);
@@ -489,7 +530,7 @@ export function yearlyCost(data, r, rate = data.settings.usdRate) {
 }
 
 // ---------- 存款目标（比如毕业过渡金）----------
-// 不另外挪钱：存钱卡里扣掉应急钱底线、大额心愿已攒的，剩下的按目标顺序算进度。
+// 不另外挪钱：存钱卡里扣掉应急钱底线，先给暑假生活费、大额人情，再扣掉大额心愿已攒的，剩下的按目标顺序算进度。
 // 暑假生活费：summerMonths 没有收入，自动成为最前面的存款目标（7 月发钱日的前一天存够那几个月的预算）
 export function summerGoal(data, today) {
   const months = data.settings.summerMonths || [];
@@ -514,12 +555,15 @@ export function goalStatus(data, today) {
   const floorAcc = data.settings.floorAccount;
   const big = wishFunds(data, today);
   const bigSaved = data.wishes.filter((w) => w.status === 'open').reduce((s, w) => s + (big.saved[w.id] || 0), 0);
-  let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0) - bigSaved);
+  // 顺序：暑假生活费、大额人情（到日子一定要用）→ 大额心愿已攒的 → 自己设的目标
+  let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0));
   const sg = summerGoal(data, today);
   // 大额人情（婚礼随礼……）自动变成目标，排在暑假生活费后面
   const fg = socialPlan(data, today).filter((x) => x.big).map((x) => ({ id: `auto-favor-${x.f.id}`, auto: true, favor: x.f.id, name: `人情：${x.name} · ${x.f.text}`, target: x.amount, by: x.due,
     note: x.f.due ? '到那天要用' : '下一个假期还', autoText: '从人情账里来的：预计 300 以上的人情自动算成目标。还上了（记那笔钱时选上这个人情）就没了。' }));
-  return [...(sg ? [sg] : []), ...fg, ...data.goals].map((g) => {
+  const autoCount = (sg ? 1 : 0) + fg.length;
+  return [...(sg ? [sg] : []), ...fg, ...data.goals].map((g, i) => {
+    if (i === autoCount) pool = Math.max(0, pool - bigSaved);
     const have = Math.min(pool, Number(g.target) || 0);
     pool -= have;
     const months = g.by ? Math.max(1, Math.round(daysBetween(today, g.by) / 30.4)) : null;

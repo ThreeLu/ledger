@@ -6,7 +6,7 @@ export class AiError extends Error {}
 
 // 返回解析好的 JSON 对象。system / user 是提示词；会先思考再回答的模型（如 deepseek-flash）思考也占 max_tokens
 export async function askJson({ key, model }, system, user, { maxTokens = 8000, timeout = 150000, history = [] } = {}) {
-  if (!key) throw new AiError('还没有 DeepSeek 密钥（在物品档案的「设置 → AI」里填过就会自动用）');
+  if (!key) throw new AiError('还没有 AI 密钥（在物品档案的「设置 → AI」里填过就会自动用）');
   const profile = await profileText(); // 「我的故事」里的简介，每次都带上
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -24,19 +24,19 @@ export async function askJson({ key, model }, system, user, { maxTokens = 8000, 
       }),
     });
   } catch (e) {
-    throw new AiError(e.name === 'AbortError' ? 'DeepSeek 太久没响应' : '连不上 DeepSeek');
+    throw new AiError(e.name === 'AbortError' ? 'AI 太久没响应' : '连不上 AI');
   } finally {
     clearTimeout(timer);
   }
   if (!res.ok) {
-    const msg = { 401: 'DeepSeek 密钥不对', 402: 'DeepSeek 余额不足', 429: 'DeepSeek 请求太频繁' }[res.status];
-    throw new AiError(msg || `DeepSeek 返回 ${res.status}`);
+    const msg = { 401: 'AI 密钥不对', 402: 'AI 余额不足，去 DeepSeek 官网充值', 429: 'AI 请求太频繁' }[res.status];
+    throw new AiError(msg || `AI 返回 ${res.status}`);
   }
   const choice = (await res.json()).choices?.[0];
-  if (choice?.finish_reason === 'length') throw new AiError('DeepSeek 想得太久，回答被截断了');
+  if (choice?.finish_reason === 'length') throw new AiError('AI 想得太久，回答被截断了');
   try {
     return JSON.parse(choice.message.content);
   } catch {
-    throw new AiError('DeepSeek 的回答格式不对');
+    throw new AiError('AI 的回答格式不对');
   }
 }

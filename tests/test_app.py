@@ -594,7 +594,7 @@ def _(c):
     expect(p.locator(".tx").filter(has_text=re.compile(r"^二手自行车"))).to_contain_text("其他")
 
 
-@step("心愿单：小额用心愿基金（省下的预算）、大额按顺序每月最多 400 攒、冷静期、DeepSeek 建议、买了、放弃")
+@step("心愿单：小额用心愿基金（省下的预算）、大额从真正存下的钱里按顺序每月最多 400 攒、冷静期、AI 建议、预下单、买了、放弃")
 def _(c):
     p = c.page
     c.go("#/more")
@@ -613,11 +613,12 @@ def _(c):
     expect(p.locator(".wish", has_text="降噪耳机").locator(".wish-tags")).to_contain_text("提升幸福感")
     assert next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")["kind"] == "joy"
     expect(p.locator(".section-title", has_text="小额心愿")).to_be_visible()
-    # 上个预算月：生活预算 3000，花了 2800 → 省下 200 进心愿基金；耳机早就加进来了，攒了 400
+    # 上个预算月：生活预算 3000，花了 2800 → 省下 200 进心愿基金；收入 8000，多存下的够给耳机攒 400
     cur = period_start(date.today())
     prev = period_start(cur - timedelta(days=1))
     d = c.data()
     d["openingDate"] = prev.isoformat()
+    d["tx"].append({"id": "lastpay", "type": "income", "date": prev.isoformat(), "account": "a-save", "amount": 8000, "category": "i-salary", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
     d["tx"].append({"id": "lastmonth", "type": "expense", "date": prev.isoformat(), "account": "a-live", "amount": 2800, "category": "c-lunch", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
     for w in d["wishes"]:
         if w["name"] == "降噪耳机":
@@ -631,6 +632,8 @@ def _(c):
     fund = 3000 - living_before
     expect(p.locator(".big-num")).to_have_text(f"¥{fund:,}")
     expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("已攒 ¥400 / ¥1,200")
+    expect(p.locator(".big-last")).to_contain_text("给大额心愿攒了 ¥400")
+    expect(p.locator(".fund-rows")).to_contain_text("生活费省下")
     expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("预计")
     # 调顺序：键盘往前排
     p.get_by_role("button", name="机械键盘 往前排").click()
@@ -665,20 +668,58 @@ def _(c):
     p.locator(".wish-sort").get_by_role("button", name="攒钱顺序").click()
     expect(p.get_by_role("button", name="机械键盘 往前排")).to_be_visible()
     # DeepSeek
-    p.get_by_role("button", name="问问 DeepSeek").click()
+    p.get_by_role("button", name="问问 AI").click()
     expect(p.locator(".ai-summary")).to_contain_text("先买闲书")
     expect(p.locator(".wish", has_text="一本闲书").locator(".wish-ai")).to_contain_text("想要")
     expect(p.locator(".wish", has_text="一本闲书").locator(".wish-rank")).to_have_text("1")
     assert "sk-test" not in json.dumps(c.data())  # 密钥不会写进账本
-    # 买闲书：从心愿基金出
-    n = len(c.tx())
+    # 单个「买了」的冷静期提醒
     p.locator(".wish", has_text="一本闲书").get_by_role("button", name="买了").click()
     expect(p.locator(".sheet")).to_contain_text("还在冷静期")
-    p.locator(".sheet").get_by_role("button", name="记好了").click()
+    p.locator(".sheet").get_by_role("button", name="取消").click()
+    # 预下单：挑闲书和耳机，闲书改价 60
+    p.get_by_role("button", name="挑几个算一算").click()
+    p.get_by_role("checkbox", name="选上一本闲书").check()
+    expect(p.locator(".cart-bar")).to_contain_text("选了 1 个 · 共 ¥80")
+    p.get_by_role("checkbox", name="选上降噪耳机").check()
+    expect(p.locator(".cart-bar")).to_contain_text("选了 2 个 · 共 ¥1,280")
+    cart = lambda: [(x["id"], x.get("price")) for x in c.data()["wishCart"]]  # noqa: E731
+    ids = {w["name"]: w["id"] for w in c.data()["wishes"]}
+    assert cart() == [(ids["一本闲书"], None), (ids["降噪耳机"], None)], cart()
+    price = p.get_by_label("一本闲书的价格")
+    price.fill("60")
+    price.press("Enter")
+    price.blur()
+    expect(p.locator(".cart")).to_contain_text("原价 ¥80")
+    assert cart()[0] == (ids["一本闲书"], 60), cart()
+    expect(p.locator(".cart")).to_contain_text(f"¥{fund:,} → ¥{fund - 60:,}")
+    expect(p.locator(".cart")).to_contain_text("攒了 ¥400，还差 ¥800")
+    expect(p.locator(".cart")).to_contain_text("其中 1 个还在冷静期")
+    expect(p.locator(".cart-bar")).to_contain_text(f"买完心愿基金剩 ¥{fund - 60:,}")
+    p.locator(".cart-bar").get_by_role("button", name="挑好了").click()
+    expect(p.locator(".cart-bar")).to_have_count(0)
+    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-tags")).to_contain_text("准备买")
+    expect(p.get_by_role("button", name="预下单 · 2 个")).to_be_visible()
+    # 都买了：耳机没买成，取消勾选，留在预下单里
+    n = len(c.tx())
+    p.locator(".cart").get_by_role("button", name="都买了").click()
+    sheet = p.locator(".sheet")
+    expect(sheet).to_contain_text("共 ¥1,260")
+    sheet.locator(".check-row", has_text="降噪耳机").get_by_role("checkbox").uncheck()
+    expect(sheet).to_contain_text("共 ¥60")
+    sheet.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 1)
     t = c.tx()[-1]
-    assert (t["category"], t["amount"], t["wishKind"]) == ("c-wish", 80, "small"), t
-    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 80:,}")
+    assert (t["category"], t["amount"], t["wishKind"], t["wish"]) == ("c-wish", 60, "small", ids["一本闲书"]), t
+    book = next(w for w in c.data()["wishes"] if w["name"] == "一本闲书")
+    assert (book["status"], book["boughtPrice"]) == ("bought", 60), book
+    assert cart() == [(ids["降噪耳机"], None)], cart()
+    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 60:,}")
+    # 清空预下单
+    p.locator(".cart").get_by_role("button", name="清空").click()
+    expect(p.locator(".cart")).to_have_count(0)
+    assert cart() == []
+    n = len(c.tx())
     # 再加一个 250 的小额心愿，基金不够：差的算自由钱
     p.get_by_role("button", name="加一个心愿").click()
     p.locator(".sheet").get_by_label("想要什么").fill("台灯")
@@ -687,9 +728,9 @@ def _(c):
     p.locator(".wish", has_text="台灯").get_by_role("button", name="买了").click()
     expect(p.locator(".sheet")).to_contain_text("差的")
     p.locator(".sheet").get_by_role("button", name="记好了").click()
-    c.wait_saved(n + 3)
+    c.wait_saved(n + 2)
     split = sorted((x["category"], x["amount"]) for x in c.tx()[-2:])
-    assert split == sorted([("c-wish", fund - 80), ("c-like", 250 - (fund - 80))]), split
+    assert split == sorted([("c-wish", fund - 60), ("c-like", 250 - (fund - 60))]), split
     expect(p.locator(".big-num")).to_have_text("¥0")
     # 放弃键盘
     p.locator(".wish", has_text="机械键盘").get_by_role("button", name="不想要了").click()
@@ -707,7 +748,7 @@ def _(c):
     # 小课堂
     p.get_by_role("button", name=re.compile("^储蓄率")).click()
     expect(p.locator(".sheet")).to_contain_text("储蓄率 = 存下的钱 ÷ 收入")
-    p.locator(".sheet").get_by_role("button", name="问问 DeepSeek").click()
+    p.locator(".sheet").get_by_role("button", name="问问 AI").click()
     expect(p.get_by_label("想问什么")).to_have_value("关于「储蓄率」，我想问：")
     p.get_by_label("想问什么").fill("")
     p.get_by_label("想问什么").dispatch_event("input")
@@ -892,7 +933,7 @@ def _(c):
     expect(card.get_by_role("button", name="删掉")).to_have_count(0)
     # 兼职三成：前面记过 1600 + 去年 800 的兼职
     c.go("#/wishes")
-    expect(p.get_by_text("其中兼职收入的三成进来了 ¥720")).to_be_visible()
+    expect(p.locator(".fund-rows")).to_contain_text("兼职收入+¥720")
     # 预算建议：挑最近 3 个完整、非暑假的预算月，日常每月只花 300
     d = c.data()
     cur = period_start(date.today())
@@ -1336,7 +1377,7 @@ def _(c):
     sheet.get_by_label("他为我花了多少").fill("120")
     sheet.get_by_role("button", name="估一个").click()
     expect(sheet.get_by_label("预计要准备多少")).to_have_value("150")
-    expect(sheet.get_by_text("DeepSeek：编的估法")).to_be_visible()
+    expect(sheet.get_by_text("AI：编的估法")).to_be_visible()
     assert "他为我花了大约 ¥120" in json.dumps(LAST_AI[-1], ensure_ascii=False)
     sheet.get_by_role("button", name="记好了").click()
     for _ in range(50):
