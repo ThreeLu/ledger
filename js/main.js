@@ -32,6 +32,7 @@ const LAST_KEY = 'ledger-last'; // 上次用的账户和类别，记账时默认
 const EDITING_ROUTES = /^\/(add|reconcile|receipt|bills)/;
 
 const view = document.getElementById('view');
+let summaryFlipped = false; // 总结页翻到了「钱都在哪」
 const nav = document.getElementById('nav');
 let settings = readSettings();
 let gh = null;
@@ -280,7 +281,10 @@ function render() {
     break;
   }
   view.replaceChildren(...[content || notFound(), store?.data && /^\/?$/.test(path) ? whisper(path) : null].filter(Boolean));
-  if (path !== lastPath) { view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); lastPath = path; }
+  if (path !== lastPath) {
+    if (!path.startsWith('/summary')) summaryFlipped = false;
+    view.classList.remove('enter', 'flip-in'); void view.offsetWidth; view.classList.add('enter'); lastPath = path;
+  }
   document.documentElement.dataset.season = solarTerm(today()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
   for (const a of nav.querySelectorAll('a[href]')) {
@@ -1976,10 +1980,25 @@ const SUMMARY_HELP = [
   ['月度小信', ['每个预算月结束后，打开那个月的总结，AI 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
   ['年总结', ['按自然年：一年存了多少、储蓄率、总资产多了多少、每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
+  ['钱都在哪', ['右上角点「钱都在哪」，整页翻过来，看每一类钱有多少、存到哪了；再点「总结」翻回来。']],
 ];
 const WEEKDAYS = '一二三四五六日';
 
+// 总结页可以整页翻过来看「钱都在哪」：默认是总结，离开总结页再回来又是总结（summaryFlipped 在最上面）
+function flipButton() {
+  return h('button', { type: 'button', class: 'flip-btn', 'aria-label': summaryFlipped ? '翻回总结' : '翻到钱都在哪',
+    onclick: () => {
+      summaryFlipped = !summaryFlipped;
+      render();
+      scrollTo(0, 0);
+      view.classList.remove('flip-in'); void view.offsetWidth; view.classList.add('flip-in'); // 整页翻过来
+      view.addEventListener('animationend', () => view.classList.remove('flip-in'), { once: true });
+    } },
+  icon('swap'), summaryFlipped ? '总结' : '钱都在哪');
+}
+
 function summaryView(q) {
+  if (summaryFlipped) return moneyView(true);
   const d = store.data;
   const mode = ['month', 'year'].includes(q.mode) ? q.mode : 'week';
   const day = q.day || today();
@@ -1990,7 +2009,7 @@ function summaryView(q) {
     h('a', { class: 'icon-btn', href: link(mode, prev), 'aria-label': '上一个' }, '‹'),
     h('div', { class: 'grow center' }, h('b', {}, label), sub ? h('div', { class: 'muted small' }, sub) : null),
     next <= today() ? h('a', { class: 'icon-btn', href: link(mode, next), 'aria-label': '下一个' }, '›') : h('span', { class: 'icon-btn ghost' }));
-  const head = header('总结', helpButton('总结怎么看', SUMMARY_HELP));
+  const head = header('总结', flipButton(), helpButton('总结怎么看', SUMMARY_HELP));
 
   if (mode === 'week') {
     const ws = weekSummary(d, day);
@@ -3690,7 +3709,16 @@ function cardCheckCard() {
     h('p', { class: 'muted small' }, '先在上面把每张卡的余额对准，再看这里。'));
 }
 
-function moneyView() {
+const MONEY_HELP = [
+  ['一句话', ['钱一直在卡里，网站只在账面上给它们分好用途。存款不碰，心愿只花省下来的钱，到日子要用的钱提前留好。']],
+  ['钱进来先补谁', ['应急底线 → 医疗备用金 → 专项存款（日子最近的先）→ 自由存款（到 ¥2,000）→ 家庭存款（每凑够一万封存）。已经封存的家庭存款一直保着。']],
+  ['钱不够先扣谁', ['心愿基金能随便用的（留 ¥100）→ 自由存款 → 专项（日子最远的先让）→ 医疗 → 应急 → 家庭存款。大额心愿攒着的不扣。']],
+  ['每月数额计算', ['在「对账」页最下面：生活费卡这边应该有多少、实际多少、该从哪张卡转多少。']],
+  ['在总结里', ['总结页右上角点「钱都在哪」，整页翻过来就是这一页；再点「总结」翻回去。']],
+];
+
+// inSummary：在总结页翻过来看的（标题旁边是翻回去的按钮）
+function moneyView(inSummary = false) {
   const d = store.data;
   const t = today();
   const m = savingsMap(d, t);
@@ -3738,12 +3766,8 @@ function moneyView() {
       lines: [`能随便用 ${money(m.wish.small)}`, ...plan.filter((x) => x.saved > 0).map((x) => `${x.w.name}攒着 ${money(x.saved)} / ${money(x.w.price)}`)], onclick: () => go('#/wishes') }),
   ];
   return h('div', {},
-    headerSub('钱都在哪', '每一类钱有多少、存到哪了', helpButton('钱都在哪', [
-      ['一句话', ['钱一直在卡里，网站只在账面上给它们分好用途。存款不碰，心愿只花省下来的钱，到日子要用的钱提前留好。']],
-      ['钱进来先补谁', ['应急底线 → 医疗备用金 → 专项存款（日子最近的先）→ 自由存款（到 ¥2,000）→ 家庭存款（每凑够一万封存）。已经封存的家庭存款一直保着。']],
-      ['钱不够先扣谁', ['心愿基金能随便用的（留 ¥100）→ 自由存款 → 专项（日子最远的先让）→ 医疗 → 应急 → 家庭存款。大额心愿攒着的不扣。']],
-      ['每月数额计算', ['在「对账」页最下面：生活费卡这边应该有多少、实际多少、该从哪张卡转多少。']],
-    ])),
+    inSummary ? headerSub('钱都在哪', '每一类钱有多少、存到哪了', flipButton(), helpButton('钱都在哪', MONEY_HELP))
+      : headerSub('钱都在哪', '每一类钱有多少、存到哪了', helpButton('钱都在哪', MONEY_HELP)),
     h('div', { class: 'card money-total' },
       h('div', { class: 'muted small' }, '总共'),
       h('div', { class: 'big-num' }, money(total)),

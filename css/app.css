@@ -675,3 +675,11 @@ button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: 
 .card-check p { margin: 8px 0 0; }
 .card-check .cart-line { padding: 3px 0; }
 .detail-rows { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+
+/* 总结 ⇄ 钱都在哪：右上角的翻转按钮，整页像卡片一样翻过来 */
+.flip-btn { min-height: 34px; padding: 0 12px; border-radius: 17px; font-size: 13.5px; background: var(--accent-soft); color: var(--accent); gap: 4px; }
+.flip-btn svg { width: 15px; height: 15px; }
+#view.flip-in { animation: flip-in .45s cubic-bezier(.2, .7, .2, 1) both; transform-origin: 50% 30%; }
+#view.flip-in > * { animation: none; }
+@keyframes flip-in { from { transform: perspective(1400px) rotateY(-80deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #view.flip-in { animation: none; } }

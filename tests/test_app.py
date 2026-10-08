@@ -935,6 +935,17 @@ def _(c):
     tile("医疗备用金").click()
     expect(p.locator(".sheet")).to_contain_text("看病、买药从这里出")
     p.locator(".sheet").get_by_role("button", name="知道了").click()
+    # 总结页可以整页翻到「钱都在哪」，再翻回来；离开总结页再回来默认是总结
+    c.go("#/summary")
+    p.get_by_role("button", name="翻到钱都在哪").click()
+    expect(p.get_by_role("heading", name="钱都在哪")).to_be_visible()
+    expect(tile("自由存款")).to_be_visible()
+    p.get_by_role("button", name="翻回总结").click()
+    expect(p.get_by_role("heading", name="总结")).to_be_visible()
+    p.get_by_role("button", name="翻到钱都在哪").click()
+    c.go("#/")
+    c.go("#/summary")
+    expect(p.get_by_role("heading", name="总结")).to_be_visible()
 
 @step("没信号也能记：先存手机、立刻显示；离线刷新还在；有网后自动上传，和另一台设备的修改合并")
 def _(c):
