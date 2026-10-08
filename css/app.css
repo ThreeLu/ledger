@@ -22,6 +22,7 @@
   --g-look: #c9b28f;
   --g-sub: #9a948a;
   --g-none: #d3cdc2;
+  --g-med: #a9bfa5;
   --shadow: 0 1px 2px rgba(60, 55, 45, 0.06), 0 6px 20px rgba(60, 55, 45, 0.06);
   --radius: 16px;
   color-scheme: light;
@@ -49,6 +50,7 @@
     --g-look: #b39d7a;
     --g-sub: #8a857c;
     --g-none: #4d4a52;
+    --g-med: #5f7a5c;
     --shadow: none;
     color-scheme: dark;
   }
@@ -652,3 +654,24 @@ button:not(:disabled):active, .button:active, .icon-btn:active, a.chip:active, .
 a.cell:active, button.cell:not(:disabled):active, .cell.pick:not(:disabled):active, .cell.indicator:not(:disabled):active { background: var(--chip); transform: none; }
 button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: none; opacity: .55; }
 @media (prefers-reduced-motion: reduce) { button:active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: none !important; } }
+
+/* 钱都在哪：小圆圈 + 两行字，两列 */
+.money-total .stack-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0 8px; }
+.money-total .stack-bar i { display: block; min-width: 3px; }
+.stack-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.stack-legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; background: var(--c); }
+.money-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.money-tile { display: flex; align-items: center; gap: 10px; min-height: 0; padding: 12px; border-radius: 14px; background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font-weight: 400; justify-content: flex-start; }
+.money-text { min-width: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.money-text b { display: block; font-size: 14px; color: var(--text); font-weight: 600; }
+.mring { --v: 0%; --c: var(--accent); width: 50px; height: 50px; flex: none; border-radius: 50%; position: relative; display: grid; place-items: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mring::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(var(--c) var(--v), var(--chip) 0); -webkit-mask: radial-gradient(circle, transparent 60%, #000 61%); mask: radial-gradient(circle, transparent 60%, #000 61%); }
+.mring.sealed { --c: var(--g-daily); }
+.mring.late { --c: var(--amber); }
+.mring.med { --c: var(--g-med); }
+.mring.free { --c: var(--g-look); }
+.money-note { margin: -4px 4px 8px; }
+.fund-split { margin-top: 2px; }
+.card-check p { margin: 8px 0 0; }
+.card-check .cart-line { padding: 3px 0; }
+.detail-rows { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }

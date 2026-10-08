@@ -15,6 +15,7 @@ export const GROUPS = [
   { id: 'free', name: '自由钱', color: 'var(--accent)' },
   { id: 'look', name: '形象', color: 'var(--g-look)' },
   { id: 'sub', name: '订阅', color: 'var(--g-sub)' },
+  { id: 'med', name: '医疗', color: 'var(--g-med)' },
   { id: 'none', name: '不占预算', color: 'var(--g-none)' },
 ];
 export const LIVING = ['food', 'daily', 'free', 'look']; // 每天都在花的几组，「花钱节奏」只看这些（订阅是固定日子扣的）
@@ -35,7 +36,7 @@ export const EXPENSE_CATEGORIES = [
   C('c-clothes', '衣服', 'daily', '穿着'), C('c-shoes', '鞋子', 'daily', '穿着'), C('c-accessory', '配饰', 'daily', '穿着'),
   C('c-hair', '理发', 'daily', '生活服务'), C('c-bath', '洗澡水费', 'daily', '生活服务'), C('c-laundry', '洗衣机', 'daily', '生活服务'), C('c-express', '快递', 'daily', '生活服务'),
   C('c-social', '聚餐请客', 'daily', '人情社交'), C('c-gift', '礼物', 'daily', '人情社交'), C('c-hongbao', '红包', 'daily', '人情社交'),
-  C('c-doctor', '看病', 'daily', '医疗'), C('c-medical', '买药', 'daily', '医疗'),
+  C('c-doctor', '看病', 'med'), C('c-medical', '买药', 'med'),
   C('c-other', '其他', 'daily', '其他'),
   C('c-skin', '护肤', 'look'), C('c-makeup', '化妆', 'look'), C('c-scent', '香水和打理', 'look'),
   C('c-fun', '娱乐', 'free'), C('c-hobby', '爱好', 'free'), C('c-like', '喜欢的小东西', 'free'),
@@ -44,7 +45,7 @@ export const EXPENSE_CATEGORIES = [
 ];
 // 老版本的类别：以前记的账还显示原来的名字，但记新账时不再出现
 const RETIRED = { 'c-meal': '三餐', 'c-daily': '日用品', 'c-transport': '交通', 'c-study': '学习' };
-export const CATEGORY_VERSION = 3; // 3：加了「形象」组（护肤、化妆、香水和打理）
+export const CATEGORY_VERSION = 4; // 3：加了「形象」组（护肤、化妆、香水和打理）；4：看病、买药单独成「医疗」组（从医疗备用金出）
 
 // 第一次使用时的默认账本。这里的代码是公开的，所以只放通用的东西；
 // 具体的账户名、收入、固定扣费、规则说明都写在私有仓库的 finance.json 里，在网页上改。
@@ -66,7 +67,7 @@ export function defaultData(today) {
     categoryVersion: CATEGORY_VERSION,
     categories: [
       ...EXPENSE_CATEGORIES.map((c) => ({ ...c })),
-      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-gift', '收到的红包礼金'), I('i-other', '其他收入'),
+      I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-gift', '收到的红包礼金'), I('i-med', '医保报销'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
     notes: {}, // 预算每组的说明（「我们的花钱方式」里显示）
@@ -127,9 +128,15 @@ export function migrate(data) {
     const at = data.categories.findIndex((c) => c.id === 'i-other');
     data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-gift', '收到的红包礼金'));
   }
+  if (!data.categories.some((c) => c.id === 'i-med')) {
+    const at = data.categories.findIndex((c) => c.id === 'i-other');
+    data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-med', '医保报销'));
+  }
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
-  data.goals ||= []; // 存款目标：{ id, name, target, by: 'YYYY-MM-DD', note }
+  data.goals ||= []; // 专项存款（自己加的）：{ id, name, target, by: 'YYYY-MM-DD', note, status?: 'done'|'cancelled', doneAt? }；记账时 tx.special = id
+  data.family ||= { sealed: 0, log: [] }; // 家庭存款：已经封存了多少（一万一万地封），log: [{ date, amount }]
+  data.settings.medTarget ??= 1000; // 医疗备用金
   data.milestones ||= {}; // 里程碑：{ reached: { key: { at, text } }, seen: { key: true } }
   data.milestones.reached ||= {};
   data.letters ||= {}; // 月度小信：{ 预算月开始日: { at, text } }
@@ -138,7 +145,6 @@ export function migrate(data) {
   data.wishCart ||= []; // 预下单：[{ id: 心愿 id, price?: 改过的价格（只用来算账，买了按它记） }]
   data.wishes ||= []; // { id, name, price, want: bit|nice|want|very|most, kind: ""|need|grow|joy|feel|gift, reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
-  data.settings.wishMonthlyCap ??= 400; // 每月最多给大额心愿攒多少
   data.settings.coolDays ??= 3; // 新心愿冷静几天
   return data;
 }
@@ -223,6 +229,16 @@ export const cny = (t) => t.cny ?? t.amount;
 
 // ---------- 预算月统计 ----------
 
+// 这一笔算在哪个组：记在专项里的、还大额人情的不占预算（从专项存款出）
+export const bigFavorOf = (data, t) => {
+  const f = t.favor && data.favors?.find((x) => x.id === t.favor);
+  return f && f.dir === 'owe' && Number(f.estimate) >= FAVOR_BIG ? f : null;
+};
+export function txGroup(data, t) {
+  if (t.type === 'expense' && (t.special || bigFavorOf(data, t))) return 'none';
+  return category(data, t.category)?.group || 'daily';
+}
+
 export function periodStats(data, p) {
   const inP = data.tx.filter((t) => t.date >= p.start && t.date <= p.end);
   const spent = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
@@ -230,7 +246,7 @@ export function periodStats(data, p) {
   let income = 0;
   for (const t of inP) {
     if (t.type === 'expense' || t.type === 'writeoff') {
-      const g = category(data, t.category)?.group || 'daily';
+      const g = txGroup(data, t);
       spent[g] += cny(t);
       byCat[t.category] = (byCat[t.category] || 0) + cny(t);
     } else if (t.type === 'income') income += cny(t);
@@ -378,13 +394,16 @@ export function needsReconcile(data, today) {
 }
 
 // ---------- 心愿单 ----------
-// 钱不挪地方，只是记着「这里面有多少是给心愿的」。
-// 小额心愿：心愿基金 = 每个结束的预算月，生活预算（吃饭 + 日常 + 自由钱）没花完的进来，超了从里面扣（扣到 0 为止）；买小额心愿从这里出。
-// 大额心愿：每个结束的预算月，从这个月真正多存下的钱里（先扣掉进心愿基金的、暑假生活费和大额人情这个月该留的），
-//   按心愿单的顺序给还没攒够的大额心愿攒，合计不超过 wishMonthlyCap；攒够一个再攒下一个。没多存下钱的月份就不攒。
+// 钱不挪地方，只是记着「这里面有多少是给心愿的」（心愿基金的钱实际在生活费卡里）。
+// 心愿基金 = 每个结束的预算月生活费的结余 + 兼职收入的三成。每次进账 1/3 给正在攒的大额心愿、2/3 进「能随便用」。
+// 超支（生活费、专项、医疗、报不回的垫付）先扣「能随便用」，扣到只剩 100 为止，剩下的由存款补（每月数额计算里转）。
+// 大额心愿：点「开始攒」从能随便用里拿 100 放进去；一次只攒一个，其他排队；攒够了才能买；不买了，攒的退回能随便用。
 
 const r2 = (n) => Math.round(n * 100) / 100;
 export const isBigWish = (data, w) => Number(w.price) > (data.settings.wishBigFrom ?? 300);
+export const WISH_KEEP = 100; // 心愿基金被扣时至少留这么多
+export const WISH_SEED = 100; // 大额心愿「开始攒」先放进去的
+export const WISH_SHARE = 1 / 3; // 每次进账分给正在攒的大额心愿的比例
 
 // 已经结束的预算月：从开始记账那个月，到上个预算月
 export function closedPeriods(data, today) {
@@ -395,98 +414,117 @@ export function closedPeriods(data, today) {
   return out;
 }
 
+// 心愿基金和医疗备用金都按时间顺序一件件算出来（都是现算的，不存）
+// 返回 small = 能随便用；env = 每个大额心愿攒着的；total = 两者合计；med = 医疗备用金现在的水位；parts = total 的来源（加起来等于 total）
 export function wishFunds(data, today) {
-  const periods = closedPeriods(data, today);
-  const events = [
-    ...periods.map((p) => ({ date: p.end, v: livingBudget(data) * partial(data, p).factor - periodStats(data, p).living, p })),
-    ...data.tx.filter((t) => t.category === 'c-wish' && t.wishKind === 'small' && t.date <= today).map((t) => ({ date: t.date, v: -cny(t) })),
-    // 兼职收入：存下 sideIncomeSave（七成），剩下的（三成）进心愿基金
-    ...(data.settings.sideIncomeSave != null ? data.tx.filter((t) => t.type === 'income' && t.category === 'i-job' && t.date <= today)
-      .map((t) => ({ date: t.date, v: r2(cny(t) * (1 - data.settings.sideIncomeSave)), job: true })) : []),
-  ].sort((a, b) => a.date.localeCompare(b.date) || (a.p ? 1 : -1));
+  const ev = [];
+  const push = (date, k, v, extra = {}) => ev.push({ date, k, v: r2(v), ...extra });
+  for (const p of closedPeriods(data, today)) push(p.end, 'close', livingBudget(data) * partial(data, p).factor - periodStats(data, p).living, { p });
+  const jobSave = data.settings.sideIncomeSave;
+  const floorAcc = data.settings.floorAccount;
+  for (const t of data.tx) {
+    if (t.date > today) continue;
+    if (t.type === 'income') {
+      if (t.category === 'i-job' && jobSave != null) push(t.date, 'job', cny(t) * (1 - jobSave));
+      if (t.category === 'i-med') push(t.date, 'medBack', cny(t));
+      else if (t.account && t.account === floorAcc) push(t.date, 'refill', cny(t));
+    } else if (t.type === 'expense') {
+      if (t.category === 'c-wish' && t.wishKind === 'small') push(t.date, 'smallWish', cny(t));
+      else if (txGroup(data, t) === 'med') push(t.date, 'med', cny(t));
+      else if (t.special) push(t.date, 'special', cny(t), { id: t.special, budget: Number(data.goals.find((g) => g.id === t.special)?.target) || 0 });
+      else if (bigFavorOf(data, t)) push(t.date, 'special', cny(t), { id: `f:${t.favor}`, budget: Number(bigFavorOf(data, t).estimate) || 0 });
+    } else if (t.type === 'writeoff') push(t.date, 'cover', cny(t));
+  }
+  const bigs = data.wishes.filter((w) => isBigWish(data, w) && w.saveStart);
+  for (const w of bigs) {
+    push(w.saveStart, 'queue', 0, { w });
+    if (w.status === 'bought' && w.boughtAt) push(w.boughtAt, 'buyBig', Number(w.boughtPrice) || 0, { w });
+    if (w.status === 'dropped') push(w.droppedAt || today, 'dropBig', 0, { w });
+  }
+  const rank = { queue: 0, close: 2 };
+  ev.sort((a, b) => a.date.localeCompare(b.date) || (rank[a.k] ?? 1) - (rank[b.k] ?? 1));
+
+  const medT = medTarget(data);
   let small = 0;
-  let fromJobs = 0;
+  let med = medT;
+  let spill = 0; // 心愿基金扣不动、要由存款补的
+  const env = {};
+  const started = {};
+  const queue = [];
+  const spentOn = {};
+  const parts = { saved: 0, over: 0, jobs: 0, spent: 0, cover: 0 };
   const log = [];
-  for (const e of events) {
-    if (e.job) fromJobs += e.v;
-    if (!e.p) { small += e.v; continue; }
-    const before = small;
-    small = Math.max(0, small + e.v);
-    log.push({ p: e.p, leftover: r2(e.v), change: r2(small - before) });
-  }
-  const cap = Number(data.settings.wishMonthlyCap) || 0;
-  const big = data.wishes.filter((w) => isBigWish(data, w) && w.status !== 'dropped');
-  const saved = Object.fromEntries(big.map((w) => [w.id, 0]));
-  const bigLog = [];
-  for (const p of periods) {
-    const room = Math.max(0, Math.min(cap, wishRoom(data, p)));
-    let left = room;
-    for (const w of big) {
-      if (left <= 0) break;
-      if (w.createdAt > p.end || (w.status === 'bought' && w.boughtAt <= p.end)) continue;
-      const add = Math.min(left, Number(w.price) - saved[w.id]);
-      if (add > 0) { saved[w.id] += add; left -= add; }
-    }
-    bigLog.push({ p, room: r2(room), gave: r2(room - left) });
-  }
-  const sum = (xs) => r2(xs.reduce((a, b) => a + b, 0));
-  const parts = {
-    saved: sum(log.map((x) => Math.max(0, x.change))),
-    over: sum(log.map((x) => Math.min(0, x.change))),
-    jobs: r2(fromJobs),
-    spent: sum(events.filter((e) => !e.p && !e.job).map((e) => e.v)),
+  const price = (id) => Number(data.wishes.find((w) => w.id === id)?.price) || 0;
+  const active = () => queue.find((id) => started[id] && env[id] < price(id));
+  const tryStart = (date) => {
+    if (active()) return;
+    const next = queue.find((id) => !started[id]);
+    if (!next || small < WISH_SEED) return;
+    const seed = Math.min(WISH_SEED, price(next));
+    small = r2(small - seed);
+    env[next] = seed;
+    started[next] = date;
   };
-  return { small: r2(small), log, parts, saved, cap, bigLog, fromJobs: r2(fromJobs) };
-}
-
-// 「到日子一定要用」的钱，在预算月 p 里该留多少：暑假生活费（分摊到有收入的月份）、300 以上的人情（从记下那天到要还那天平摊）
-export function mustKeep(data, p) {
-  let n = 0;
-  const months = data.settings.summerMonths || [];
-  if (months.length && months.length < 12 && data.settings.expectedIncome && !p.summer) n += budgetTotal(data) * months.length / (12 - months.length);
-  for (const f of data.favors || []) {
-    if (f.dir !== 'owe' || !(Number(f.estimate) >= FAVOR_BIG)) continue;
-    const from = (f.createdAt || f.date || '').slice(0, 10);
-    if (!from || from > p.end || (f.status === 'done' && (f.doneAt || '').slice(0, 10) < p.start)) continue;
-    const due = f.due || nextHoliday(from)?.start || from;
-    if (due < p.start) continue;
-    n += Number(f.estimate) / Math.max(1, Math.round(daysBetween(from, due) / 30.4));
+  const inflow = (x, kind, date) => {
+    const a = active();
+    const give = a ? r2(Math.min(x * WISH_SHARE, price(a) - env[a])) : 0;
+    if (a) env[a] = r2(env[a] + give);
+    small = r2(small + x - give);
+    parts[kind] = r2(parts[kind] + x);
+    tryStart(date);
+  };
+  const deduct = (x, kind) => {
+    const take = r2(Math.min(x, Math.max(0, small - WISH_KEEP)));
+    small = r2(small - take);
+    parts[kind] = r2(parts[kind] - take);
+    spill = r2(spill + x - take);
+    return take;
+  };
+  const leave = (id) => { const i = queue.indexOf(id); if (i >= 0) queue.splice(i, 1); };
+  for (const e of ev) {
+    if (e.k === 'close') {
+      const before = small;
+      if (e.v >= 0) inflow(e.v, 'saved', e.date); else deduct(-e.v, 'over');
+      log.push({ p: e.p, leftover: e.v, change: r2(small - before) });
+    } else if (e.k === 'job') inflow(e.v, 'jobs', e.date);
+    else if (e.k === 'smallWish') { const v = Math.min(e.v, small); small = r2(small - v); parts.spent = r2(parts.spent - v); }
+    else if (e.k === 'med') { med = r2(med - e.v); if (med < 0) { deduct(-med, 'cover'); med = 0; } }
+    else if (e.k === 'medBack' || e.k === 'refill') med = r2(Math.min(medT, med + e.v));
+    else if (e.k === 'special') {
+      const before = Math.max(0, (spentOn[e.id] || 0) - e.budget);
+      spentOn[e.id] = r2((spentOn[e.id] || 0) + e.v);
+      const over = r2(Math.max(0, spentOn[e.id] - e.budget) - before);
+      if (over > 0) deduct(over, 'cover');
+    } else if (e.k === 'cover') deduct(e.v, 'cover');
+    else if (e.k === 'queue') { queue.push(e.w.id); env[e.w.id] = 0; tryStart(e.date); }
+    else if (e.k === 'buyBig' || e.k === 'dropBig') {
+      const back = r2(Math.max(0, (env[e.w.id] || 0) - (e.k === 'buyBig' ? e.v : 0)));
+      small = r2(small + back);
+      parts.spent = r2(parts.spent - ((env[e.w.id] || 0) - back));
+      env[e.w.id] = 0;
+      leave(e.w.id);
+      tryStart(e.date);
+    }
   }
-  return r2(n);
+  const saving = active() || null;
+  const waiting = queue.filter((id) => !started[id]);
+  const envTotal = r2(Object.values(env).reduce((a, b) => a + b, 0));
+  return { small: r2(small), env, saved: env, envTotal, total: r2(small + envTotal), saving, waiting, started, log, parts, med: r2(med), spill,
+    fromJobs: parts.jobs };
 }
 
-// 结束的预算月 p 里能给大额心愿的钱：收入 − 花销（买心愿的不算，那是以前攒的）− 进了心愿基金的 − mustKeep
-export function wishRoom(data, p) {
-  const st = periodStats(data, p);
-  const leftover = Math.max(0, livingBudget(data) * partial(data, p).factor - st.living);
-  const jobs = data.settings.sideIncomeSave != null
-    ? st.tx.filter((t) => t.type === 'income' && t.category === 'i-job').reduce((s, t) => s + cny(t) * (1 - data.settings.sideIncomeSave), 0) : 0;
-  return r2(st.income - (st.total - (st.byCat['c-wish'] || 0)) - leftover - jobs - mustKeep(data, p));
-}
-
-// 还没结束的预算月大概能给大额心愿多少：按预计收入 − 预算 − mustKeep；没填预计收入就按每月上限
-const futureRoom = (data, p, cap) => (p.summer ? 0 : !data.settings.expectedIncome ? cap
-  : Math.max(0, Math.min(cap, data.settings.expectedIncome - budgetTotal(data) - mustKeep(data, p))));
-
-// 还没买的大额心愿：按现在的顺序、每月上限，大概哪个预算月能攒够
+// 还没买的大额心愿现在的状态：idle 只在单子上 / waiting 排队 / saving 正在攒 / ready 攒够了
+// eta：按最近 3 个结束的预算月平均每月进账的 1/3 估，大概还要几个月
 export function bigWishPlan(data, today) {
   const f = wishFunds(data, today);
-  const open = data.wishes.filter((w) => w.status === 'open' && isBigWish(data, w));
-  const left = open.map((w) => Math.max(0, Number(w.price) - (f.saved[w.id] || 0)));
-  const done = open.map((w, i) => (left[i] <= 0 ? periodFor(data, today).start : null));
-  let p = periodFor(data, today);
-  for (let m = 0; m < 120 && done.some((x) => !x) && f.cap > 0; m++) {
-    let cap = futureRoom(data, p, f.cap);
-    for (let i = 0; i < open.length && cap > 0; i++) {
-      if (done[i]) continue;
-      const add = Math.min(cap, left[i]);
-      left[i] -= add;
-      cap -= add;
-      if (left[i] <= 0) done[i] = p.end; // 这个预算月结束时攒够
-    }
-    p = shiftPeriod(data, p, 1);
-  }
-  return open.map((w, i) => ({ w, saved: r2(f.saved[w.id] || 0), ready: done[i] }));
+  const recent = f.log.slice(-3);
+  const perMonth = recent.length ? recent.reduce((s, x) => s + Math.max(0, x.leftover), 0) / recent.length * WISH_SHARE : 0;
+  return data.wishes.filter((w) => w.status === 'open' && isBigWish(data, w)).map((w) => {
+    const saved = r2(f.env[w.id] || 0);
+    const state = !w.saveStart ? 'idle' : f.waiting.includes(w.id) ? 'waiting' : saved >= Number(w.price) ? 'ready' : 'saving';
+    const need = Math.max(0, Number(w.price) - saved);
+    return { w, saved, state, pos: state === 'waiting' ? f.waiting.indexOf(w.id) + 1 : 0, eta: state === 'saving' && perMonth > 0 ? Math.ceil(need / perMonth) : null };
+  });
 }
 
 export const coolingLeft = (data, w, today) => Math.max(0, (data.settings.coolDays ?? 3) - daysBetween(w.createdAt, today));
@@ -529,19 +567,39 @@ export function yearlyCost(data, r, rate = data.settings.usdRate) {
   return (r.day ? r.amount * 12 : r.amount) * (isUsd(data, r.account) ? rate : 1);
 }
 
-// ---------- 存款目标（比如毕业过渡金）----------
-// 不另外挪钱：存钱卡里扣掉应急钱底线，先给暑假生活费、大额人情，再扣掉大额心愿已攒的，剩下的按目标顺序算进度。
-// 暑假生活费：summerMonths 没有收入，自动成为最前面的存款目标（7 月发钱日的前一天存够那几个月的预算）
+// ---------- 存款：应急、医疗、专项、自由、家庭 ----------
+// 都不另外挪钱，看存钱卡余额（加上别人欠我、还会回来的）现算。保护的顺序（钱进来先补谁）：
+//   家庭存款（已经封存的）→ 应急底线 → 医疗备用金 → 专项（日子最近的先）→ 自由存款
+// 钱不够时反过来扣：自由存款 → 专项（日子最远的先让）→ 医疗 → 应急 → 家庭。
+export const FREE_KEEP = 2000; // 自由存款一直留着兜底、不封存的
+export const FAMILY_STEP = 10000; // 家庭存款一次封存多少
+export const medTarget = (data) => Number(data.settings.medTarget ?? 1000) || 0;
+
+// 暑假生活费（专项，花起来按生活费算）：平时是下一个暑假那几个月的预算，暑假开始前一天存够；
+// 暑假里还没转出来的那几个月继续留着，转一个月少一个月。
 export function summerGoal(data, today) {
   const months = data.settings.summerMonths || [];
   if (!months.length || !data.settings.expectedIncome) return null;
+  const monthly = budgetTotal(data);
+  const p = periodFor(data, today);
+  if (p.summer) {
+    let left = 0;
+    for (let q = shiftPeriod(data, p, 1); q.summer && left < 12; q = shiftPeriod(data, q, 1)) left++;
+    const floorAcc = data.settings.floorAccount;
+    const moved = data.tx.some((t) => t.type === 'transfer' && t.account === floorAcc && t.date >= p.start && t.date <= p.end);
+    if (!moved) left++;
+    if (left > 0) {
+      return { id: 'auto-summer', auto: true, kind: 'summer', name: `${p.start.slice(0, 4)} 年暑假生活费`, budget: monthly * left, target: monthly * left,
+        by: moved ? shiftPeriod(data, p, 1).start : p.start, note: `暑假还有 ${left} 个月的生活费没转出来，继续留着` };
+    }
+  }
   const first = Math.min(...months);
   const sd = data.settings.periodStartDay || 1;
   let y = Number(today.slice(0, 4));
   const startOf = (yy) => `${yy}-${String(first).padStart(2, '0')}-${String(sd).padStart(2, '0')}`;
   if (today >= startOf(y)) y += 1;
-  return { id: 'auto-summer', auto: true, name: `${y} 年暑假生活费`, target: budgetTotal(data) * months.length, by: addDays(startOf(y), -1),
-    note: `${months.join('、')} 月没有收入，这两个月的生活费要提前留好` };
+  return { id: 'auto-summer', auto: true, kind: 'summer', name: `${y} 年暑假生活费`, budget: monthly * months.length, target: monthly * months.length, by: addDays(startOf(y), -1),
+    note: `${months.join('、')} 月没有收入，这几个月的生活费要提前留好` };
 }
 
 // 暑假里（没有收入的预算月）开头几天：提醒从存钱卡转生活费出来
@@ -551,25 +609,75 @@ export function summerTransfer(data, today) {
   return { amount: livingBudget(data), period: p };
 }
 
-export function goalStatus(data, today) {
-  const floorAcc = data.settings.floorAccount;
-  const big = wishFunds(data, today);
-  const bigSaved = data.wishes.filter((w) => w.status === 'open').reduce((s, w) => s + (big.saved[w.id] || 0), 0);
-  // 顺序：暑假生活费、大额人情（到日子一定要用）→ 大额心愿已攒的 → 自己设的目标
-  let pool = Math.max(0, (floorAcc ? balance(data, floorAcc) : 0) - (data.settings.emergencyFloor || 0));
+// 专项存款：暑假生活费、300 以上的人情（自动）、自己加的（毕业过渡金……）。按日子排，同一天先加的在前。
+// budget = 一共要多少，spent = 已经花了的，target = 现在还要留着的
+export function specialList(data, today) {
+  const out = [];
   const sg = summerGoal(data, today);
-  // 大额人情（婚礼随礼……）自动变成目标，排在暑假生活费后面
-  const fg = socialPlan(data, today).filter((x) => x.big).map((x) => ({ id: `auto-favor-${x.f.id}`, auto: true, favor: x.f.id, name: `人情：${x.name} · ${x.f.text}`, target: x.amount, by: x.due,
-    note: x.f.due ? '到那天要用' : '下一个假期还', autoText: '从人情账里来的：预计 300 以上的人情自动算成目标。还上了（记那笔钱时选上这个人情）就没了。' }));
-  const autoCount = (sg ? 1 : 0) + fg.length;
-  return [...(sg ? [sg] : []), ...fg, ...data.goals].map((g, i) => {
-    if (i === autoCount) pool = Math.max(0, pool - bigSaved);
-    const have = Math.min(pool, Number(g.target) || 0);
-    pool -= have;
-    const months = g.by ? Math.max(1, Math.round(daysBetween(today, g.by) / 30.4)) : null;
-    const need = Math.max(0, (Number(g.target) || 0) - have);
-    return { g, have: r2(have), need: r2(need), months, perMonth: months ? Math.ceil(need / months) : null };
+  if (sg) out.push(sg);
+  for (const x of socialPlan(data, today).filter((y) => y.big)) {
+    out.push({ id: `auto-favor-${x.f.id}`, auto: true, kind: 'favor', favor: x.f.id, name: `人情：${x.name} · ${x.f.text}`, budget: x.amount, target: x.amount, by: x.due,
+      note: x.f.due ? '到那天要用' : '下一个假期还', autoText: `从人情账里来的：预计 ${FAVOR_BIG} 以上的人情自动算成专项。还的时候记那笔钱、选上这个人情，就从这里出，不占当月预算。` });
+  }
+  for (const g of data.goals || []) {
+    if (g.status === 'done' || g.status === 'cancelled') continue;
+    const spent = r2(data.tx.filter((t) => t.special === g.id && t.date <= today).reduce((s, t) => s + cny(t), 0));
+    out.push({ ...g, kind: 'goal', budget: Number(g.target) || 0, spent, target: r2(Math.max(0, (Number(g.target) || 0) - spent)) });
+  }
+  return out.map((x, i) => ({ x, i })).sort((a, b) => (a.x.by || '9999').localeCompare(b.x.by || '9999') || a.i - b.i).map((y) => y.x);
+}
+
+// 从今天到 day 之间还有几个有收入的预算月（不算暑假）
+function incomeMonths(data, today, day) {
+  let n = 0;
+  for (let p = shiftPeriod(data, periodFor(data, today), 1); p.start <= day && n < 600; p = shiftPeriod(data, p, 1)) if (!p.summer) n++;
+  return n;
+}
+
+// 钱都在哪：存钱卡这边按顺序分；生活费卡这边是心愿基金和这个月的生活费
+export function savingsMap(data, today) {
+  const floorAcc = data.settings.floorAccount;
+  const wish = wishFunds(data, today);
+  const rc = receivables(data);
+  const bal = floorAcc ? balance(data, floorAcc) : 0;
+  let pool = r2(bal + rc.toMe);
+  const total = pool;
+  const take = (want) => { const have = r2(Math.max(0, Math.min(pool, want))); pool = r2(pool - have); return have; };
+  const sealed = Number(data.family?.sealed) || 0;
+  const family = { target: sealed, have: take(sealed), count: Math.round(sealed / FAMILY_STEP) };
+  const ef = Number(data.settings.emergencyFloor) || 0;
+  const emergency = { target: ef, have: take(ef) };
+  const medT = medTarget(data);
+  const medical = { target: medT, level: wish.med, have: take(wish.med) };
+  // 来不及的提醒：按预计每月能存的（预计收入 − 预算）算，到每个专项的日子前一共能存多少
+  const capacity = Math.max(0, (Number(data.settings.expectedIncome) || 0) - budgetTotal(data));
+  let cum = 0;
+  const specials = specialList(data, today).map((x) => {
+    const have = take(x.target);
+    const need = r2(x.target - have);
+    const months = x.by ? incomeMonths(data, today, x.by) : null;
+    cum += need;
+    const short = x.by && need > 0 ? r2(Math.max(0, cum - capacity * months)) : 0;
+    return { ...x, have, need, months, perMonth: months ? Math.ceil(need / months) : null, short, sealed: x.target > 0 && need <= 0 };
   });
+  const free = { have: pool, keep: FREE_KEEP };
+  const sealable = pool >= FREE_KEEP + FAMILY_STEP ? Math.floor((pool - FREE_KEEP) / FAMILY_STEP) * FAMILY_STEP : 0;
+  return { bal: r2(bal), toMe: r2(rc.toMe), total, family, emergency, medical, specials, free, sealable, wish };
+}
+
+// 每月数额计算：生活费卡这边（存钱卡、美元账户以外的人民币账户）应该有多少 = 心愿基金 + 这个月生活费还剩的
+// 差的就是该在两边之间转的钱（超支由存款补、专项和医疗用生活费卡付了、兼职那七成……）
+export function cardCheck(data, today) {
+  const floorAcc = data.settings.floorAccount;
+  const wish = wishFunds(data, today);
+  const p = periodFor(data, today);
+  const left = r2(livingBudget(data) * partial(data, p).factor - periodStats(data, p).living);
+  // 这个月已经超了的，按规则先由心愿基金扣（留 100）
+  const fromWish = left < 0 ? Math.min(-left, Math.max(0, wish.small - WISH_KEEP)) : 0;
+  const expected = r2(wish.total + Math.max(0, left) - fromWish);
+  const accs = data.accounts.filter((a) => a.id !== floorAcc && a.currency !== 'USD');
+  const actual = r2(accs.reduce((s, a) => s + balance(data, a.id), 0));
+  return { expected, actual, diff: r2(actual - expected), wish: wish.total, left, fromWish, accounts: accs };
 }
 
 // ---------- 预算调整建议 ----------

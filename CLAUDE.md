@@ -14,7 +14,7 @@
 
 ```
 { version, openingDate,
-  settings: { periodStartDay, expectedIncome, emergencyFloor, floorAccount, usdRate, summerMonths: [月], sideIncomeSave, payNote },
+  settings: { periodStartDay, expectedIncome, emergencyFloor, floorAccount, usdRate, summerMonths: [月], sideIncomeSave, payNote, medTarget },
   accounts: [{ id, name, currency: 'CNY'|'USD', opening, note }],
   categories: [{ id, name, kind: 'expense'|'income', group: 'food'|'daily'|'free'|'look'|'sub'|'none' }],
   budget: { food, daily, free, look, sub }, notes: { 组: 说明 }, incomePlan: [{ name, amount, when, use }],
@@ -22,26 +22,37 @@
   quick: [{ id, name, amount, category, account }],
   claims: [{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind: 'pdf'|'image', submitted }] }],
   people: [{ id, name, archived? }], favors: [{ id, person, dir: 'owe'|'owed', text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan? }], reconciled: { 预算月开始日: 对账日 },
-  wishes: [{ id, name, price, want: 'bit'|'nice'|'want'|'very'|'most', kind: ''|'need'|'grow'|'joy'|'feel'|'gift', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice }],
+  wishes: [{ id, name, price, want: 'bit'|'nice'|'want'|'very'|'most', kind: ''|'need'|'grow'|'joy'|'feel'|'gift', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice, saveStart? }],
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, wishCart: [{ id: 心愿id, price? }], categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
-  taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note }],
-  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, favor?, who?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
+  taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note, createdAt, status?: 'done'|'cancelled', doneAt? }], family: { sealed, log: [{ date, amount }] },
+  tx: [{ id, type, date, account, amount, cny?, category?, what?, to?, toAmount?, claim?, person?, group?, favor?, special?, who?, note, auto?, receipt?, from?, bill?, billParty?, createdAt }] }
 ```
 
 - tx.type：`expense` 支出、`income` 收入、`transfer` 转账、`adjust` 对账差额，以及「钱动了但不算收支」的：`advance` 垫付 / 借给别人 / AA 里别人那份（钱出去，别人欠我）、`repay` 报销到账 / 别人还我、`payback` 我还别人；`expense` 没有 account、有 person = 别人替我付（算花销，账户不动，我欠他）；`writeoff` 垫付结清时报不回的部分（算花销，类别「出差自付」group none，没有 account）。
 - 卡和欠款分开：欠款按 claim / person 算（`claimStatus`、`personStatus`，先进先出算「拖了多久」），还到哪张卡都行。AA 的几笔共用 `group`，删花销时一起删。
 - 类别：`EXPENSE_CATEGORIES`（大组 group 管预算，小组 sub 只为好找，日常先点小组再点类别）。改类别时提高 `CATEGORY_VERSION`，`migrate()` 会给老账本改名、补新的、按默认顺序排；不用的老类别 `hidden`（老账照样显示名字）。`c-wish`、`c-trip` 只由心愿单、垫付自动记。选「其他」（`FREEFORM`）必须写 `what`（具体是什么），流水里显示它。
-- 心愿单：`settings.wishBigFrom`（300）以内是小额，用「心愿基金」= 每个结束的预算月生活预算的结余（超支扣回，最低 0）减去小额心愿花的；以上是大额，每个结束的预算月按心愿单顺序攒，合计不超过 `wishMonthlyCap`（400），**而且只从那个月真正多存下的钱里攒**（2026-10-08 用户同意）：`wishRoom` = 收入 − 花销（`c-wish` 不算）− 进心愿基金的（生活预算结余、兼职三成）− `mustKeep`（暑假生活费按 预算 × 暑假月数 ÷ 有收入的月数 分摊、300 以上的人情从记下到要还平摊），没多存下就不攒；`bigWishPlan` 往后估按 预计收入 − 预算 − mustKeep。页面上「N 月 N 日结束的那个月，给大额心愿攒了 ¥N」（`bigLog`）。心愿基金卡片只放大数字和来源几行（`parts`：生活费省下、超支扣回、兼职收入、买了心愿，只列有数的），说明都在「?」里。都是现算的（`wishFunds`、`bigWishPlan`），钱不挪账户。买了记 `c-wish`（不占预算）；小额超出基金的部分记 `c-like`（自由钱）。冷静 `coolDays` 天。分类 `kind`（选填，`WISH_KIND`）：生活必需品、提升自己、提升幸福感、情怀、送人（送人时日期框改成「哪天前送出去」），卡片上显示，也发给 AI。想要程度 5 档（`WANT`，从低到高：有点想、有了更好、想要、很想要、非常想要；老数据只有 very / nice，键名没变）。排序（`WISH_SORTS`：攒钱顺序、冷静期、价格（再点一下高低切换）、想要程度、加入时间、AI 建议）只改显示，存 localStorage `ledger-wish-sort`；只有「攒钱顺序」时显示 ↑↓。
-- 预下单（2026-10-08）：「挑几个算一算」进打勾模式（`wishPicking`，只在内存），选的存 `data.wishCart`（手机电脑同步），卡片标「准备买」。价格可以改（`price`，只用来算账，「都买了」按它记；小额 / 大额仍按心愿本身的价格分）。`cartMath`：小额合计从心愿基金出，超出的算这个月自由钱（自由钱会超时琥珀色提醒，不拦）；大额用各自攒的，差的「直接用存款」；冷静期的能选，只提一句。「都买了」（`buyCart`）整单一个账户，没买成的取消勾选、留在预下单里；记账和单个「买了」规则一样。单个「买了」、「不想要了」也会从预下单里拿掉。
+- **钱怎么分（2026-10-08 用户定的方案）**：钱不挪账户，全是现算的。七类：生活费、心愿基金（在生活费卡）、应急底线、医疗备用金、专项存款、自由存款、家庭存款（后五类在存钱卡）。`node tests/test_money.mjs` 把每条规则测了一遍，改规则先改它。
+  - 心愿基金（`wishFunds`，按时间顺序一件件算）：每个结束的预算月生活费结余 + 兼职三成进来；每次进账 **1/3**（`WISH_SHARE`）给正在攒的大额心愿、2/3 进「能随便用」（`small`）。超支（生活费、专项超了、医疗超了、报不回的垫付 writeoff）先扣能随便用，**扣到只剩 100**（`WISH_KEEP`），扣不动的记 `spill`（由存款补）；大额心愿攒着的（`env`）不扣。`parts` 是合计 `total` 的来源（生活费省下、兼职收入、超支扣回、帮专项和看病补、买了心愿），加起来等于 total。
+  - 大额心愿（`wishBigFrom` 300 以上）：放进来只在单子上；点「开始攒」记 `saveStart`，从能随便用拿 100（`WISH_SEED`，不到 100 不能开始）；**一次只攒一个**，其他按点的先后排队（「不排了」删 saveStart），轮到时再拿 100；**攒够才能买**（存款不动），比攒的便宜多的退回；不想要了攒的全退回。`bigWishPlan` 给状态 idle / waiting / saving / ready 和大约几个月（最近 3 个月平均结余 × 1/3）。没有 ↑↓ 了，排序「默认」就是列表顺序。`wishMonthlyCap`（400）不再用。
+  - 小额心愿用能随便用买，超出的记 `c-like`（自由钱）。买了记 `c-wish`（不占预算）。冷静 `coolDays` 天。分类 `kind`（选填，`WISH_KIND`）：生活必需品、提升自己、提升幸福感、情怀、送人（送人时日期框改成「哪天前送出去」），卡片上显示，也发给 AI。想要程度 5 档（`WANT`，从低到高：有点想、有了更好、想要、很想要、非常想要；老数据只有 very / nice，键名没变）。排序（`WISH_SORTS`：默认、冷静期、价格（再点一下高低切换）、想要程度、加入时间、AI 建议）只改显示，存 localStorage `ledger-wish-sort`。
+  - 存款（`savingsMap`）：存钱卡余额 + 别人欠我的（垫付先当作还在），按顺序分：家庭存款（已封存的）→ 应急底线 → 医疗备用金 → 专项（按日子，近的先，同一天先加的先）→ 自由存款；钱不够时反过来，所以缺口总落在自由存款、最远的专项上。专项 `sealed` = 留够了（封存）；`short` = 按 预计收入 − 预算 每月能存的，到那天会差多少（琥珀色提醒）。
+  - 医疗备用金：`settings.medTarget`（1000）。看病、买药是「医疗」组（`med`，`CATEGORY_VERSION` 4），不占生活预算；水位 `wishFunds().med`：花了往下降（超了按超支扣），存钱卡的收入和「医保报销」（`i-med`）补回去。低于 300 首页「要做的事」提一句（`medLowCard`）；记满一年后看病买药超过目标，钱都在哪里建议调高。
+  - 专项存款（`specialList`，页面 `#/goals`）：暑假生活费（`summerGoal`：平时是下个暑假那几个月的预算；暑假里还没从存钱卡转出来的那几个月继续留着；花起来按生活费算，结余进心愿基金）、300 以上的人情（自动，还的那笔 `favor` 指向它 → 不占预算）、自己加的 `goals`（记账时「算在哪个专项里」→ `tx.special`，不占预算；`target` 是还要留的 = 预算 − 已花）。「办完了」`status: 'done'`：结余自动回自由存款，超了的部分在花的时候就按超支扣了；「不用了」`cancelled`。`txGroup` 把专项和大额人情的花销算进 `none` 组（periodStats、summary 都用它）。
+  - 自由存款留 2000（`FREE_KEEP`）；超过的部分每凑够 10000（`FAMILY_STEP`）打开网站时自动封存（`checkFamily` 写 `data.family`），一万一万地封。
+  - 每月数额计算（`cardCheck`，对账页最下面和钱都在哪页）：存钱卡、美元以外的人民币账户应该有 = 心愿基金合计 + 这个月生活费还剩的（这个月已经超了的先按规则由心愿基金扣），和实际余额的差就是该在两边之间转的钱。
+  - 钱都在哪（`#/money`，首页、更多、账户、专项页有入口）：总共 + 分段条，存钱卡和生活费卡两组小圆圈（`moneyRing`，封存深紫、来不及琥珀），点开看说明或跳到对应页面。
+  - 买不买：能自由用的钱 = 自由存款 + 心愿基金能随便用的 + 这个月生活费还剩的；超过就一定「不建议」。
+  - 数据仓库里的推送脚本（`.github/ledger_push.py`）自己算花销，没跟着把医疗、专项排除出生活预算；要一致的话去那边改。
+- 预下单（2026-10-08）：「挑几个算一算」进打勾模式（`wishPicking`，只在内存），选的存 `data.wishCart`（手机电脑同步），卡片标「准备买」。价格可以改（`price`，只用来算账，「都买了」按它记；小额 / 大额仍按心愿本身的价格分）。`cartMath`：小额合计从心愿基金出，超出的算这个月自由钱（自由钱会超时琥珀色提醒，不拦）；大额只有攒够了（按改过的价格）才能勾、才能买；冷静期的能选，只提一句。「都买了」（`buyCart`）整单一个账户，没买成的取消勾选、留在预下单里；记账和单个「买了」规则一样。单个「买了」、「不想要了」也会从预下单里拿掉。
 - 界面上一律叫「AI」，不写 DeepSeek（用户 2026-10-08 要求）；只有「余额不足去 DeepSeek 官网充值」和手机丢了「去 DeepSeek 后台换密钥」这种要去那个网站操作的地方留名字。
 - DeepSeek：密钥先读账本仓库 `config/ai.json`，没有就读物品档案仓库的（同一个令牌）。只发心愿单和汇总数字，不发流水明细；建议存 `wishAdvice`，密钥不进 finance.json。
 - 「我的故事」的简介（2026-10-06）：`js/profile.js`（物品档案、账本、生活三边同一份）读 `story-data/profile.json`（一天一次，缓存 localStorage `story-profile`，读不到就不带），`js/ai.js` 的 `askJson` 每次都把它加在 system 后面（`withProfile`）。令牌要授权 story-data。
 - 买不买（`#/ask`）：话里有价格时网站先算 `priceFacts`（几天饭钱、几个月自由钱、存钱目标晚几天、大额要攒几个月）和硬规则（价格 > 总资产 − 应急底线 − 本月还要花的生活费 → 一定「不建议」，前端强制；大额建议先冷静），连同 `moneyContext`（只有汇总数字，不发流水明细和备注）给 DeepSeek。聊天只在内存，决定存 `decisions`，买了的 30 天后回访。理财小课堂（`lessons()`）是写死的大白话 + 他自己的数字，不推荐具体产品。
 - 个税退税：兼职收入（`i-job`）可填 `tax`（被预扣的个税），`taxYear()` 按年汇总；每年 3/1–6/30（`taxSeason`）上一年有预扣且没办（`taxYears[年].done`）就首页提醒、推送（3/1、3/15、4/15、5/15、6/15、6/25）；办好后记一笔 `i-tax` 收入。
 - 订阅体检：`subReview.last` 起满 90 天提醒（首页 + 推送：当天、之后每 14 天），`#/subs` 可改金额、加每月 / 每年的订阅、停掉（只停自动记账，订阅本身要去 App Store 取消）。
-- 暑假生活费：`summerGoal()` 自动生成（预算 × 没收入的月数，第一个没收入的预算月开始前一天存够），排在存款目标最前面；暑假预算月头 5 天首页提醒转生活费，推送在那几个月的发钱日。
-- 兼职收入的 `1 − sideIncomeSave`（三成）自动进心愿基金（`wishFunds` 里算）。
+- 暑假生活费：`summerGoal()` 自动生成（见上面「钱怎么分」）；暑假预算月头 5 天首页提醒转生活费，推送在那几个月的发钱日。
+- 兼职收入的 `1 − sideIncomeSave`（三成）自动进心愿基金（`wishFunds` 里算），钱在生活费卡。
 - 预算调整建议 `budgetAdvice()`：最近 3 个完整、非暑假的预算月（至少 2 个）；一直 ≤ 85% 建议调低到 max(平均 × 1.1, 最多那个月)（自由钱不低于 200），≥ 2 个月超 5% 建议调高到平均；订阅按登记的实际金额。采用记 `budgetHistory`，「这个月先不改」记 `budgetAdviceDismissed[组] = 预算月开始日`。
 - 发钱日一条龙 `payday()`：收入计划（`incomePlan`，按名字或 `category` 对应收入类别）这个预算月没到的，首页卡片问「到了吗」（到了 → 金额预填、账户默认存钱卡；还没 → 当天不再问，记在 `data.payday[预算月].later`）；有收入到了（或暑假）且这个月还没从存钱卡转出过，就提供按 `presets` 一步转生活费（默认生活预算），「这个月不用」记 `noTransfer`。开始记账那个不完整的预算月不问。
 - 流水搜索：有字时搜全部时间（标题、备注、what、类别、账户、人、垫付、金额、日期，空格 = 同时满足），类别可选单个或整组；显示合计。筛选条件存在内存 `listFilter`。
@@ -50,7 +61,6 @@
 - 月度小信：结束了、有记录的预算月，打开月总结时（最近结束的那个自动，更早的点按钮）DeepSeek 用汇总数字写 120～220 字，存 `letters[预算月]`。
 - 年度总结 `yearSummary()`（自然年），总结页「年」；1 月 1 日推送、1 月头一周首页提醒。
 - 令牌到期：读物品档案设置里的 `tokenExpires`，14 天内首页提示。
-- 存款目标 `goals`（比如毕业过渡金）：不另外挪钱，存钱卡余额 − 应急底线，按顺序分：暑假生活费、大额人情（到日子一定要用）→ 扣掉大额心愿已攒的 → 自己设的目标，算进度和每月要留多少（`goalStatus`）。
 - 推送：`js/push.js`（账本自己的 VAPID 公钥，和物品档案不是一对）+ `sw.js`，订阅存账本仓库 `config/push.json`；账本仓库 `.github/workflows/push.yml` 每天 13:00 UTC（北京 21 点）跑 `.github/ledger_push.py`：没记账提醒、周日加周总结、预算月最后一天加月总结，合成一条。私钥只在账本仓库 secret `VAPID_PRIVATE_KEY`。（2026-10-07 起**只在时间段里发**：GitHub 定时实测晚 6 小时、凌晨两三点才跑，曾在凌晨发出并占掉当天。`once(key, now, earliest, latest)` 不在北京时间段里就跳过、不记成发过；定时和外部触发都按这个规则，只有测试推送不受限。记账 20:30–23、洗衣 19:30–22:30、购物周日 8:30–12。pywebpush 固定 2.5.0。脚本只在数据仓库 `.github/` 里，改的时候直接改那边。）
 - 发票存私有仓库 `claims/<claimId>/<随机>.pdf|jpg`（照片压缩），删除时一起删文件。
 
@@ -62,7 +72,7 @@
 - 导入小票（`#/receipt`，`js/receipt.js` 纯计算 + `main.js` 页面）：用户把小票照片和「复制提示词」（`receiptPrompt`，类别名从数据里取）发给手机上的 AI，回答贴回来（或快捷指令带 `?text=`，用完从网址去掉）。`parseReceipt` 先找 JSON，不是就按行认「名称 数量 价格 / 合计」。一样一样确认：名称、数量、实付、类别（`guessCategory`：AI 给的类别名 → 以前同名的 → 关键词 `BY_WORD` → 宿舍小物件）、物品档案怎么处理（`matchInventory` 同名 / 包含，消耗品优先；默认 `defaultInventoryAction`：消耗品补货、耐用的不动、没有的吃喝不进档案其他进待建档）。可以「这样不记」「剩下的都按推荐」。**按类别合并成几笔**（用户选的），整单优惠并进最大那笔，备注「店名：名称×数量、…」，每笔带 `receipt` 指纹（日期 + 名称价格），同一张再导时提醒。记账走本地队列；物品档案（`js/bridge.js`，同一个令牌直接提交 inventory.json，`applyToInventory`）要联网，失败了可以「再试一次」，账不受影响。
 - 生活网站（`../life`）的「想做到的事」可以往 `wishes` 直接加心愿（`reason` 是「为了：目标名」，`want: 'want'`），见 life/CLAUDE.md。
 - 人情（不是钱的，2026-10-06）：`favors`，「我欠他一个人情」`owe` / 「他欠我」`owed`，不写钱、不分轻重。还人情：记聚餐请客、礼物、红包（`FAVOR_CATEGORIES`）时可以选「还的是哪个人情」→ tx 带 `favor`，那个人情 `status: done`、`doneTx`；改掉 / 删掉那笔，人情回到没还。没花钱的在人情页点「还了」写一句（`doneNote`）。**只在法定节假日提醒**（`holidayFavors`，`js/cal.js` 的 `holidayAround`：放假前一天到假期最后一天，周末不算），首页 `favorHolidayCard` 一个个问「这次还 / 这次不还」：还 → `plan = 假期 key`，出「记一笔」（`#/add?favor=id` 预选聚餐请客和这个人情）；不还 → `skip = 假期 key`，下个假期再问。生活网站「今天」里也问同样的，也能记人情（直接提交 finance.json）。
-- 要准备的人情钱（2026-10-06，用户选的方案）：欠的人情可填 `cost`（他为我花了多少）、`estimate`（预计要准备多少，「估一个」= DeepSeek，`js/renqing.js` 的 `estimatePrompt`，和 life 同一份，带上和这个人以前来回的钱）。`socialPlan`：有 `due` 的按那天，没有的按下一个假期（`nextHoliday`），过期的算今天。**`FAVOR_BIG` 300 以上**自动变成存款目标（`goalStatus` 里 `auto-favor-*`，排在暑假生活费后面，还上就没了）；以下从日常里出，首页（45 天内）和人情账页按月列「要准备的钱」（`socialCard`）。买不买：`moneyContext` 带上这些，`priceFacts` 能动用的钱扣掉 90 天内的大额人情。有 `due` 的人情（生活网站「重要的日子」勾了随礼来的，`kind: 'date'`、id `fd-日子id`）节假日不问。
+- 要准备的人情钱（2026-10-06，用户选的方案）：欠的人情可填 `cost`（他为我花了多少）、`estimate`（预计要准备多少，「估一个」= DeepSeek，`js/renqing.js` 的 `estimatePrompt`，和 life 同一份，带上和这个人以前来回的钱）。`socialPlan`：有 `due` 的按那天，没有的按下一个假期（`nextHoliday`），过期的算今天。**`FAVOR_BIG` 300 以上**自动变成专项存款（`specialList` 里 `auto-favor-*`，按日子排，还上就没了；还的那笔不占预算）；以下从日常里出，首页（45 天内）和人情账页按月列「要准备的钱」（`socialCard`）。买不买：`moneyContext` 带上这些和存款各部分。有 `due` 的人情（生活网站「重要的日子」勾了随礼来的，`kind: 'date'`、id `fd-日子id`）节假日不问。
 - 礼尚往来：礼物 / 红包 / 聚餐请客的支出选「给谁的」、收入「收到的红包礼金」（`i-gift`，`GIFT_IN`）选「谁给的」→ tx `who`（不影响欠款，`person` 才是欠款）；选了还的人情会自动带上那个人。人情账的人页面有「礼尚往来」，生活网站「身边的人」也读它。
 - 选人（AA、别人帮我付、给谁的 / 谁给的、记一个人情）都用 `js/picker.js`（和 life 同一份）：输入一个字出补全（名字和 `hint`，比如「本科 · 舍友」，hint 由生活网站同步过来），空着出最近 5 个，没有就「＋ 新加」。用户不要一大排人名按钮。
 - 人的名单由生活网站「身边的人」管（同一个 id）：那边加人、改名、归档会写进 `people`（`archived` 的不出现在选人里）；账本里新加的人那边打开时会搬过去。账本里不改名字。人情账页只列有来往（钱或人情）的人。
@@ -85,6 +95,7 @@
 
 ## 测试
 
+- `node tests/test_money.mjs`：钱怎么分的每条规则（纯计算）。
 - `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`，同时开账本和编的物品档案 `x/inventory-data` 两个仓库），汇率用假数据。推送后 GitHub Actions 自动跑。**改了功能就加对应步骤。**
 - 网页通过 `localStorage['ledger-api-base']` 接到假 GitHub。
 - **绝不拿真实数据仓库做写入测试。**

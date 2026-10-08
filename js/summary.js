@@ -2,11 +2,11 @@
 
 import {
   GROUPS, LIVING, periodFor, shiftPeriod, periodStats, partial, livingBudget, budgetTotal, totalAssets,
-  receivables, cny, category, addDays, parseYmd, ymd, money, md,
+  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup,
 } from './money.js';
 
 const isSpend = (t) => t.type === 'expense' || t.type === 'writeoff';
-const groupOf = (data, t) => category(data, t.category)?.group || 'daily';
+const groupOf = (data, t) => txGroup(data, t);
 
 // 一周：周一到周日
 export function weekOf(day) {
