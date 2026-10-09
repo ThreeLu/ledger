@@ -235,25 +235,41 @@ export const bigFavorOf = (data, t) => {
   return f && f.dir === 'owe' && Number(f.estimate) >= FAVOR_BIG ? f : null;
 };
 export function txGroup(data, t) {
+  if (t.type === 'adjust') return 'daily';
   if (t.type === 'expense' && (t.special || bigFavorOf(data, t))) return 'none';
   return category(data, t.category)?.group || 'daily';
 }
+// 生活费卡这边（存钱卡、美元账户以外的人民币账户）
+export const isLivingAccount = (data, id) => { const a = account(data, id); return Boolean(a) && a.id !== data.settings.floorAccount && a.currency !== 'USD'; };
+// 算不算一笔花销、算多少（人民币）：支出、报不回的垫付；对账时生活费卡这边少了的差额（漏记的，2026-10-08 用户选的）也算成日常花销
+export function spendOf(data, t) {
+  if (t.type === 'expense' || t.type === 'writeoff') return cny(t);
+  if (t.type === 'adjust' && t.amount < 0 && isLivingAccount(data, t.account)) return -t.amount;
+  return 0;
+}
+export const ADJUST_CAT = 'c-adjust'; // 对账差额在「花在哪了」里的名字
+// 用以前留好的钱花的（专项、大额人情、心愿）：判断「这个月存钱达标没有」时不算（2026-10-08 用户选的）
+export const isFromSaved = (data, t) => t.type === 'expense' && (Boolean(t.special) || Boolean(bigFavorOf(data, t)) || t.category === 'c-wish');
 
 export function periodStats(data, p) {
   const inP = data.tx.filter((t) => t.date >= p.start && t.date <= p.end);
   const spent = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
   const byCat = {};
   let income = 0;
+  let fromSaved = 0;
   for (const t of inP) {
-    if (t.type === 'expense' || t.type === 'writeoff') {
-      const g = txGroup(data, t);
-      spent[g] += cny(t);
-      byCat[t.category] = (byCat[t.category] || 0) + cny(t);
+    const v = spendOf(data, t);
+    if (v) {
+      spent[txGroup(data, t)] += v;
+      const c = t.type === 'adjust' ? ADJUST_CAT : t.category;
+      byCat[c] = (byCat[c] || 0) + v;
+      if (isFromSaved(data, t)) fromSaved += v;
     } else if (t.type === 'income') income += cny(t);
   }
   const total = Object.values(spent).reduce((a, b) => a + b, 0);
   const living = LIVING.reduce((s, g) => s + spent[g], 0);
-  return { tx: inP, spent, byCat, income, total, living, saved: income - total };
+  // saved：真实存下的；planSaved：判断存钱达标用的（以前留好的钱花的不算）
+  return { tx: inP, spent, byCat, income, total, living, saved: income - total, fromSaved, planSaved: income - total + fromSaved };
 }
 
 export const budgetTotal = (data) => GROUPS.reduce((s, g) => s + (Number(data.budget?.[g.id]) || 0), 0);
@@ -586,7 +602,7 @@ export function summerGoal(data, today) {
     let left = 0;
     for (let q = shiftPeriod(data, p, 1); q.summer && left < 12; q = shiftPeriod(data, q, 1)) left++;
     const floorAcc = data.settings.floorAccount;
-    const moved = data.tx.some((t) => t.type === 'transfer' && t.account === floorAcc && t.date >= p.start && t.date <= p.end);
+    const moved = data.tx.some((t) => t.type === 'transfer' && t.account === floorAcc && isLivingAccount(data, t.to) && t.date >= p.start && t.date <= p.end);
     if (!moved) left++;
     if (left > 0) {
       return { id: 'auto-summer', auto: true, kind: 'summer', name: `${p.start.slice(0, 4)} 年暑假生活费`, budget: monthly * left, target: monthly * left,
@@ -640,7 +656,7 @@ export function savingsMap(data, today) {
   const wish = wishFunds(data, today);
   const rc = receivables(data);
   const bal = floorAcc ? balance(data, floorAcc) : 0;
-  let pool = r2(bal + rc.toMe);
+  let pool = r2(bal + rc.toMe - rc.iOwe); // 别人欠我的先当作还在，我欠别人的先扣掉
   const total = pool;
   const take = (want) => { const have = r2(Math.max(0, Math.min(pool, want))); pool = r2(pool - have); return have; };
   const sealed = Number(data.family?.sealed) || 0;
@@ -661,8 +677,10 @@ export function savingsMap(data, today) {
     return { ...x, have, need, months, perMonth: months ? Math.ceil(need / months) : null, short, sealed: x.target > 0 && need <= 0 };
   });
   const free = { have: pool, keep: FREE_KEEP };
-  const sealable = pool >= FREE_KEEP + FAMILY_STEP ? Math.floor((pool - FREE_KEEP) / FAMILY_STEP) * FAMILY_STEP : 0;
-  return { bal: r2(bal), toMe: r2(rc.toMe), total, family, emergency, medical, specials, free, sealable, wish };
+  // 封存只封真在卡里的：别人还欠我的不算
+  const cash = r2(pool - rc.toMe);
+  const sealable = cash >= FREE_KEEP + FAMILY_STEP ? Math.floor((cash - FREE_KEEP) / FAMILY_STEP) * FAMILY_STEP : 0;
+  return { bal: r2(bal), toMe: r2(rc.toMe), iOwe: r2(rc.iOwe), total, family, emergency, medical, specials, free, sealable, wish };
 }
 
 // 每月数额计算：生活费卡这边（存钱卡、美元账户以外的人民币账户）应该有多少 = 心愿基金 + 这个月生活费还剩的
@@ -768,7 +786,7 @@ export function saveStreak(data, today) {
   let streak = 0;
   for (const p of closedPeriods(data, today).filter((x) => !partial(data, x).isPartial && !x.summer)) {
     const st = periodStats(data, p);
-    streak = st.income - st.total >= target ? streak + 1 : 0;
+    streak = st.planSaved >= target ? streak + 1 : 0;
   }
   return streak;
 }
@@ -824,13 +842,17 @@ export function health(data, today, rate = data.settings.usdRate) {
   // 2. 应急钱底线
   const floorAcc = account(data, data.settings.floorAccount);
   if (floorAcc && data.settings.emergencyFloor > 0) {
-    const b = balance(data, floorAcc.id);
-    const ok = b >= data.settings.emergencyFloor;
+    // 按「钱都在哪」的顺序：封存的家庭存款先保着，欠别人的先扣掉，剩下的才是应急底线
+    const sm = savingsMap(data, today);
+    const b = sm.emergency.have;
+    const ef = data.settings.emergencyFloor;
+    const ok = b >= ef;
+    const extra = [sm.family.have ? '家庭存款封存的不算' : '', sm.iOwe ? `欠别人的 ${money(sm.iOwe)} 已经扣掉` : ''].filter(Boolean).join('，');
     out.push({
-      key: 'floor', name: '应急钱', value: money(b), gauge: Math.min(1, Math.max(0, b / data.settings.emergencyFloor)), short: ok ? '够' : '不够', unit: '底线',
+      key: 'floor', name: '应急钱', value: money(b), gauge: Math.min(1, Math.max(0, b / ef)), short: ok ? '够' : '不够', unit: '底线',
       level: ok ? 'good' : 'bad',
-      text: ok ? `${floorAcc.name}高于底线 ${money(data.settings.emergencyFloor)}` : `${floorAcc.name}低于底线 ${money(data.settings.emergencyFloor)}`,
-      action: ok ? null : `${floorAcc.name}只剩 ${money(b)}，先别从里面转钱出来花，等下一笔收入补上。`,
+      text: ok ? `应急底线 ${money(ef)} 留着${extra ? `（${extra}）` : ''}` : `应急底线只留到 ${money(b)}，差 ${money(ef - b)}${extra ? `（${extra}）` : ''}`,
+      action: ok ? null : `先别从${floorAcc.name}里转钱出来花，等下一笔收入补上。`,
     });
   }
 
@@ -860,7 +882,9 @@ export function health(data, today, rate = data.settings.usdRate) {
   // 4. 本月存钱
   const expected = p.summer ? 0 : Number(data.settings.expectedIncome) || 0;
   const target = expected - monthly;
-  const projected = Math.max(st.income, expected) - Math.max(st.total, monthly);
+  // 以前留好的钱花的（专项、心愿、大额人情）和看病不拿来判断、提醒（看病照样算在存下的钱里，只是不催）
+  const unplanned = st.fromSaved + st.spent.med;
+  const projected = Math.max(st.income, expected) - Math.max(st.total - unplanned, monthly);
   const incomeIn = st.income >= expected;
   out.push({
     key: 'saving', name: '本月存钱', value: money(st.saved), gauge: target > 0 && !p.summer && !part.isPartial ? Math.min(1, Math.max(0, projected / target)) : null, short: compactMoney(st.saved), unit: '已存',
@@ -869,7 +893,7 @@ export function health(data, today, rate = data.settings.usdRate) {
       : part.isPartial ? `从 ${md(part.from)}开始记账，这个预算月只记了一部分；${md(p.next)}起完整统计`
       : p.summer ? '暑假没有收入，这个月靠存款过，正常'
       : !incomeIn ? `收入还没到齐（已到 ${money(st.income)}），按计划月底能存约 ${money(projected)}`
-        : `按现在的节奏，月底能存约 ${money(projected)}，目标 ${money(target)}`,
+        : `按现在的节奏，月底能存约 ${money(projected)}，目标 ${money(target)}${unplanned >= 1 ? `（用以前留好的钱、看病花的 ${money(unplanned)} 不算）` : ''}`,
     action: expected && !p.summer && !part.isPartial && projected < target * 0.9 ? '这个月花得比计划多，下个月注意一下就好，不用补。' : null,
   });
 

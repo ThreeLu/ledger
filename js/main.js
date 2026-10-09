@@ -5,7 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED,
-  savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, daysBetween,
+  savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, daysBetween, ADJUST_CAT, isLivingAccount,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
 import { holidayLine } from './cal.js';
@@ -300,7 +300,7 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const exact = (n, cur = '¥') => `${cur}${Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 const curOf = (accId) => (isUsd(store.data, accId) ? '$' : '¥');
 const accName = (id) => account(store.data, id)?.name || '（账户已删除）';
-const catName = (id) => category(store.data, id)?.name || '未分类';
+const catName = (id) => (id === ADJUST_CAT ? '对账差额（漏记的）' : category(store.data, id)?.name || '未分类');
 
 // 一次只出一条提示：新的换掉旧的；底部有「撤销」时放在它上面，不压住
 function toast(message, kind = 'ok') {
@@ -419,7 +419,7 @@ const EXPLAIN = {
     `你现在一共有 ${money(hl.assets)}，是 ${x.value}。只要每月照计划存钱，这个数会自己慢慢变大，你什么都不用做。`,
   ],
   floor: (x, hl, d) => [
-    `应急钱是存钱卡里留着不动的底线（${money(d.settings.emergencyFloor)}，大约两个月的开销），专门应付意外。`,
+    `应急钱是存钱卡里留着不动的底线（${money(d.settings.emergencyFloor)}，大约两个月的开销），专门应付意外。按「钱都在哪」的顺序算：已经封存的家庭存款先保着，欠别人的先扣掉，剩下的才轮到它。`,
     '有它在，就算突然要花一大笔钱，也不用动生活费或者找人借钱。所以买东西的时候，不能让存钱卡跌破这条线。',
     `${x.text}。${x.level === 'good' ? '不用管它。' : x.action}`,
   ],
@@ -1877,6 +1877,9 @@ function reconcileView() {
   const p = periodFor(d, today());
   const done = d.reconciled?.[p.start];
   const inputs = {};
+  // 预算月头 7 天对的账，差额多半是上个月漏记的：记到上个预算月最后一天（开始记账前的不算）
+  const prevEnd = addDays(p.start, -1);
+  const adjDate = p.dayIndex <= 7 && d.openingDate && prevEnd >= d.openingDate ? prevEnd : today();
   const submit = async () => {
     const diffs = [];
     for (const a of d.accounts) {
@@ -1890,7 +1893,7 @@ function reconcileView() {
     try {
       await save(`对账（${p.label}）${diffs.length ? `：${diffs.map((x) => x.a.name).join('、')}有差额` : '：都对得上'}`, (data) => {
         for (const x of diffs) {
-          data.tx.push({ id: newId('t'), type: 'adjust', date: today(), account: x.a.id, amount: x.diff, note: `对账：校准到 ${x.real}`, createdAt: new Date().toISOString() });
+          data.tx.push({ id: newId('t'), type: 'adjust', date: adjDate, account: x.a.id, amount: x.diff, note: `对账：校准到 ${x.real}`, createdAt: new Date().toISOString() });
         }
         data.reconciled = { ...(data.reconciled || {}), [p.start]: today() };
       });
@@ -1901,7 +1904,8 @@ function reconcileView() {
   return h('div', { class: 'form' },
     headerSub('对账', done ? `这个预算月 ${md(done)} 已经对过了，可以再对一次` : `${p.label}`, helpButton('为什么要对账', [
       ['为什么', ['漏记、记错几笔很正常。每个预算月开始时对一次，账就不会越积越乱。']],
-      ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额，差额自动记成「对账差额」，不算进预算。', '美元账户填美元。']],
+      ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额，差额自动记成「对账差额」。', '美元账户填美元。']],
+      ['差额算在哪', ['生活费卡、微信、校园卡比网站上少的，多半是漏记的吃饭、日常小钱，算成那个月的日常花销（照常先扣心愿基金）。', '存钱卡、美元账户的差额只改余额，不算花销。', '预算月头 7 天对的账，差额记到上个预算月的最后一天。']],
     ])),
     h('a', { class: 'receipt-link', href: '#/bills' }, icon('search'), ' 对不上？导入微信、支付宝账单找出漏记的'),
     cardCheckCard(),
@@ -1964,6 +1968,7 @@ function monthHead(ms) {
       h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
       h('div', {}, h('span', { class: 'muted small' }, '花了'), h('b', {}, money(st.total))),
       h('div', {}, h('span', { class: 'muted small' }, '其中生活'), h('b', {}, money(st.living)))) : null,
+    st.fromSaved >= 1 ? h('div', { class: 'muted small from-saved' }, `其中 ${money(st.fromSaved)} 是用以前留好的钱花的（专项、心愿），不算没存够`) : null,
     lb > 0 ? h('div', { class: 'time-bar' },
       h('div', { class: 'time-track', 'aria-label': `生活预算用了 ${Math.round(used * 100)}%` },
         h('span', { class: `time-fill wh-fill${over ? ' over' : ''}`, style: `width:${Math.min(100, used * 100).toFixed(1)}%` }),
@@ -2146,8 +2151,9 @@ function yearHead(d, ys) {
   const [label, big] = !st.income ? ['这一年花了', st.total] : saved >= 0 ? ['这一年存下', saved] : ['这一年比收入多花了', -saved];
   const planAll = d.settings.expectedIncome ? yearPlanBetween(d, ys.from, ys.to) : 0;
   const planNow = ongoing ? yearPlanBetween(d, ys.from, t) : planAll;
-  const good = saved >= planNow * 0.95;
-  const diff = Math.round(saved - planNow);
+  const planSaved = saved + st.fromSaved;
+  const good = planSaved >= planNow * 0.95;
+  const diff = Math.round(planSaved - planNow);
   const assetDiff = ys.assetsEnd - ys.assetsStart;
   return h('div', { class: 'card summary-head week-head', 'aria-label': `${ys.year} 年收入 ${money(st.income)}，花了 ${money(st.total)}，存下 ${money(saved)}` },
     h('div', { class: 'wh-top' },
@@ -2159,9 +2165,10 @@ function yearHead(d, ys) {
       h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
       h('div', {}, h('span', { class: 'muted small' }, '花了'), h('b', {}, money(st.total))),
       h('div', {}, h('span', { class: 'muted small' }, '储蓄率'), h('b', {}, ys.rate != null ? `${ys.rate}%` : '—'))),
+    st.fromSaved >= 1 ? h('div', { class: 'muted small from-saved' }, `其中 ${money(st.fromSaved)} 是用以前留好的钱花的（专项、心愿），不算没存够`) : null,
     planAll > 0 ? h('div', { class: 'time-bar' },
-      h('div', { class: 'time-track', 'aria-label': `存下了计划的 ${Math.round((Math.max(0, saved) / planAll) * 100)}%` },
-        h('span', { class: `time-fill wh-fill${good ? '' : ' over'}`, style: `width:${Math.min(100, (Math.max(0, saved) / planAll) * 100).toFixed(1)}%` }),
+      h('div', { class: 'time-track', 'aria-label': `存下了计划的 ${Math.round((Math.max(0, planSaved) / planAll) * 100)}%` },
+        h('span', { class: `time-fill wh-fill${good ? '' : ' over'}`, style: `width:${Math.min(100, (Math.max(0, planSaved) / planAll) * 100).toFixed(1)}%` }),
         ongoing ? h('span', { class: 'spend-mark', style: `left:${Math.min(100, Math.max(0, planNow / planAll) * 100).toFixed(1)}%`, title: '按日子到今天该存到这' }) : null),
       h('div', { class: 'time-legend small' },
         h('span', { class: good ? '' : 'wh-over' }, Math.abs(diff) < Math.max(50, planNow * 0.05) ? '和计划差不多' : diff > 0 ? `比计划多存 ${money(diff)}` : `比计划少存 ${money(-diff)}`),

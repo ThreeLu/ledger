@@ -182,4 +182,64 @@ test('每月数额计算：生活费卡这边应该有 = 心愿基金 + 这个�
   assert.equal(c.diff, -200); // 买药从生活费卡付的 → 从存钱卡转 200 过来
 });
 
+test('欠别人的钱先从存款里扣掉；封存家庭存款不算别人还欠我的', () => {
+  const d = book();
+  d.accounts.find((a) => a.id === 'a-save').opening = 17000;
+  d.people = [{ id: 'p1', name: '甲' }, { id: 'p2', name: '乙' }];
+  d.tx = [ex('2026-10-02', 2000, 'c-lunch', { account: null, person: 'p1' }), // 甲帮我付的，我欠他
+    { id: 'adv', type: 'advance', date: '2026-10-03', account: 'a-save', amount: 3000, person: 'p2' }]; // 借给乙，还没还
+  const s = m.savingsMap(d, T);
+  assert.equal(s.iOwe, 2000);
+  assert.equal(s.toMe, 3000);
+  assert.equal(s.free.have, 17000 - 3000 + 3000 - 2000 - 3000 - 1000); // 余额 14000 + 3000 − 2000 − 应急 − 医疗
+  assert.equal(s.sealable, 0); // 自由存款 11000 里有 3000 还没回来，真在卡里的只有 8000
+  d.accounts.find((a) => a.id === 'a-save').opening = 21000; // 自由存款 15000，真在卡里的 12000 → 留 2000、封存一万
+  assert.equal(m.savingsMap(d, T).sealable, 10000);
+});
+
+test('首页应急钱：封存的家庭存款先保着、欠别人的先扣掉', () => {
+  const d = book();
+  d.accounts.find((a) => a.id === 'a-save').opening = 12000;
+  d.family = { sealed: 10000, log: [] };
+  d.people = [{ id: 'p1', name: '甲' }];
+  d.tx = [ex('2026-10-02', 2000, 'c-lunch', { account: null, person: 'p1' })];
+  const floor = m.health(d, T, 7).items.find((x) => x.key === 'floor');
+  assert.equal(floor.level, 'bad');
+  assert.match(floor.text, /只留到 ¥0/);
+});
+
+test('暑假：只有转到生活费卡这边才算这个月的生活费转出来了', () => {
+  const d = book();
+  d.settings.summerMonths = [7, 8];
+  d.accounts.push({ id: 'a-usd', name: 'USD', currency: 'USD', opening: 0 });
+  d.tx.push({ id: 'top', type: 'transfer', date: '2027-07-02', account: 'a-save', to: 'a-usd', amount: 100, toAmount: 14 });
+  assert.equal(m.summerGoal(d, '2027-07-03').target, 2500 * 2);
+});
+
+test('用以前留好的钱花的（专项、心愿）不打断存钱达标；看病照算但首页不催', () => {
+  const d = book();
+  d.goals = [{ id: 'g1', name: '随礼', target: 2000, by: '2026-09-20' }];
+  d.tx = [inc('2026-08-02', 5000), ex('2026-08-05', 2300), inc('2026-09-02', 5000), ex('2026-09-05', 2300), ex('2026-09-10', 2000, 'c-gift', { special: 'g1' }),
+    ex('2026-09-12', 300, 'c-wish', { wishKind: 'small' })];
+  const st = m.periodStats(d, m.periodFor(d, '2026-09-10'));
+  assert.equal(st.saved, 5000 - 2300 - 2000 - 300);
+  assert.equal(st.fromSaved, 2300);
+  assert.equal(st.planSaved, 5000 - 2300);
+  assert.equal(m.saveStreak(d, T), 2); // 目标 5000 − 2500 = 2500，两个月都达标
+  d.tx.push(inc('2026-10-02', 5000), ex('2026-10-03', 1500, 'c-doctor'));
+  const saving = m.health(d, '2026-10-03', 7).items.find((x) => x.key === 'saving');
+  assert.equal(saving.level, 'good');
+});
+
+test('对账：生活费卡这边少了的算漏记的日常花销（先扣心愿基金）；存钱卡的差额只改余额', () => {
+  const d = book();
+  d.tx = [ex('2026-08-05', 2000), { id: 'adj', type: 'adjust', date: '2026-08-31', account: 'a-wechat', amount: -200 },
+    { id: 'adj2', type: 'adjust', date: '2026-08-31', account: 'a-save', amount: -500 }];
+  const st = m.periodStats(d, m.periodFor(d, '2026-08-10'));
+  assert.equal(st.living, 2200);
+  assert.equal(st.spent.daily, 200);
+  assert.equal(st.byCat[m.ADJUST_CAT], 200);
+  assert.equal(m.wishFunds(d, T).parts.saved, 100 + 2300); // 8 月只省 100，9 月一分没花
+});
+
 console.log(`\n${n} 项通过`);

@@ -683,3 +683,4 @@ button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: 
 #view.flip-in > * { animation: none; }
 @keyframes flip-in { from { transform: perspective(1400px) rotateY(-80deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { #view.flip-in { animation: none; } }
+.from-saved { margin-top: 8px; }

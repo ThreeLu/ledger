@@ -2,10 +2,9 @@
 
 import {
   GROUPS, LIVING, periodFor, shiftPeriod, periodStats, partial, livingBudget, budgetTotal, totalAssets,
-  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup,
+  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup, spendOf, isFromSaved, ADJUST_CAT,
 } from './money.js';
 
-const isSpend = (t) => t.type === 'expense' || t.type === 'writeoff';
 const groupOf = (data, t) => txGroup(data, t);
 
 // 一周：周一到周日
@@ -22,30 +21,33 @@ export function rangeStats(data, from, to) {
   const byGroup = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
   const byCat = {}; // 类别 → { v, n }（点圆环时看这一组里花在哪）
   let income = 0;
+  let fromSaved = 0; // 用以前留好的钱花的（专项、大额人情、心愿）
   for (const t of tx) {
-    if (isSpend(t)) {
-      byGroup[groupOf(data, t)] += cny(t);
-      const c = (byCat[t.category || ''] ||= { v: 0, n: 0 });
-      c.v += cny(t); c.n += 1;
+    const v = spendOf(data, t);
+    if (v) {
+      byGroup[groupOf(data, t)] += v;
+      if (isFromSaved(data, t)) fromSaved += v;
+      const c = (byCat[t.type === 'adjust' ? ADJUST_CAT : t.category || ''] ||= { v: 0, n: 0 });
+      c.v += v; c.n += 1;
     }
     else if (t.type === 'income') income += cny(t);
   }
   const total = Object.values(byGroup).reduce((a, b) => a + b, 0);
   const living = LIVING.reduce((s, g) => s + byGroup[g], 0);
-  return { tx, byGroup, byCat, income, total, living };
+  return { tx, byGroup, byCat, income, total, living, fromSaved };
 }
 
 // 每天的生活花销（吃饭 + 日常 + 自由钱）
 export function dailyLiving(data, from, days) {
   return Array.from({ length: days }, (_, i) => {
     const day = addDays(from, i);
-    const v = data.tx.filter((t) => t.date === day && isSpend(t) && LIVING.includes(groupOf(data, t))).reduce((s, t) => s + cny(t), 0);
+    const v = data.tx.filter((t) => t.date === day && spendOf(data, t) && LIVING.includes(groupOf(data, t))).reduce((s, t) => s + spendOf(data, t), 0);
     return { day, v };
   });
 }
 
 export function topSpends(data, from, to, n = 3) {
-  return data.tx.filter((t) => t.date >= from && t.date <= to && isSpend(t)).sort((a, b) => cny(b) - cny(a)).slice(0, n);
+  return data.tx.filter((t) => t.date >= from && t.date <= to && (t.type === 'expense' || t.type === 'writeoff')).sort((a, b) => cny(b) - cny(a)).slice(0, n);
 }
 
 // 一个预算月里每天的生活预算（开始记账那个月按天数折算）
@@ -160,7 +162,7 @@ export function yearSummary(data, year, rate = data.settings.usdRate) {
   const to = `${year}-12-31`;
   const st = rangeStats(data, from, to);
   const byCat = {};
-  for (const t of st.tx) if (isSpend(t)) byCat[t.category] = (byCat[t.category] || 0) + cny(t);
+  for (const t of st.tx) { const v = spendOf(data, t); if (v) { const c = t.type === 'adjust' ? ADJUST_CAT : t.category; byCat[c] = (byCat[c] || 0) + v; } }
   const months = Array.from({ length: 12 }, (_, i) => {
     const m = `${year}-${String(i + 1).padStart(2, '0')}`;
     const ms = rangeStats(data, `${m}-01`, `${m}-31`);

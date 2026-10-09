@@ -255,7 +255,7 @@ def _(c):
     p.get_by_label("应急钱底线").fill("99999")
     p.get_by_role("button", name="保存").click()
     p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".summary.bad")).to_contain_text("先别从里面转钱出来花")
+    expect(p.locator(".summary.bad")).to_contain_text("先别从存钱卡里转钱出来花")
     c.go("#/budget")
     p.get_by_label("应急钱底线").fill("8000")
     p.get_by_label("吃饭").fill("2000")
