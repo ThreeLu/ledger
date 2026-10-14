@@ -421,6 +421,7 @@ export const isBigWish = (data, w) => Number(w.price) > (data.settings.wishBigFr
 export const WISH_KEEP = 100; // 心愿基金被扣时至少留这么多
 export const WISH_SEED = 100; // 大额心愿「开始攒」先放进去的
 export const WISH_SHARE = 1 / 3; // 每次进账分给正在攒的大额心愿的比例
+export const WISH_CAP = 10000; // 能随便用的最多攒到这么多，满了再进来的算存款（进自由存款，2026-10-14 用户定的）
 
 // 已经结束的预算月：从开始记账那个月，到上个预算月
 export function closedPeriods(data, today) {
@@ -469,7 +470,14 @@ export function wishFunds(data, today) {
   const started = {};
   const queue = [];
   const spentOn = {};
-  const parts = { saved: 0, over: 0, jobs: 0, spent: 0, cover: 0 };
+  const parts = { saved: 0, over: 0, jobs: 0, spent: 0, cover: 0, toFree: 0 };
+  // 往能随便用里加钱：满 WISH_CAP 的部分不进心愿基金，算成存款（钱要从生活费卡转回存钱卡，对账页的数额计算会算出来）
+  const addSmall = (x) => {
+    const room = Math.max(0, WISH_CAP - small);
+    const keep = r2(Math.min(x, room));
+    small = r2(small + keep);
+    parts.toFree = r2(parts.toFree - (x - keep));
+  };
   const log = [];
   const price = (id) => Number(data.wishes.find((w) => w.id === id)?.price) || 0;
   const active = () => queue.find((id) => started[id] && env[id] < price(id));
@@ -486,7 +494,7 @@ export function wishFunds(data, today) {
     const a = active();
     const give = a ? r2(Math.min(x * WISH_SHARE, price(a) - env[a])) : 0;
     if (a) env[a] = r2(env[a] + give);
-    small = r2(small + x - give);
+    addSmall(r2(x - give));
     parts[kind] = r2(parts[kind] + x);
     tryStart(date);
   };
@@ -516,7 +524,7 @@ export function wishFunds(data, today) {
     else if (e.k === 'queue') { queue.push(e.w.id); env[e.w.id] = 0; tryStart(e.date); }
     else if (e.k === 'buyBig' || e.k === 'dropBig') {
       const back = r2(Math.max(0, (env[e.w.id] || 0) - (e.k === 'buyBig' ? e.v : 0)));
-      small = r2(small + back);
+      addSmall(back);
       parts.spent = r2(parts.spent - ((env[e.w.id] || 0) - back));
       env[e.w.id] = 0;
       leave(e.w.id);

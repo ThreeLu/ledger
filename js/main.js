@@ -4,7 +4,7 @@ import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
-  isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED,
+  isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
@@ -2864,6 +2864,7 @@ function wishHelp(d) {
     ['心愿基金', ['每个预算月结束时，吃饭 + 日常 + 自由钱 + 形象没花完的，自动进心愿基金。',
       d.settings.sideIncomeSave != null ? `兼职收入的 ${Math.round((1 - d.settings.sideIncomeSave) * 100)}% 也进心愿基金（记兼职收入时就算进来）。` : '',
       '每次进账，1/3 给正在攒的大额心愿，2/3 进「能随便用」。没有正在攒的，全部进「能随便用」。',
+      `「能随便用」最多攒到 ${money(WISH_CAP)}，满了以后再进来的不进心愿基金，算成存款（进自由存款）。对账页的数额计算会告诉你从生活费卡转多少回存钱卡。`,
       `哪个月超支了（或者专项、看病花超了），先从「能随便用」里扣，扣到只剩 ${money(WISH_KEEP)} 为止，再不够的由存款补。给大额心愿攒着的钱不扣。`,
       '心愿只花省下来的钱，存款一分不动。钱实际在生活费卡里。'].filter(Boolean)],
     ['小额心愿', [`${big} 以内。用「能随便用」的钱买，不够的部分算进这个月的自由钱。`]],
@@ -3265,7 +3266,7 @@ function wishesView() {
 
   const aiBtn = h('button', { class: 'secondary wide', onclick: (e) => askWishAdvice(e.currentTarget) }, icon('sparkle'), adv ? '再问一次 AI' : '问问 AI');
   // 大字是现在能用的（能随便用的），攒给大额心愿的单独写一行减掉（用户 2026-10-14 要的：307 里 100 给了大额心愿就显示 207）
-  const fundRows = [['生活费省下', f.parts.saved], ['兼职收入', f.parts.jobs], ['超支扣回', f.parts.over], ['帮专项和看病补', f.parts.cover], ['花掉的', f.parts.spent],
+  const fundRows = [['生活费省下', f.parts.saved], ['兼职收入', f.parts.jobs], ['超支扣回', f.parts.over], ['帮专项和看病补', f.parts.cover], ['花掉的', f.parts.spent], [`满 ${money(WISH_CAP)} 后转进存款`, f.parts.toFree],
     ['攒给大额心愿', -f.envTotal]].filter(([, v]) => v);
   const sign = (v) => `${v > 0 ? '+' : ''}${money(v)}`;
   const togglePick = () => { wishPicking = !wishPicking; render(); };
@@ -3853,17 +3854,28 @@ function goalsView() {
 }
 
 // 一个圆圈：v 是 0～1；sealed 深紫、late 琥珀
-// 钱都在哪的一行（2026-10-14 重做，原来是两列小圆圈，用户觉得看着不顺）：左边色块，名字和一句说明，有目标的下面一条细进度，右边金额
-function moneyRow({ color, name, amount, note, frac = null, badge = '', tone = '', sub = false, onclick }) {
-  return h('button', { type: 'button', class: `money-row${sub ? ' sub' : ''}${tone ? ` ${tone}` : ''}`, style: `--c:${color}`, onclick },
-    h('span', { class: 'mr-dot' }),
-    h('span', { class: 'mr-main' },
-      h('span', { class: 'mr-name' }, name, badge ? h('span', { class: 'mr-badge' }, badge) : null),
-      note ? h('span', { class: 'mr-note' }, note) : null,
-      frac != null ? h('span', { class: 'mr-bar' }, h('i', { style: `width:${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%` })) : null),
-    h('span', { class: 'mr-amt' }, money(amount)),
-    icon('chev', 'i chev'));
+// 钱都在哪的存钱罐（2026-10-14 第二次重做，用户选的：存钱罐、按能不能动分三组、罐子下只写名字和金额、点了在下面展开）
+// 罐子是写死的 SVG，只拼数字和固定的颜色变量，不含用户数据，可以用 innerHTML
+let jarSeq = 0;
+function jarSvg(fill, { sealed = false, warn = false, color = 'var(--accent)' } = {}) {
+  const id = `jar${++jarSeq}`;
+  const f = Math.max(0, Math.min(1, fill || 0));
+  const top = 66 - f * 50; // 水面：罐身里面从 y=16 到 66
+  const water = f > 0 ? `<path d="M0 ${top} Q16 ${top - 2.5} 32 ${top} T64 ${top} V80 H0 Z" fill="${warn ? 'var(--amber)' : color}" opacity="0.82"/>` : '';
+  const slot = sealed
+    ? '<rect x="17" y="4" width="30" height="10" rx="3.5" fill="var(--jar-lid)"/><rect x="21" y="2" width="22" height="4" rx="2" fill="var(--jar-lid)"/>'
+    : '<rect x="24" y="16.5" width="16" height="3.4" rx="1.7" fill="var(--jar-slot)"/>';
+  const el = h('span', { class: 'jar-svg', 'aria-hidden': 'true' });
+  el.innerHTML = `<svg viewBox="0 0 64 72"><defs><clipPath id="${id}"><rect x="6" y="11" width="52" height="58" rx="19"/></clipPath></defs>`
+    + `<rect x="6" y="11" width="52" height="58" rx="19" fill="var(--jar-glass)"/>`
+    + `<g clip-path="url(#${id})">${water}</g>`
+    + `<rect x="6" y="11" width="52" height="58" rx="19" fill="none" stroke="var(--jar-line)" stroke-width="1.6"/>`
+    + `<path d="M14 30 Q14 22 20 19" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.4" stroke-linecap="round"/>${slot}</svg>`;
+  return el;
 }
+// 罐子下面的金额：1 万以上写「¥2.6万」
+const jarMoney = (n) => (Math.abs(n) >= 10000 ? `¥${(Math.round(n / 1000) / 10).toLocaleString('zh-CN')}万` : money(n));
+let moneyOpen = null; // 展开的是哪个罐子（只在内存）
 
 function moneyDetail(title, lines, rows = [], extra = null) {
   openSheet({ title, body: h('div', { class: 'form' }, lines.map((l) => h('p', { class: 'small' }, l)),
@@ -3892,11 +3904,14 @@ function cardCheckCard() {
 }
 
 const MONEY_HELP = [
-  ['一句话', ['钱一直在卡里，网站只在账面上给它们分好用途。存款不碰，心愿只花省下来的钱，到日子要用的钱提前留好。']],
-  ['最上面三个数', ['存着不动：家庭存款、应急底线、医疗备用金、专项存款，加上攒给大额心愿的。', '能自由用：自由存款 + 心愿基金现在能用的。', '生活费还剩：这个月的生活预算还剩多少。', '下面每一行点开看说明。']],
+  ['一句话', ['钱一直在卡里，网站只在账面上给它们分好用途。每一类钱是一个存钱罐，水位是存满了多少。点一个罐子，下面会写它是干什么的、还差多少。']],
+  ['三组', ['存着不动：家庭存款、应急底线、医疗备用金、每个专项、正在攒的大额心愿。', '能自由用：自由存款、心愿基金（现在能随便用的）。', '这个月：生活费还剩多少。']],
+  ['水位', ['应急、医疗、专项：存了多少 ÷ 要留多少。大额心愿：攒了多少 ÷ 价格。生活费：还剩 ÷ 这个月预算。',
+    `家庭存款封存了就是满的。自由存款：不到 ${money(FREE_KEEP)} 时按兜底线算，之后按「凑够下一个一万封存」算。心愿基金按 ${money(WISH_CAP)} 算满，满了再进来的算存款。`,
+    '盖着盖子的是封存了的；水是琥珀色的，是还没存满或到时候会差钱。']],
   ['钱进来先补谁', ['应急底线 → 医疗备用金 → 专项存款（日子最近的先）→ 自由存款（到 ¥2,000）→ 家庭存款（每凑够一万封存）。已经封存的家庭存款一直保着。']],
   ['钱不够先扣谁', ['心愿基金能随便用的（留 ¥100）→ 自由存款 → 专项（日子最远的先让）→ 医疗 → 应急 → 家庭存款。大额心愿攒着的不扣。']],
-  ['每月数额计算', ['在「对账」页最下面：生活费卡这边应该有多少、实际多少、该从哪张卡转多少。']],
+  ['每张卡该有多少', ['在「对账」页最下面的数额计算：生活费卡这边应该有多少、实际多少、该从哪张卡转多少。']],
   ['在总结里', ['总结页右上角点「钱都在哪」，整页翻过来就是这一页；再点「总结」翻回去。']],
 ];
 
@@ -3908,68 +3923,64 @@ function moneyView(inSummary = false) {
   const c = cardCheck(d, t);
   const p = periodFor(d, t);
   const lb = livingBudget(d) * partial(d, p).factor;
-  const floorName = account(d, d.settings.floorAccount)?.name || '存钱卡';
-  const plan = bigWishPlan(d, t);
-  const livingNow = Math.max(0, c.left); // 这个月生活费还剩的（卡里实际和账面差多少，看下面的数额计算）
-  const total = [m.family.have, m.emergency.have, m.medical.have, ...m.specials.map((x) => x.have), m.free.have, Math.max(0, m.wish.total), livingNow]
-    .reduce((a, x) => a + Math.max(0, x), 0);
-  const medTx = d.tx.filter((x) => x.type === 'expense' && txGroup(d, x) === 'med').slice(-8).reverse();
-  const yearMed = d.tx.filter((x) => x.type === 'expense' && txGroup(d, x) === 'med' && x.date > addDays(t, -365)).reduce((a, x) => a + cny(x), 0);
-  const medAdvice = d.openingDate && d.openingDate <= addDays(t, -365) && yearMed > medTarget(d) ? Math.ceil(yearMed / 500) * 500 : 0;
-  const specialsHave = m.specials.reduce((a, x) => a + x.have, 0);
-  const bigSaved = Math.max(0, m.wish.total - m.wish.small);
-  // 三个结论：存着不动的（家庭、应急、医疗、专项、攒给大额心愿的）/ 能自由用的（自由存款 + 心愿基金能用的）/ 这个月的生活费
-  const kept = m.family.have + m.emergency.have + m.medical.have + specialsHave + bigSaved;
-  const usable = Math.max(0, m.free.have) + Math.max(0, m.wish.small);
-  const groups = [['存着不动', kept, 'var(--g-daily)'], ['能自由用', usable, 'var(--g-look)'], ['生活费还剩', livingNow, 'var(--g-none)']];
-  const full = (have, target) => target > 0 && have >= target;
-  const short = (have, target) => (full(have, target) ? '满了' : `还差 ${money(target - have)}`);
-  const medDetail = () => moneyDetail('医疗备用金', ['看病、买药从这里出，不占生活预算。学校医保报销回来的（记成收入「医保报销」）退回这里。', '用掉的，下一笔收入先补上。一次花超了，超的部分先扣心愿基金（留 ¥100），再由存款补。',
-    medAdvice ? `过去一年看病买药花了 ${money(yearMed)}，比 ${money(medTarget(d))} 多，建议调到 ${money(medAdvice)}。` : ''].filter(Boolean),
-  medTx.map((x) => [`${md(x.date)} ${catName(x.category)}${x.note ? ` · ${x.note}` : ''}`, `−${money(cny(x))}`]),
-  medAdvice ? h('button', { class: 'secondary', onclick: (e) => { e.currentTarget.disabled = true; save(`医疗备用金调到 ${medAdvice}`, (data) => { data.settings.medTarget = medAdvice; }).then(() => { toast(`医疗备用金调到 ${money(medAdvice)} 了`); render(); }).catch(() => {}); } }, `调到 ${money(medAdvice)}`) : null);
-  const saveRows = [
-    moneyRow({ color: 'var(--g-daily)', name: '家庭存款', amount: m.family.have, badge: m.family.count ? '封存' : '',
-      note: m.family.count ? `${m.family.count} 个一万，放着不动` : `自由存款超过 ${money(FREE_KEEP)} 的，凑够一万就封存进来`,
-      onclick: () => moneyDetail('家庭存款', [`自由存款超过 ${money(FREE_KEEP)} 的部分，每凑够 ${money(FAMILY_STEP)} 就封存一次，放着不动，以后作为家庭存款。`, '钱不够时，它排在最后才动。'],
-        (d.family?.log || []).map((x) => [md(x.date), `封存 ${money(x.amount)}`])) }),
-    moneyRow({ color: 'var(--g-sub)', name: '应急底线', amount: m.emergency.have, frac: m.emergency.target ? m.emergency.have / m.emergency.target : null,
-      note: `${short(m.emergency.have, m.emergency.target)} · 意外才动`, tone: full(m.emergency.have, m.emergency.target) ? '' : 'warn',
-      onclick: () => moneyDetail('应急底线', ['专门应付意外：生病、电脑坏了、收入晚到。用了以后，下一笔收入最先把它补满。', `底线是 ${money(m.emergency.target)}。`]) }),
-    moneyRow({ color: 'var(--g-med)', name: '医疗备用金', amount: m.medical.have, frac: m.medical.target ? m.medical.have / m.medical.target : null,
-      note: medAdvice ? `建议调到 ${money(medAdvice)}` : `${short(m.medical.have, m.medical.target)} · 看病、买药从这里出`, tone: m.medical.have < 300 ? 'warn' : '', onclick: medDetail }),
-    ...(m.specials.length ? [
-      h('div', { class: 'money-sub-head' }, h('span', {}, '专项存款'), h('span', {}, money(specialsHave))),
-      ...m.specials.map((x) => moneyRow({ color: 'var(--accent)', name: x.name, amount: x.have, frac: x.target ? x.have / x.target : null, sub: true,
-        badge: x.sealed ? '封存' : '', tone: x.short > 0 ? 'warn' : '',
-        note: [x.by ? `${md(x.by)}要用` : '', x.short > 0 ? `会差 ${money(x.short)}` : x.sealed ? '' : x.perMonth ? `每月留 ${money(x.perMonth)}，来得及` : short(x.have, x.target)].filter(Boolean).join(' · '),
-        onclick: () => go('#/goals') }))] : []),
-    moneyRow({ color: 'var(--g-look)', name: '自由存款', amount: m.free.have,
-      note: m.free.have > FREE_KEEP ? `留 ${money(FREE_KEEP)} 兜底 · 再存 ${money(FREE_KEEP + FAMILY_STEP - m.free.have)} 封存一万` : `留 ${money(FREE_KEEP)} 兜底，超支和急用先从这里补`,
-      tone: m.free.have < FREE_KEEP ? 'warn' : '',
-      onclick: () => moneyDetail('自由存款', ['上面都留够以后剩下的，是存款里唯一能自由用的。超支、急用、专项超了，先扣心愿基金，再扣它。', `一直留 ${money(FREE_KEEP)} 兜底；超过的部分每凑够 ${money(FAMILY_STEP)} 封存进家庭存款。`]) }),
+  const plan = bigWishPlan(d, t).filter((x) => x.saved > 0);
+  const left = Math.max(0, c.left);
+  const full = (have, target) => target > 0 && have >= target - 0.5;
+  const shortName = (x) => (x.kind === 'favor' ? `人情·${x.name.replace(/^人情：/, '').split(' · ')[0]}` : x.kind === 'summer' ? '暑假' : x.name);
+  const freeNext = FREE_KEEP + FAMILY_STEP - m.free.have;
+  const kept = [
+    { key: 'family', name: '家庭存款', amount: m.family.have, color: 'var(--g-daily)', fill: m.family.count ? 1 : 0, sealed: m.family.count > 0,
+      lines: [m.family.count ? `${m.family.count} 个一万，封存不动` : '还没有', `自由存款超过 ${money(FREE_KEEP)} 的，每凑够一万封存进来`] },
+    { key: 'emergency', name: '应急底线', amount: m.emergency.have, color: 'var(--g-sub)', fill: m.emergency.target ? m.emergency.have / m.emergency.target : 0,
+      warn: !full(m.emergency.have, m.emergency.target),
+      lines: [full(m.emergency.have, m.emergency.target) ? '满了，意外才动' : `还差 ${money(m.emergency.target - m.emergency.have)}，下一笔收入先补`] },
+    { key: 'medical', name: '医疗备用金', amount: m.medical.have, color: 'var(--g-med)', fill: m.medical.target ? m.medical.have / m.medical.target : 0,
+      warn: !full(m.medical.have, m.medical.target),
+      lines: [full(m.medical.have, m.medical.target) ? '满了' : `还差 ${money(m.medical.target - m.medical.have)}，下一笔收入先补`, '看病、买药从这里出'] },
+    ...m.specials.map((x) => ({ key: `s-${x.id}`, name: shortName(x), amount: x.have, color: 'var(--accent)', fill: x.target ? x.have / x.target : 1,
+      sealed: x.sealed, warn: x.short > 0, href: '#/goals',
+      lines: [x.kind === 'favor' ? `${shortName(x)}${x.by ? ` · ${md(x.by)}要用` : ''}` : x.by ? `${md(x.by)}要用` : x.name,
+        x.sealed ? '存够了，封存' : x.short > 0 ? `到时候会差 ${money(x.short)}` : `还差 ${money(x.target - x.have)}${x.perMonth ? `，每月留 ${money(x.perMonth)}` : ''}`] })),
+    ...plan.map((x) => ({ key: `w-${x.w.id}`, name: x.w.name, amount: x.saved, color: 'var(--g-food)', fill: x.saved / Number(x.w.price), href: '#/wishes',
+      lines: [`大额心愿，攒了 ${money(x.saved)} / ${money(x.w.price)}`, x.eta ? `大约 ${x.eta} 个月攒够` : x.state === 'ready' ? '攒够了，可以买' : ''] })),
   ];
-  const livingRows = [
-    moneyRow({ color: 'var(--g-none)', name: '这个月生活费还剩', amount: livingNow, frac: lb ? livingNow / lb : null,
-      note: `预算 ${money(lb)} · 没花完的月底进心愿基金`, onclick: () => go('#/') }),
-    moneyRow({ color: 'var(--g-food)', name: '心愿基金', amount: m.wish.small,
-      note: ['现在能用', ...plan.filter((x) => x.saved > 0).map((x) => `另外 ${money(x.saved)} 攒给「${x.w.name}」`)].join(' · '), onclick: () => go('#/wishes') }),
+  const usable = [
+    { key: 'free', name: '自由存款', amount: m.free.have, color: 'var(--g-look)',
+      fill: m.free.have < FREE_KEEP ? m.free.have / FREE_KEEP : (m.free.have - FREE_KEEP) / FAMILY_STEP, warn: m.free.have < FREE_KEEP,
+      lines: m.free.have < FREE_KEEP ? [`还差 ${money(FREE_KEEP - m.free.have)} 到 ${money(FREE_KEEP)} 兜底`] : [`留 ${money(FREE_KEEP)} 兜底`, `再存 ${money(freeNext)} 封存一万`] },
+    { key: 'wish', name: '心愿基金', amount: m.wish.small, color: 'var(--g-food)', fill: m.wish.small / WISH_CAP, href: '#/wishes',
+      lines: [m.wish.small >= WISH_CAP ? `满 ${jarMoney(WISH_CAP)} 了，再进来的算存款` : `现在能随便用的，最多攒到 ${jarMoney(WISH_CAP)}`] },
   ];
+  const month = [
+    { key: 'living', name: '生活费还剩', amount: left, color: 'var(--g-none-strong)', fill: lb ? left / lb : 0, warn: c.left < 0, href: '#/',
+      lines: [`这个月预算 ${money(lb)}`, '没花完的月底进心愿基金'] },
+  ];
+  const sum = (xs) => xs.reduce((a, x) => a + Math.max(0, x.amount), 0);
+  const total = sum(kept) + sum(usable) + sum(month);
+  const group = (title, jars) => {
+    const open = jars.find((x) => x.key === moneyOpen);
+    return h('section', { class: 'jar-group' },
+      h('div', { class: 'jar-head' }, h('span', {}, title), h('b', {}, jarMoney(sum(jars)))),
+      h('div', { class: 'card jar-card' },
+        h('div', { class: 'jar-grid' }, jars.map((x) => h('button', {
+          type: 'button', class: `jar${x.key === moneyOpen ? ' on' : ''}`, 'aria-expanded': String(x.key === moneyOpen), 'aria-label': `${x.name} ${money(x.amount)}`,
+          onclick: () => { moneyOpen = moneyOpen === x.key ? null : x.key; render(); },
+        }, jarSvg(x.fill, x), h('span', { class: 'jar-name' }, x.name), h('span', { class: 'jar-amt' }, jarMoney(x.amount))))),
+        open ? h('div', { class: 'jar-detail' },
+          h('div', { class: 'jar-detail-top' }, h('b', {}, open.name), h('span', {}, money(open.amount))),
+          open.lines.filter(Boolean).slice(0, 2).map((l) => h('p', {}, l)),
+          open.href ? h('a', { class: 'small', href: open.href }, '去看看 ›') : null) : null));
+  };
   return h('div', {},
     inSummary ? headerSub('钱都在哪', '每一类钱有多少、存到哪了', flipButton(), helpButton('钱都在哪', MONEY_HELP))
       : headerSub('钱都在哪', '每一类钱有多少、存到哪了', helpButton('钱都在哪', MONEY_HELP)),
     h('div', { class: 'card money-total' },
-      h('div', { class: 'muted small' }, '总共'),
-      h('div', { class: 'big-num' }, money(total)),
-      h('div', { class: 'stack-bar', 'aria-hidden': 'true' }, groups.filter((x) => x[1] > 0).map(([, v, col]) => h('i', { style: `flex:${v};background:${col}` }))),
-      h('div', { class: 'money-three' }, groups.map(([n, v, col]) => h('div', { style: `--c:${col}` }, h('span', {}, n), h('b', {}, money(v))))),
-      h('p', { class: 'muted small money-usable' }, `能自由用的 = 自由存款 ${money(m.free.have)} + 心愿基金 ${money(Math.max(0, m.wish.small))}`)),
-    h('div', { class: 'money-head' }, h('span', {}, floorName), h('b', {}, money(m.bal))),
-    h('p', { class: 'muted small money-note' }, '钱进来按这个顺序一层层补；不够时从最下面开始让。', m.toMe ? ` 别人还欠你的 ${money(m.toMe)} 先当作还在。` : ''),
-    h('div', { class: 'card money-list' }, saveRows),
-    h('div', { class: 'money-head' }, h('span', {}, '生活费卡这边'), h('b', {}, money(c.actual))),
-    h('div', { class: 'card money-list' }, livingRows),
-    cardCheckCard());
+      h('div', { class: 'muted small' }, '一共'),
+      h('div', { class: 'big-num' }, jarMoney(total)),
+      h('div', { class: 'muted small' }, money(total))),
+    group('存着不动', kept),
+    group('能自由用', usable),
+    group('这个月', month));
 }
 
 // ---------- 我们的花钱方式 ----------

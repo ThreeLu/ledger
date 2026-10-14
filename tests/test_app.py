@@ -929,26 +929,29 @@ def _(c):
     assert next(x for x in c.data()["goals"] if x["name"] == "考研报名")["status"] == "done"
     # 钱都在哪：圆圈和数额计算
     c.go("#/money")
-    tile = lambda name: p.locator(".money-row").filter(has=p.locator(".mr-name", has_text=re.compile(f"^{name}")))  # noqa: E731
-    for name in ("应急底线", "医疗备用金", "过渡金", "自由存款", "家庭存款", "这个月生活费还剩", "心愿基金"):
-        expect(tile(name)).to_be_visible()
-    # 最上面三个结论加起来等于总共
-    total = int(p.locator(".money-total .big-num").inner_text().replace("¥", "").replace(",", ""))
-    three = [int(x.replace("¥", "").replace(",", "")) for x in p.locator(".money-three b").all_inner_texts()]
-    assert abs(sum(three) - total) <= 2, (three, total)
-    # 按补钱的顺序：家庭 → 应急 → 医疗 → 专项 → 自由
-    order = p.locator(".money-list").first.locator(".mr-name").all_inner_texts()
-    idx = lambda n: next(i for i, x in enumerate(order) if x.startswith(n))  # noqa: E731
-    assert idx("家庭存款") < idx("应急底线") < idx("医疗备用金") < idx("过渡金") < idx("自由存款"), order
+    jar = lambda name: p.locator(".jar").filter(has=p.locator(".jar-name", has_text=re.compile(f"^{name}$")))  # noqa: E731
+    group = lambda title: p.locator(".jar-group").filter(has=p.locator(".jar-head", has_text=title))  # noqa: E731
+    for name in ("家庭存款", "应急底线", "医疗备用金", "过渡金"):
+        expect(group("存着不动").locator(".jar-name", has_text=name)).to_have_count(1)
+    for name in ("自由存款", "心愿基金"):
+        expect(group("能自由用").locator(".jar-name", has_text=name)).to_have_count(1)
+    expect(group("这个月").locator(".jar-name")).to_have_text(["生活费还剩"])
+    expect(p.locator(".card-check")).to_have_count(0)                    # 数额计算只在对账页
+    # 点罐子：下面展开说明，再点收起
+    jar("医疗备用金").click()
+    expect(p.locator(".jar-detail")).to_contain_text("看病、买药从这里出")
+    jar("医疗备用金").click()
+    expect(p.locator(".jar-detail")).to_have_count(0)
+    # 人情的专项只写人情和那个人
+    for name in p.locator(".jar-name").all_inner_texts():
+        assert not name.startswith("人情") or ("·" in name and "随礼" not in name), name
+    c.go("#/reconcile")
     expect(p.locator(".card-check")).to_contain_text("应该一共有")
-    tile("医疗备用金").click()
-    expect(p.locator(".sheet")).to_contain_text("看病、买药从这里出")
-    p.locator(".sheet").get_by_role("button", name="知道了").click()
     # 总结页可以整页翻到「钱都在哪」，再翻回来；离开总结页再回来默认是总结
     c.go("#/summary")
     p.get_by_role("button", name="翻到钱都在哪").click()
     expect(p.get_by_role("heading", name="钱都在哪")).to_be_visible()
-    expect(tile("自由存款")).to_be_visible()
+    expect(jar("自由存款")).to_be_visible()
     p.get_by_role("button", name="翻回总结").click()
     expect(p.get_by_role("heading", name="总结")).to_be_visible()
     p.get_by_role("button", name="翻到钱都在哪").click()

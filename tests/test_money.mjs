@@ -257,4 +257,22 @@ test('记账时勾了「用心愿基金的钱」：类别照常，不占生活�
   assert.equal(st.spent.none, 80);
 });
 
+test('能随便用的满 1 万就不再进：多的算存款；给大额心愿攒的不受影响；来源加起来还是等于合计', () => {
+  const d = book();
+  d.tx = [inc('2026-08-03', 20000, 'i-job', 'a-live')]; // 兼职 20000，三成 = 6000 进心愿基金，加上两个月结余超过 1 万
+  d.settings.sideIncomeSave = 0.7;
+  d.tx.push(ex('2026-08-05', 0.01)); // 8、9 月几乎没花：各省 2300
+  const f = m.wishFunds(d, T);
+  assert.equal(f.small, m.WISH_CAP);
+  const sum = Object.values(f.parts).reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(sum - f.total) < 0.02, `${sum} vs ${f.total}`);
+  assert.ok(f.parts.toFree < 0);
+  // 有正在攒的大额心愿：照样分 1/3 给它
+  d.wishes = [wish('相机', 5000, { saveStart: '2026-08-01' })];
+  d.tx.unshift(inc('2026-07-20', 300, 'i-job', 'a-live'));
+  const g = m.wishFunds(d, T);
+  assert.ok(g.env['相机'] > 100);
+  assert.ok(g.small <= m.WISH_CAP);
+});
+
 console.log(`\n${n} 项通过`);

@@ -23,6 +23,11 @@
   --g-sub: #9a948a;
   --g-none: #d3cdc2;
   --g-med: #a9bfa5;
+  --g-none-strong: #b9b1a3;
+  --jar-glass: #faf8f4;
+  --jar-line: rgba(60, 55, 45, 0.22);
+  --jar-slot: rgba(60, 55, 45, 0.38);
+  --jar-lid: #8d84a8;
   --shadow: 0 1px 2px rgba(60, 55, 45, 0.06), 0 6px 20px rgba(60, 55, 45, 0.06);
   --radius: 16px;
   color-scheme: light;
@@ -51,6 +56,11 @@
     --g-sub: #8a857c;
     --g-none: #4d4a52;
     --g-med: #5f7a5c;
+    --g-none-strong: #7b766e;
+    --jar-glass: #2a282e;
+    --jar-line: rgba(255, 255, 255, 0.2);
+    --jar-slot: rgba(255, 255, 255, 0.35);
+    --jar-lid: #9f93c9;
     --shadow: none;
     color-scheme: dark;
   }
@@ -655,35 +665,27 @@ a.cell:active, button.cell:not(:disabled):active, .cell.pick:not(:disabled):acti
 button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: none; opacity: .55; }
 @media (prefers-reduced-motion: reduce) { button:active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: none !important; } }
 
-/* 钱都在哪（2026-10-14 重做）：最上面总共 + 三个结论，下面按补钱的顺序一行一行 */
-.money-total .stack-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; margin: 12px 0 12px; }
-.money-total .stack-bar i { display: block; min-width: 3px; }
-.money-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.money-three div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.money-three span { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.money-three span::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--c); flex: none; }
-.money-three b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.money-usable { margin: 10px 0 0; }
-.money-head { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 4px 4px; font-size: 13px; color: var(--muted); }
-.money-head b { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
-.money-list { padding: 2px 16px; }
-.money-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 0; padding: 13px 0; border-radius: 0; border-top: 0.5px solid var(--line); background: none; box-shadow: none; color: var(--text); font-weight: 400; text-align: left; justify-content: flex-start; }
-.money-list > :first-child { border-top: 0; }
-.mr-dot { flex: none; width: 4px; align-self: stretch; border-radius: 2px; background: var(--c); }
-.money-row.sub { padding-left: 14px; }
-.money-row.sub .mr-dot { width: 3px; opacity: .7; }
-.mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.mr-name { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; }
-.mr-badge { font-size: 11px; font-weight: 600; color: var(--g-daily); background: color-mix(in srgb, var(--g-daily) 12%, var(--card)); border-radius: 6px; padding: 1px 6px; }
-.mr-note { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
-.money-row.warn .mr-note { color: var(--amber); }
-.mr-bar { display: block; height: 4px; border-radius: 2px; background: var(--chip); overflow: hidden; margin-top: 3px; max-width: 220px; }
-.mr-bar i { display: block; height: 100%; border-radius: 2px; background: var(--c); }
-.money-row.warn .mr-bar i { background: var(--amber); }
-.mr-amt { flex: none; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.money-row > .i.chev { flex: none; width: 13px; height: 13px; color: var(--muted); opacity: .5; }
-.money-sub-head { display: flex; justify-content: space-between; padding: 12px 0 0; border-top: 0.5px solid var(--line); font-size: 13px; color: var(--muted); }
-.money-sub-head + .money-row { border-top: 0; }
+/* 钱都在哪（2026-10-14 第二次重做）：存钱罐，按能不能动分三组 */
+.money-total { text-align: center; }
+.money-total .big-num { margin: 2px 0; }
+.jar-group { margin-top: 18px; }
+.jar-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 4px 6px; font-size: 13px; color: var(--muted); }
+.jar-head b { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+.jar-card { padding: 14px 8px 10px; }
+.jar-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 4px; }
+.jar { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; padding: 4px 2px 6px; border-radius: 14px; background: none; box-shadow: none; color: var(--text); font-weight: 400; transition: background-color .15s ease; }
+.jar.on { background: var(--accent-soft); }
+.jar-svg { display: block; width: 54px; height: 61px; margin-bottom: 4px; }
+.jar-svg svg { width: 100%; height: 100%; overflow: visible; }
+.jar-name { max-width: 100%; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jar-amt { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.jar-detail { margin: 10px 8px 2px; padding: 10px 12px; border-radius: 12px; background: var(--bg); animation: jarOpen .18s ease; }
+.jar-detail-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.jar-detail-top span { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+.jar-detail p { margin: 2px 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+.jar-detail a { display: inline-block; margin-top: 4px; }
+@keyframes jarOpen { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .jar-detail { animation: none; } }
 .money-note { margin: 0 4px 8px; }
 .fund-split { margin-top: 2px; }
 .card-check p { margin: 8px 0 0; }
