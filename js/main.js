@@ -3976,8 +3976,7 @@ function moneyView(inSummary = false) {
       : headerSub('钱都在哪', '每一类钱有多少、存到哪了', helpButton('钱都在哪', MONEY_HELP)),
     h('div', { class: 'card money-total' },
       h('div', { class: 'muted small' }, '一共'),
-      h('div', { class: 'big-num' }, jarMoney(total)),
-      h('div', { class: 'muted small' }, money(total))),
+      h('div', { class: 'big-num' }, cents(total))),
     group('存着不动', kept),
     group('能自由用', usable),
     group('这个月', month));
