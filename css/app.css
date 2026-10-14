@@ -655,22 +655,36 @@ a.cell:active, button.cell:not(:disabled):active, .cell.pick:not(:disabled):acti
 button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: none; opacity: .55; }
 @media (prefers-reduced-motion: reduce) { button:active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: none !important; } }
 
-/* 钱都在哪：小圆圈 + 两行字，两列 */
-.money-total .stack-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0 8px; }
+/* 钱都在哪（2026-10-14 重做）：最上面总共 + 三个结论，下面按补钱的顺序一行一行 */
+.money-total .stack-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; margin: 12px 0 12px; }
 .money-total .stack-bar i { display: block; min-width: 3px; }
-.stack-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
-.stack-legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; background: var(--c); }
-.money-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-.money-tile { display: flex; align-items: center; gap: 10px; min-height: 0; padding: 12px; border-radius: 14px; background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font-weight: 400; justify-content: flex-start; }
-.money-text { min-width: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
-.money-text b { display: block; font-size: 14px; color: var(--text); font-weight: 600; }
-.mring { --v: 0%; --c: var(--accent); width: 50px; height: 50px; flex: none; border-radius: 50%; position: relative; display: grid; place-items: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.mring::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(var(--c) var(--v), var(--chip) 0); -webkit-mask: radial-gradient(circle, transparent 60%, #000 61%); mask: radial-gradient(circle, transparent 60%, #000 61%); }
-.mring.sealed { --c: var(--g-daily); }
-.mring.late { --c: var(--amber); }
-.mring.med { --c: var(--g-med); }
-.mring.free { --c: var(--g-look); }
-.money-note { margin: -4px 4px 8px; }
+.money-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.money-three div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.money-three span { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.money-three span::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--c); flex: none; }
+.money-three b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.money-usable { margin: 10px 0 0; }
+.money-head { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 4px 4px; font-size: 13px; color: var(--muted); }
+.money-head b { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+.money-list { padding: 2px 16px; }
+.money-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 0; padding: 13px 0; border-radius: 0; border-top: 0.5px solid var(--line); background: none; box-shadow: none; color: var(--text); font-weight: 400; text-align: left; justify-content: flex-start; }
+.money-list > :first-child { border-top: 0; }
+.mr-dot { flex: none; width: 4px; align-self: stretch; border-radius: 2px; background: var(--c); }
+.money-row.sub { padding-left: 14px; }
+.money-row.sub .mr-dot { width: 3px; opacity: .7; }
+.mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mr-name { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; }
+.mr-badge { font-size: 11px; font-weight: 600; color: var(--g-daily); background: color-mix(in srgb, var(--g-daily) 12%, var(--card)); border-radius: 6px; padding: 1px 6px; }
+.mr-note { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.money-row.warn .mr-note { color: var(--amber); }
+.mr-bar { display: block; height: 4px; border-radius: 2px; background: var(--chip); overflow: hidden; margin-top: 3px; max-width: 220px; }
+.mr-bar i { display: block; height: 100%; border-radius: 2px; background: var(--c); }
+.money-row.warn .mr-bar i { background: var(--amber); }
+.mr-amt { flex: none; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.money-row > .i.chev { flex: none; width: 13px; height: 13px; color: var(--muted); opacity: .5; }
+.money-sub-head { display: flex; justify-content: space-between; padding: 12px 0 0; border-top: 0.5px solid var(--line); font-size: 13px; color: var(--muted); }
+.money-sub-head + .money-row { border-top: 0; }
+.money-note { margin: 0 4px 8px; }
 .fund-split { margin-top: 2px; }
 .card-check p { margin: 8px 0 0; }
 .card-check .cart-line { padding: 3px 0; }

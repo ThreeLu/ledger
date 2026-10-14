@@ -929,9 +929,17 @@ def _(c):
     assert next(x for x in c.data()["goals"] if x["name"] == "考研报名")["status"] == "done"
     # 钱都在哪：圆圈和数额计算
     c.go("#/money")
-    tile = lambda name: p.locator(".money-tile").filter(has=p.locator("b", has_text=re.compile(f"^{name}$")))  # noqa: E731
-    for name in ("应急底线", "医疗备用金", "过渡金", "自由存款", "家庭存款", "这个月生活费", "心愿基金"):
+    tile = lambda name: p.locator(".money-row").filter(has=p.locator(".mr-name", has_text=re.compile(f"^{name}")))  # noqa: E731
+    for name in ("应急底线", "医疗备用金", "过渡金", "自由存款", "家庭存款", "这个月生活费还剩", "心愿基金"):
         expect(tile(name)).to_be_visible()
+    # 最上面三个结论加起来等于总共
+    total = int(p.locator(".money-total .big-num").inner_text().replace("¥", "").replace(",", ""))
+    three = [int(x.replace("¥", "").replace(",", "")) for x in p.locator(".money-three b").all_inner_texts()]
+    assert abs(sum(three) - total) <= 2, (three, total)
+    # 按补钱的顺序：家庭 → 应急 → 医疗 → 专项 → 自由
+    order = p.locator(".money-list").first.locator(".mr-name").all_inner_texts()
+    idx = lambda n: next(i for i, x in enumerate(order) if x.startswith(n))  # noqa: E731
+    assert idx("家庭存款") < idx("应急底线") < idx("医疗备用金") < idx("过渡金") < idx("自由存款"), order
     expect(p.locator(".card-check")).to_contain_text("应该一共有")
     tile("医疗备用金").click()
     expect(p.locator(".sheet")).to_contain_text("看病、买药从这里出")
@@ -1522,6 +1530,17 @@ def _(c):
     expect(p.locator(".health-tile", has_text="即将扣款")).to_have_count(0)
     expect(p.locator(".charges .charge-row").first).to_be_visible()
     expect(p.locator(".charges .charge-foot")).to_contain_text("Apple ID余额")
+    # 年费快到了：只在即将扣款卡里，不再占一个健康指标格子、也不进要做的事
+    d = c.data()
+    d["recurring"].append({"id": "r-yearly-test", "name": "编的年费", "amount": 50, "account": "a-live", "yearly": (date.today() + timedelta(days=10)).strftime("%m-%d"), "remindOnly": True, "note": "到期前想想还续不续"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
+    expect(p.locator(".charges .charge-row", has_text="编的年费")).to_contain_text("到期前想想还续不续")
+    expect(p.locator(".health-tile", has_text="编的年费")).to_have_count(0)
+    expect(p.locator(".todo-item", has_text="编的年费")).to_have_count(0)
+    d["recurring"] = [r for r in d["recurring"] if r["id"] != "r-yearly-test"]
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
     expect(p.locator(".summary-title")).to_have_count(1)
     # 健康指标两列：窄的格子是双数
     assert p.locator(".health-tile:not(.wide)").count() % 2 == 0
