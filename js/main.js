@@ -3860,8 +3860,10 @@ let jarSeq = 0;
 function jarSvg(fill, { sealed = false, warn = false, color = 'var(--accent)' } = {}) {
   const id = `jar${++jarSeq}`;
   const f = Math.max(0, Math.min(1, fill || 0));
-  const top = 66 - f * 50; // 水面：罐身里面从 y=16 到 66
-  const water = f > 0 ? `<path d="M0 ${top} Q16 ${top - 2.5} 32 ${top} T64 ${top} V80 H0 Z" fill="${warn ? 'var(--amber)' : color}" opacity="0.82"/>` : '';
+  const top = 66 - f * 40; // 水面：从罐底 y=66 往上，满了停在 y=26，水面和投币口一直看得见
+  const c = warn ? 'var(--amber)' : color;
+  const water = f > 0 ? `<path d="M0 ${top} Q16 ${top - 2.5} 32 ${top} T64 ${top} V80 H0 Z" fill="${c}" opacity="0.8"/>`
+    + `<path d="M0 ${top} Q16 ${top - 2.5} 32 ${top} T64 ${top}" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="1.6"/>` : '';
   const slot = sealed
     ? '<rect x="17" y="4" width="30" height="10" rx="3.5" fill="var(--jar-lid)"/><rect x="21" y="2" width="22" height="4" rx="2" fill="var(--jar-lid)"/>'
     : '<rect x="24" y="16.5" width="16" height="3.4" rx="1.7" fill="var(--jar-slot)"/>';
@@ -3869,7 +3871,7 @@ function jarSvg(fill, { sealed = false, warn = false, color = 'var(--accent)' } 
   el.innerHTML = `<svg viewBox="0 0 64 72"><defs><clipPath id="${id}"><rect x="6" y="11" width="52" height="58" rx="19"/></clipPath></defs>`
     + `<rect x="6" y="11" width="52" height="58" rx="19" fill="var(--jar-glass)"/>`
     + `<g clip-path="url(#${id})">${water}</g>`
-    + `<rect x="6" y="11" width="52" height="58" rx="19" fill="none" stroke="var(--jar-line)" stroke-width="1.6"/>`
+    + `<rect x="6" y="11" width="52" height="58" rx="19" fill="none" stroke="${warn ? 'var(--amber)' : 'var(--jar-line)'}" stroke-width="1.6"/>`
     + `<path d="M14 30 Q14 22 20 19" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.4" stroke-linecap="round"/>${slot}</svg>`;
   return el;
 }
@@ -3929,43 +3931,50 @@ function moneyView(inSummary = false) {
   const shortName = (x) => (x.kind === 'favor' ? `人情·${x.name.replace(/^人情：/, '').split(' · ')[0]}` : x.kind === 'summer' ? '暑假' : x.name);
   const freeNext = FREE_KEEP + FAMILY_STEP - m.free.have;
   const kept = [
-    { key: 'family', name: '家庭存款', amount: m.family.have, color: 'var(--g-daily)', fill: m.family.count ? 1 : 0, sealed: m.family.count > 0,
+    { key: 'family', name: '家庭存款', amount: m.family.have, color: 'var(--jar-k1)', fill: m.family.count ? 1 : 0, sealed: m.family.count > 0,
       lines: [m.family.count ? `${m.family.count} 个一万，封存不动` : '还没有', `自由存款超过 ${money(FREE_KEEP)} 的，每凑够一万封存进来`] },
-    { key: 'emergency', name: '应急底线', amount: m.emergency.have, color: 'var(--g-sub)', fill: m.emergency.target ? m.emergency.have / m.emergency.target : 0,
+    { key: 'emergency', name: '应急底线', amount: m.emergency.have, color: 'var(--jar-k2)', fill: m.emergency.target ? m.emergency.have / m.emergency.target : 0,
       warn: !full(m.emergency.have, m.emergency.target),
       lines: [full(m.emergency.have, m.emergency.target) ? '满了，意外才动' : `还差 ${money(m.emergency.target - m.emergency.have)}，下一笔收入先补`] },
-    { key: 'medical', name: '医疗备用金', amount: m.medical.have, color: 'var(--g-med)', fill: m.medical.target ? m.medical.have / m.medical.target : 0,
+    { key: 'medical', name: '医疗备用金', amount: m.medical.have, color: 'var(--jar-k3)', fill: m.medical.target ? m.medical.have / m.medical.target : 0,
       warn: !full(m.medical.have, m.medical.target),
       lines: [full(m.medical.have, m.medical.target) ? '满了' : `还差 ${money(m.medical.target - m.medical.have)}，下一笔收入先补`, '看病、买药从这里出'] },
-    ...m.specials.map((x) => ({ key: `s-${x.id}`, name: shortName(x), amount: x.have, color: 'var(--accent)', fill: x.target ? x.have / x.target : 1,
+    ...m.specials.map((x) => ({ key: `s-${x.id}`, name: shortName(x), amount: x.have, color: 'var(--jar-k4)', fill: x.target ? x.have / x.target : 1,
       sealed: x.sealed, warn: x.short > 0, href: '#/goals',
       lines: [x.kind === 'favor' ? `${shortName(x)}${x.by ? ` · ${md(x.by)}要用` : ''}` : x.by ? `${md(x.by)}要用` : x.name,
         x.sealed ? '存够了，封存' : x.short > 0 ? `到时候会差 ${money(x.short)}` : `还差 ${money(x.target - x.have)}${x.perMonth ? `，每月留 ${money(x.perMonth)}` : ''}`] })),
-    ...plan.map((x) => ({ key: `w-${x.w.id}`, name: x.w.name, amount: x.saved, color: 'var(--g-food)', fill: x.saved / Number(x.w.price), href: '#/wishes',
+    ...plan.map((x) => ({ key: `w-${x.w.id}`, name: x.w.name, amount: x.saved, color: 'var(--jar-k5)', fill: x.saved / Number(x.w.price), href: '#/wishes',
       lines: [`大额心愿，攒了 ${money(x.saved)} / ${money(x.w.price)}`, x.eta ? `大约 ${x.eta} 个月攒够` : x.state === 'ready' ? '攒够了，可以买' : ''] })),
   ];
   const usable = [
-    { key: 'free', name: '自由存款', amount: m.free.have, color: 'var(--g-look)',
+    { key: 'free', name: '自由存款', amount: m.free.have, color: 'var(--jar-w1)',
       fill: m.free.have < FREE_KEEP ? m.free.have / FREE_KEEP : (m.free.have - FREE_KEEP) / FAMILY_STEP, warn: m.free.have < FREE_KEEP,
       lines: m.free.have < FREE_KEEP ? [`还差 ${money(FREE_KEEP - m.free.have)} 到 ${money(FREE_KEEP)} 兜底`] : [`留 ${money(FREE_KEEP)} 兜底`, `再存 ${money(freeNext)} 封存一万`] },
-    { key: 'wish', name: '心愿基金', amount: m.wish.small, color: 'var(--g-food)', fill: m.wish.small / WISH_CAP, href: '#/wishes',
+    { key: 'wish', name: '心愿基金', amount: m.wish.small, color: 'var(--jar-w2)', fill: m.wish.small / WISH_CAP, href: '#/wishes',
       lines: [m.wish.small >= WISH_CAP ? `满 ${jarMoney(WISH_CAP)} 了，再进来的算存款` : `现在能随便用的，最多攒到 ${jarMoney(WISH_CAP)}`] },
   ];
   const month = [
-    { key: 'living', name: '生活费还剩', amount: left, color: 'var(--g-none-strong)', fill: lb ? left / lb : 0, warn: c.left < 0, href: '#/',
+    { key: 'living', name: '生活费还剩', amount: left, color: 'var(--jar-g)', fill: lb ? left / lb : 0, warn: c.left < 0, href: '#/',
       lines: [`这个月预算 ${money(lb)}`, '没花完的月底进心愿基金'] },
   ];
   const sum = (xs) => xs.reduce((a, x) => a + Math.max(0, x.amount), 0);
   const total = sum(kept) + sum(usable) + sum(month);
-  const group = (title, jars) => {
-    const open = jars.find((x) => x.key === moneyOpen);
-    return h('section', { class: 'jar-group' },
-      h('div', { class: 'jar-head' }, h('span', {}, title), h('b', {}, jarMoney(sum(jars)))),
+  // 一张卡里可以并排几组（能自由用 | 这个月），点开的说明放在整张卡下面
+  const jarBtn = (x) => h('button', {
+    type: 'button', class: `jar${x.key === moneyOpen ? ' on' : ''}`, 'aria-expanded': String(x.key === moneyOpen), 'aria-label': `${x.name} ${money(x.amount)}`,
+    onclick: () => { moneyOpen = moneyOpen === x.key ? null : x.key; render(); },
+  }, jarSvg(x.fill, x), h('span', { class: 'jar-name' }, x.name), h('span', { class: 'jar-amt' }, jarMoney(x.amount)));
+  const jarCard = (sections) => {
+    const open = sections.flatMap((g) => g.jars).find((x) => x.key === moneyOpen);
+    const side = sections.length > 1;
+    return h('section', { class: `jar-group${side ? ' side' : ''}` },
+      side ? null : h('div', { class: 'jar-head' }, h('span', {}, sections[0].title), h('b', {}, jarMoney(sum(sections[0].jars)))),
       h('div', { class: 'card jar-card' },
-        h('div', { class: 'jar-grid' }, jars.map((x) => h('button', {
-          type: 'button', class: `jar${x.key === moneyOpen ? ' on' : ''}`, 'aria-expanded': String(x.key === moneyOpen), 'aria-label': `${x.name} ${money(x.amount)}`,
-          onclick: () => { moneyOpen = moneyOpen === x.key ? null : x.key; render(); },
-        }, jarSvg(x.fill, x), h('span', { class: 'jar-name' }, x.name), h('span', { class: 'jar-amt' }, jarMoney(x.amount))))),
+        h('div', { class: 'jar-row', style: side ? `grid-template-columns:${sections.map((g) => `${g.jars.length}fr`).join(' 1px ')}` : '' },
+          sections.map((g, i) => [i ? h('span', { class: 'jar-divider' }) : null,
+            h('div', { class: 'jar-part' },
+              side ? h('div', { class: 'jar-head in' }, h('span', {}, g.title), h('b', {}, jarMoney(sum(g.jars)))) : null,
+              h('div', { class: 'jar-grid' }, g.jars.map(jarBtn)))])),
         open ? h('div', { class: 'jar-detail' },
           h('div', { class: 'jar-detail-top' }, h('b', {}, open.name), h('span', {}, money(open.amount))),
           open.lines.filter(Boolean).slice(0, 2).map((l) => h('p', {}, l)),
@@ -3977,9 +3986,8 @@ function moneyView(inSummary = false) {
     h('div', { class: 'card money-total' },
       h('div', { class: 'muted small' }, '一共'),
       h('div', { class: 'big-num' }, cents(total))),
-    group('存着不动', kept),
-    group('能自由用', usable),
-    group('这个月', month));
+    jarCard([{ title: '存着不动', jars: kept }]),
+    jarCard([{ title: '能自由用', jars: usable }, { title: '这个月', jars: month }]));
 }
 
 // ---------- 我们的花钱方式 ----------

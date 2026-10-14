@@ -930,12 +930,13 @@ def _(c):
     # 钱都在哪：圆圈和数额计算
     c.go("#/money")
     jar = lambda name: p.locator(".jar").filter(has=p.locator(".jar-name", has_text=re.compile(f"^{name}$")))  # noqa: E731
-    group = lambda title: p.locator(".jar-group").filter(has=p.locator(".jar-head", has_text=title))  # noqa: E731
+    group = lambda title: p.locator(".jar-group:not(.side), .jar-part").filter(has=p.locator(".jar-head", has_text=title))  # noqa: E731
     for name in ("家庭存款", "应急底线", "医疗备用金", "过渡金"):
         expect(group("存着不动").locator(".jar-name", has_text=name)).to_have_count(1)
     for name in ("自由存款", "心愿基金"):
         expect(group("能自由用").locator(".jar-name", has_text=name)).to_have_count(1)
     expect(group("这个月").locator(".jar-name")).to_have_text(["生活费还剩"])
+    expect(p.locator(".jar-group.side .jar-head")).to_have_count(2)        # 能自由用和这个月并在一张卡里
     expect(p.locator(".card-check")).to_have_count(0)                    # 数额计算只在对账页
     # 点罐子：下面展开说明，再点收起
     jar("医疗备用金").click()
