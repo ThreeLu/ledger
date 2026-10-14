@@ -2,7 +2,7 @@
 
 import {
   GROUPS, LIVING, periodFor, shiftPeriod, periodStats, partial, livingBudget, budgetTotal, totalAssets,
-  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup, spendOf, isFromSaved, ADJUST_CAT,
+  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup, spendOf, isFromSaved, isLump, ADJUST_CAT,
 } from './money.js';
 
 const groupOf = (data, t) => txGroup(data, t);
@@ -21,6 +21,7 @@ export function rangeStats(data, from, to) {
   const byGroup = Object.fromEntries(GROUPS.map((g) => [g.id, 0]));
   const byCat = {}; // 类别 → { v, n }（点圆环时看这一组里花在哪）
   let income = 0;
+  let lump = 0; // 一次性的钱（就当没有，不算收入，直接进存款）
   let fromSaved = 0; // 用以前留好的钱花的（专项、大额人情、心愿）
   for (const t of tx) {
     const v = spendOf(data, t);
@@ -30,11 +31,11 @@ export function rangeStats(data, from, to) {
       const c = (byCat[t.type === 'adjust' ? ADJUST_CAT : t.category || ''] ||= { v: 0, n: 0 });
       c.v += v; c.n += 1;
     }
-    else if (t.type === 'income') income += cny(t);
+    else if (t.type === 'income') { if (isLump(data, t)) lump += cny(t); else income += cny(t); }
   }
   const total = Object.values(byGroup).reduce((a, b) => a + b, 0);
   const living = LIVING.reduce((s, g) => s + byGroup[g], 0);
-  return { tx, byGroup, byCat, income, total, living, fromSaved };
+  return { tx, byGroup, byCat, income, lump, total, living, fromSaved };
 }
 
 // 每天的生活花销（吃饭 + 日常 + 自由钱）
@@ -182,6 +183,7 @@ export function yearSummary(data, year, rate = data.settings.usdRate) {
     days: days.size, span,
     wishesBought: data.wishes.filter((w) => w.status === 'bought' && inYear(w.boughtAt)),
     wishesDropped: data.wishes.filter((w) => w.status === 'dropped' && inYear(w.droppedAt)),
+    lump: st.lump, // 一次性的钱，年总结里单独写一行
     taxRefund: data.tx.filter((t) => t.category === 'i-tax' && inYear(t.date)).reduce((a, t) => a + cny(t), 0),
     subs,
     assetsStart: totalAssets(data, rate, dayBefore),

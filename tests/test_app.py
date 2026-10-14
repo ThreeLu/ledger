@@ -255,7 +255,7 @@ def _(c):
     p.get_by_label("应急钱底线").fill("99999")
     p.get_by_role("button", name="保存").click()
     p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".todo-item.bad", has_text="应急钱")).to_contain_text("先别从存钱卡里转钱出来花")
+    expect(p.locator(".todo-item.bad", has_text="应急钱")).to_contain_text("下一笔收入会先把它补上")
     c.go("#/budget")
     p.get_by_label("应急钱底线").fill("8000")
     p.get_by_label("吃饭").fill("2000")
@@ -453,25 +453,46 @@ def _(c):
     assert c.repo.read(docs[1]["file"]) is None
 
 
-@step("对账：新的预算月提醒对账，对得上的不填，对不上的补差额")
+@step("对账：随时对、和卡无关；挪了没记的只改余额，少了算漏记的花销，多了直接进存款；14 天没对提醒")
 def _(c):
     p = c.page
     d = c.data()
-    d["openingDate"] = "2020-01-01"  # 假装早就开始记账，这个预算月是完整的
+    d["openingDate"] = "2020-01-01"  # 假装早就开始记账、一直没对过
+    d["lastReconciled"] = ""
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.go("#/")
     p.reload()
     expect(p.locator(".health-tile", has_text="对账")).to_be_visible()
     c.go("#/reconcile")
-    live = c.balance("a-live")
-    p.get_by_label("生活费卡实际余额").fill(str(round(live - 12.5, 2)))
+    expect(p.locator(".card-check")).to_have_count(0)                   # 不再算两张卡之间转多少
+    expect(p.locator(".rec-top-card")).to_contain_text("网站上一共")
+    live, wechat = c.balance("a-live"), c.balance("a-wechat")
+    # 一边少一边多：挪了没记
+    p.get_by_label("生活费卡实际余额").fill(str(round(live - 30, 2)))
+    p.get_by_label("微信实际余额").fill(str(round(wechat + 30, 2)))
+    expect(p.locator(".rec-live")).to_contain_text("挪了没记")
+    # 再改：一共少了 12.5
+    p.get_by_label("微信实际余额").fill(str(round(wechat + 17.5, 2)))
+    expect(p.locator(".rec-live")).to_contain_text("一共少了 ¥12.50")
+    n = len(c.tx())
+    p.get_by_role("button", name="对完了").click()
+    c.wait_saved(n + 2)
+    adj = c.tx()[-2:]
+    assert all(t["type"] == "adjust" and t["rec"] == adj[0]["rec"] for t in adj), adj
+    assert sum(t.get("spend", 0) for t in adj) == 12.5 and next(t for t in adj if t["account"] == "a-live").get("spend") == 12.5, adj
+    assert c.data()["lastReconciled"] == TODAY
+    p.wait_for_function("location.hash === '#/'")
+    expect(p.locator(".health-tile", has_text="对账")).to_have_count(0)
+    # 多了：不算收入，直接进存款
+    c.go("#/reconcile")
+    expect(p.locator(".reconcile-sub, .page-head")).to_contain_text("上次是")
+    p.get_by_label("存钱卡实际余额").fill(str(round(c.balance("a-save") + 50, 2)))
+    expect(p.locator(".rec-live")).to_contain_text("一共多了 ¥50.00")
     n = len(c.tx())
     p.get_by_role("button", name="对完了").click()
     c.wait_saved(n + 1)
     t = c.tx()[-1]
-    assert t["type"] == "adjust" and t["amount"] == -12.5 and c.data()["reconciled"], t
-    p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".health-tile", has_text="对账")).to_have_count(0)
+    assert t["amount"] == 50 and "spend" not in t, t
 
 
 @step("总结：周（每天柱状图、环形图、和上周比、最大几笔）、月（曲线、每月存下、总资产、建议）")
@@ -947,7 +968,7 @@ def _(c):
     for name in p.locator(".jar-name").all_inner_texts():
         assert not name.startswith("人情") or ("·" in name and "随礼" not in name), name
     c.go("#/reconcile")
-    expect(p.locator(".card-check")).to_contain_text("应该一共有")
+    expect(p.locator(".card-check")).to_have_count(0)
     # 总结页可以整页翻到「钱都在哪」，再翻回来；离开总结页再回来默认是总结
     c.go("#/summary")
     p.get_by_role("button", name="翻到钱都在哪").click()
@@ -1096,7 +1117,8 @@ def _(c):
     c.wait_saved(n + 1)
     t = c.tx()[-1]
     assert (t["type"], t["category"], t["amount"], t["account"]) == ("income", "i-a", 4000, "a-save"), t
-    expect(card).to_contain_text("转这个月的生活费")
+    expect(card).to_contain_text("挪到平时花钱的卡上")
+    expect(card).to_contain_text("不影响算账")
     card.get_by_role("button", name="转到生活费卡").click()
     b = c.data()["budget"]
     living = b["food"] + b["daily"] + b["free"]
@@ -1523,7 +1545,7 @@ def _(c):
     # 「还能花」在「要做的事」前面
     assert p.evaluate("() => { const t = document.querySelector('.todo'); return !t || !!(document.querySelector('.hero').compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING); }")
     if p.locator(".todo").count():
-        expect(p.locator(".todo h3")).to_have_text("要做的事")
+        expect(p.locator(".todo .todo-head h3")).to_have_text("要做的事")
         expect(p.locator(".todo-count")).to_contain_text("件")
         # 每个要留意 / 要处理的指标单独一行（以前只露第一个）
         if p.locator(".todo-more").count():

@@ -5,7 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
-  savingsMap, cardCheck, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
+  savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
 import { holidayLine } from './cal.js';
@@ -102,7 +102,7 @@ async function refresh() {
 
 // 自由存款超过 2000 的部分凑够一万，就封存进家庭存款（放着不动）
 function checkFamily() {
-  const amt = savingsMap(store.data, today()).sealable;
+  const amt = savingsMap(store.data, today(), usdRate()).sealable;
   if (!(amt > 0)) return;
   save(`家庭存款：封存 ${amt}`, (data) => {
     data.family ||= { sealed: 0, log: [] };
@@ -574,8 +574,8 @@ function paydayCard() {
       h('button', { class: 'small secondary', onclick: () => later(x.i) }, '还没'))),
     pd.transfer ? h('div', { class: 'payday-row column' },
       h('span', { class: 'grow' },
-        h('b', {}, pd.transfer.summer ? `暑假没有收入：从${accName(floor)}转这个月的生活费 ${money(pd.transfer.amount)}` : `从${accName(floor)}转这个月的生活费 ${money(pd.transfer.amount)}`),
-        h('span', { class: 'muted small' }, pd.transfer.summer ? '这是早就留好的钱，放心用。' : '先存后花：剩下的留在存钱卡里不动。'),
+        h('b', {}, `要不要把这个月的生活费 ${money(pd.transfer.amount)} 挪到平时花钱的卡上？`),
+        h('span', { class: 'muted small' }, '只是提醒：挪不挪、挪到哪张卡，都不影响算账。'),
         h('span', { class: 'routes' },
           pd.transfer.routes.map((r) => h('button', { class: 'small', onclick: () => move(r) }, `转到${accName(r.to)}`)),
           h('button', { class: 'small secondary', onclick: skip }, '这个月不用')))) : null);
@@ -595,7 +595,7 @@ function tokenNotice() {
 // 要做的事：要处理的指标、令牌、发钱日、节假日人情、里程碑合成一张卡（不再一张张叠在「还能花」上面）；先露 4 件，其余点开
 let todoMore = false;
 function medLowCard() {
-  const m = savingsMap(store.data, today()).medical;
+  const m = savingsMap(store.data, today(), usdRate()).medical;
   if (!m.target || m.have >= 300) return null;
   return h('div', { class: 'todo-part' }, h('div', {}, `医疗备用金还剩 ${money(m.have)}`),
     h('div', { class: 'muted small' }, '下一笔收入会先把它补上，不用另外做什么。'));
@@ -977,6 +977,7 @@ function addView(q) {
       } else {
         parts.push(h('div', { class: 'label-sm' }, '来源'), chips(cats, st.category, (id) => { st.category = id; draw(); }, '收入来源'));
         parts.push(...whoSection());
+        if (category(d, st.category)?.lump) parts.push(h('p', { class: 'muted small' }, '一次性的钱：不算这个月的收入和存钱，也不分给心愿基金，直接进存款，补到最需要的地方。'));
         if (st.category === 'i-job') {
           parts.push(h('label', { class: 'form-label' }, '被预扣的个税（选填）', taxInput),
             h('p', { class: 'muted small' }, '金额填到手的钱。单位先扣了个税的话填在这里（看工资条或到账短信），每年 3～6 月会提醒你申请退回来。'));
@@ -1237,7 +1238,7 @@ function addView(q) {
       });
       if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' || paidBy ? last.account : st.account });
       const jobShare = !editing && st.type === 'income' && st.category === 'i-job' && d.settings.sideIncomeSave != null ? round2(n * (1 - d.settings.sideIncomeSave)) : 0;
-      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}${useFund ? '，从心愿基金出' : ''}${jobShare ? `，其中 ${money(jobShare)} 进了心愿基金` : ''}`);
+      toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${st.type === 'income' && category(d, st.category)?.lump ? '，不算这个月的收入，直接进存款' : ''}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}${useFund ? '，从心愿基金出' : ''}${jobShare ? `，其中 ${money(jobShare)} 进了心愿基金` : ''}`);
       if (editing) history.back(); else go('#/', true);
     } catch { /* 已提示 */ }
   };
@@ -1463,7 +1464,7 @@ function moreView() {
       cell({ href: '#/accounts', ic: 'wallet', color: 'var(--accent)', title: '账户', meta: money(totalAssets(store.data, usdRate())) }),
       cell({ href: '#/claims', ic: 'suitcase', color: 'var(--blue)', title: '垫付报销', meta: store.data.claims.filter((c) => c.status !== 'settled').length ? `${store.data.claims.filter((c) => c.status !== 'settled').length} 件在报` : '' }),
       cell({ href: '#/people', ic: 'people', color: 'var(--sage)', title: '人情账', meta: receivables(store.data).toMe ? `别人欠 ${money(receivables(store.data).toMe)}` : openFavors(store.data, 'owe').length ? `欠 ${openFavors(store.data, 'owe').length} 个人情` : '' }),
-      cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '这个月还没对' : '' }),
+      cell({ href: '#/reconcile', ic: 'check', color: 'var(--amber)', title: '对账', meta: needsReconcile(store.data, today()) ? '该对了' : store.data.lastReconciled ? `上次 ${md(store.data.lastReconciled)}` : '' }),
       cell({ href: '#/bills', ic: 'search', color: 'var(--sage)', title: '账单查漏记', sub: '导入微信、支付宝账单，找出没记的' })),
     h('div', { class: 'group' },
       cell({ href: '#/money', ic: 'wallet', color: 'var(--accent)', title: '钱都在哪', sub: '每一类钱有多少、存到哪了' }),
@@ -1955,50 +1956,78 @@ function favorHolidayCard() {
 
 // ---------- 每月对账 ----------
 
+// 对账（2026-10-14 重做，用户定的）：随时对，只是让网站上的钱数和实际对齐，和卡无关。
+// 所有账户的差额加起来看：在账户之间挪了没记的（一边多一边少）只改余额；加起来少了算漏记的日常花销；多了不算收入，直接进存款
 function reconcileView() {
   const d = store.data;
   const p = periodFor(d, today());
-  const done = d.reconciled?.[p.start];
+  const rate = usdRate();
   const inputs = {};
   // 预算月头 7 天对的账，差额多半是上个月漏记的：记到上个预算月最后一天（开始记账前的不算）
   const prevEnd = addDays(p.start, -1);
   const adjDate = p.dayIndex <= 7 && d.openingDate && prevEnd >= d.openingDate ? prevEnd : today();
-  const submit = async () => {
+  const toCny = (a, v) => (a.currency === 'USD' ? v * rate : v);
+  const siteTotal = round2(totalAssets(d, rate));
+  const read = () => {
     const diffs = [];
     for (const a of d.accounts) {
-      const v = inputs[a.id].value.replace(/[，,\s]/g, '');
+      const v = inputs[a.id].value.replace(/[，,\s¥$]/g, '');
       if (v === '') continue;
       const real = Number(v);
-      if (!Number.isFinite(real)) return toast(`${a.name}要填数字`, 'error');
+      if (!Number.isFinite(real)) return { error: `${a.name}要填数字` };
       const diff = round2(real - balance(d, a.id));
-      if (diff !== 0) diffs.push({ a, real, diff });
+      if (diff !== 0) diffs.push({ a, real, diff, cny: round2(toCny(a, diff)) });
     }
+    return { diffs, net: round2(diffs.reduce((x, y) => x + y.cny, 0)) };
+  };
+  const live = h('div', { class: 'rec-live' });
+  const drawLive = () => {
+    const r = read();
+    if (r.error) { live.replaceChildren(h('p', { class: 'small warn-text' }, r.error)); return; }
+    const real = round2(siteTotal + r.net);
+    live.replaceChildren(
+      h('div', { class: 'rec-sum' }, h('span', {}, '实际一共'), h('b', {}, cents(real))),
+      !r.diffs.length ? h('p', { class: 'muted small' }, '都对得上的话，直接点「对完了」。')
+        : Math.abs(r.net) < 0.01 ? h('p', { class: 'muted small' }, '加起来正好对上：钱在账户之间挪了没记，只把各账户的余额改对。')
+          : r.net < 0 ? h('p', { class: 'small soon' }, `一共少了 ${cents(-r.net)}，算成漏记的日常花销（先从心愿基金扣）。`)
+            : h('p', { class: 'small good-text' }, `一共多了 ${cents(r.net)}，不算收入，直接进存款，补到最需要的地方。`));
+  };
+  const submit = async () => {
+    const r = read();
+    if (r.error) return toast(r.error, 'error');
+    const rec = newId('r');
+    // 少了的那部分记在差额最大（最负）的那一笔上
+    const worst = r.net < 0 ? [...r.diffs].sort((x, y) => x.cny - y.cny)[0] : null;
     try {
-      await save(`对账（${p.label}）${diffs.length ? `：${diffs.map((x) => x.a.name).join('、')}有差额` : '：都对得上'}`, (data) => {
-        for (const x of diffs) {
-          data.tx.push({ id: newId('t'), type: 'adjust', date: adjDate, account: x.a.id, amount: x.diff, note: `对账：校准到 ${x.real}`, createdAt: new Date().toISOString() });
+      await save(`对账${r.diffs.length ? `：${r.diffs.map((x) => x.a.name).join('、')}有差额` : '：都对得上'}`, (data) => {
+        for (const x of r.diffs) {
+          data.tx.push({ id: newId('t'), type: 'adjust', date: adjDate, account: x.a.id, amount: x.diff, rec, note: `对账：校准到 ${x.real}`,
+            ...(x.a.currency === 'USD' ? { cny: x.cny } : {}), ...(x === worst ? { spend: round2(-r.net) } : {}), createdAt: new Date().toISOString() });
         }
-        data.reconciled = { ...(data.reconciled || {}), [p.start]: today() };
+        data.lastReconciled = today();
       });
-      toast(diffs.length ? `对完了，${diffs.length} 个账户补了差额` : '对完了，都对得上 ✓');
+      toast(!r.diffs.length ? '对完了，都对得上 ✓' : r.net < 0 ? `对完了，少的 ${money(-r.net)} 算成漏记的花销` : r.net > 0 ? `对完了，多的 ${money(r.net)} 进了存款` : '对完了，余额都改对了');
       go('#/', true);
     } catch { /* 已提示 */ }
   };
   return h('div', { class: 'form' },
-    headerSub('对账', done ? `这个预算月 ${md(done)} 已经对过了，可以再对一次` : `${p.label}`, helpButton('为什么要对账', [
-      ['为什么', ['漏记、记错几笔很正常。每个预算月开始时对一次，账就不会越积越乱。']],
-      ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额，差额自动记成「对账差额」。', '美元账户填美元。']],
-      ['差额算在哪', ['生活费卡、微信、校园卡比网站上少的，多半是漏记的吃饭、日常小钱，算成那个月的日常花销（照常先扣心愿基金）。', '存钱卡、美元账户的差额只改余额，不算花销。', '预算月头 7 天对的账，差额记到上个预算月的最后一天。']],
+    headerSub('对账', d.lastReconciled ? `上次是 ${md(d.lastReconciled)}` : '还没对过', helpButton('对账怎么用', [
+      ['是什么', ['让网站上的钱数和实际对齐。随时都能对，超过 ' + RECONCILE_DAYS + ' 天没对，首页会提一句。']],
+      ['怎么对', ['打开手机银行、微信、校园卡 App，看一眼实际余额。', '对得上的空着不填；对不上的填实际余额。美元账户填美元。', '上面会实时算出实际一共多少、和网站差多少。']],
+      ['差额怎么算', ['和钱在哪张卡上没关系，看所有账户加起来：', '一边多一边少、加起来对上了，是钱在账户之间挪了没记，只改余额。', '加起来少了，算成漏记的日常花销（照常先扣心愿基金）。', '加起来多了，不算收入，直接进存款，补到最需要的地方。', '预算月头 7 天对的账，差额记到上个预算月的最后一天。']],
     ])),
-    h('a', { class: 'receipt-link', href: '#/bills' }, icon('search'), ' 对不上？导入微信、支付宝账单找出漏记的'),
-    cardCheckCard(),
+    h('div', { class: 'card rec-top-card' },
+      h('div', { class: 'rec-sum' }, h('span', {}, '网站上一共'), h('b', {}, cents(siteTotal))),
+      live),
     h('div', { class: 'card' },
       d.accounts.map((a) => {
         const cur = a.currency === 'USD' ? '$' : '¥';
-        inputs[a.id] = h('input', { inputmode: 'decimal', placeholder: '对得上就不填', 'aria-label': `${a.name}实际余额` });
+        inputs[a.id] = h('input', { inputmode: 'decimal', placeholder: '对得上就不填', 'aria-label': `${a.name}实际余额`, oninput: drawLive });
         return h('label', {}, h('span', { class: 'rec-top' }, h('span', {}, a.name), h('span', { class: 'muted' }, `网站上 ${exact(balance(d, a.id), cur)}`)), inputs[a.id]);
       })),
-    h('div', { class: 'actions sticky' }, h('button', { onclick: submit }, '对完了')));
+    h('a', { class: 'receipt-link', href: '#/bills' }, icon('search'), ' 对不上？导入微信、支付宝账单找出漏记的'),
+    h('div', { class: 'actions sticky' }, h('button', { onclick: submit }, '对完了')),
+    (drawLive(), null));
 }
 
 // ---------- 总结 ----------
@@ -2284,7 +2313,8 @@ function yearView(d, year, head, seg, navRow) {
         h('span', {}, '实现的心愿'), h('b', {}, ys.wishesBought.length ? `${ys.wishesBought.length} 个` : '—'),
         h('span', {}, '放弃的心愿'), h('b', {}, ys.wishesDropped.length ? `${ys.wishesDropped.length} 个` : '—'),
         h('span', {}, '订阅一共'), h('b', {}, money(ys.subs)),
-        h('span', {}, '个税退回'), h('b', {}, ys.taxRefund ? money(ys.taxRefund) : '—')),
+        h('span', {}, '个税退回'), h('b', {}, ys.taxRefund ? money(ys.taxRefund) : '—'),
+        ys.lump ? [h('span', {}, '一次性的钱'), h('b', {}, `${money(ys.lump)}（直接进存款）`)] : null),
       ys.wishesBought.length ? h('p', { class: 'muted small' }, `实现了：${ys.wishesBought.map((w) => w.name).join('、')}`) : null),
     (() => {
       const ms = Object.values(d.milestones?.reached || {}).filter((x) => x.at >= ys.from && x.at <= ys.to).sort((a, b) => a.at.localeCompare(b.at));
@@ -3324,7 +3354,7 @@ function priceFacts(d, price) {
   const free = Number(d.budget.free) || 0;
   const yearSave = plan.yearIn ? plan.yearIn - plan.yearOut : 0;
   // 能自由用的钱：自由存款 + 心愿基金里能随便用的 + 这个月生活费还剩的。应急、医疗、专项、家庭存款都有用处了，不算
-  const m = savingsMap(d, t);
+  const m = savingsMap(d, t, usdRate());
   const usable = m.free.have + m.wish.small + Math.max(0, hl.left);
   const big = price > (d.settings.wishBigFrom ?? 300);
   const facts = [];
@@ -3349,7 +3379,7 @@ function moneyContext(d) {
   const st = hl.stats;
   const part = partial(d, hl.period);
   const rc = receivables(d);
-  const m = savingsMap(d, t);
+  const m = savingsMap(d, t, usdRate());
   const f = m.wish;
   const plan = bigWishPlan(d, t);
   const groupLine = GROUPS.filter((g) => d.budget[g.id]).map((g) => `${g.name} 已花 ${Math.round(st.spent[g.id])} / 预算 ${Math.round(d.budget[g.id] * part.factor)}`).join('；');
@@ -3786,7 +3816,7 @@ function subsView() {
 
 const SPECIAL_HELP = (d) => [
   ['是什么', ['到日子一定要用的钱：暑假生活费、300 以上的人情（随礼）、毕业过渡金……和心愿不一样：心愿是「想要」，这是「到时候必须有」。']],
-  ['怎么存', [`不用另外存，就看${account(d, d.settings.floorAccount)?.name || '存钱卡'}：先留家庭存款、应急底线、医疗备用金，剩下的按日子先后给专项，日子最近的先存够。`,
+  ['怎么存', ['不用另外存，也不看钱在哪张卡上：所有账户加起来，先留出心愿基金和这个月的生活费，再留家庭存款、应急底线、医疗备用金，剩下的按日子先后给专项，日子最近的先存够。',
     '存够了就封存，只给这件事用。新来一个急的，自动排到最前面，最后面的先停一停。', '「每月留」是还差的钱平均到剩下有收入的月份；按现在每月能存的来不及，会提前用黄色提醒。']],
   ['怎么花', ['记账时在「算在哪个专项里」选上它，这笔钱从专项出，不占当月预算。一件事可以记好几笔。', '还大额人情时，记那笔钱、选上「还的是哪个人情」就行。']],
   ['办完了', ['点「办完了」：有结余回到自由存款；超了先从心愿基金扣（留 ¥100），不够的由存款补。', '不用了（比如婚礼不办了）点「不用了」，留着的钱回到自由存款。']],
@@ -3796,7 +3826,7 @@ const SPECIAL_HELP = (d) => [
 function goalsView() {
   const d = store.data;
   const t = today();
-  const m = savingsMap(d, t);
+  const m = savingsMap(d, t, usdRate());
   const edit = (g = null) => {
     const name = h('input', { value: g?.name || '', placeholder: '比如 毕业过渡金', 'aria-label': '是什么事' });
     const target = h('input', { inputmode: 'decimal', value: g ? String(g.target) : '', placeholder: '一共要多少', 'aria-label': '一共要多少' });
@@ -3885,7 +3915,6 @@ function moneyDetail(title, lines, rows = [], extra = null) {
   confirmText: '知道了', cancelText: null, onConfirm: () => {} });
 }
 
-// 每月数额计算：生活费卡这边应该有多少、实际多少、该怎么转
 function cardCheckCard() {
   const d = store.data;
   const c = cardCheck(d, today());
@@ -3913,7 +3942,7 @@ const MONEY_HELP = [
     '盖着盖子的是封存了的；水是琥珀色的，是还没存满或到时候会差钱。']],
   ['钱进来先补谁', ['应急底线 → 医疗备用金 → 专项存款（日子最近的先）→ 自由存款（到 ¥2,000）→ 家庭存款（每凑够一万封存）。已经封存的家庭存款一直保着。']],
   ['钱不够先扣谁', ['心愿基金能随便用的（留 ¥100）→ 自由存款 → 专项（日子最远的先让）→ 医疗 → 应急 → 家庭存款。大额心愿攒着的不扣。']],
-  ['每张卡该有多少', ['在「对账」页最下面的数额计算：生活费卡这边应该有多少、实际多少、该从哪张卡转多少。']],
+  ['和卡没关系', ['所有账户的钱加在一起分，不看钱在哪张卡上。「一共」= 所有账户（美元按汇率）+ 别人欠你的 − 你欠别人的。']],
   ['在总结里', ['总结页右上角点「钱都在哪」，整页翻过来就是这一页；再点「总结」翻回去。']],
 ];
 
@@ -3921,8 +3950,8 @@ const MONEY_HELP = [
 function moneyView(inSummary = false) {
   const d = store.data;
   const t = today();
-  const m = savingsMap(d, t);
-  const c = cardCheck(d, t);
+  const m = savingsMap(d, t, usdRate());
+  const c = { left: livingLeft(d, t) };
   const p = periodFor(d, t);
   const lb = livingBudget(d) * partial(d, p).factor;
   const plan = bigWishPlan(d, t).filter((x) => x.saved > 0);

@@ -21,6 +21,12 @@ function book() {
   d.tx = [];
   return d;
 }
+// 只看存款怎么分时：生活预算设成 0，这样心愿基金和这个月的生活费都是 0，所有的钱都在存款这边
+function savingsBook() {
+  const d = book();
+  Object.assign(d.budget, { food: 0, daily: 0, free: 0, look: 0 });
+  return d;
+}
 let id = 0;
 const ex = (date, amount, category = 'c-lunch', extra = {}) => ({ id: `t${++id}`, type: 'expense', date, account: 'a-live', amount, category, ...extra });
 const inc = (date, amount, category = 'i-salary', account = 'a-save') => ({ id: `t${++id}`, type: 'income', date, account, amount, category });
@@ -135,7 +141,7 @@ test('大额人情：还的时候不占预算，从专项出', () => {
 });
 
 test('存款的顺序：家庭 → 应急 → 医疗 → 专项（日子近的先）→ 自由；凑够一万封存', () => {
-  const d = book();
+  const d = savingsBook();
   d.accounts.find((a) => a.id === 'a-save').opening = 30000;
   d.family = { sealed: 10000, log: [] };
   d.goals = [{ id: 'far', name: '过渡金', target: 5000, by: '2030-06-01' }, { id: 'near', name: '报名费', target: 500, by: '2026-11-01' }];
@@ -156,34 +162,71 @@ test('存款的顺序：家庭 → 应急 → 医疗 → 专项（日子近的�
   assert.equal(t.free.have, 0);
 });
 
-test('暑假生活费：平时留下个暑假的；暑假里还没转出来的那几个月继续留着', () => {
+test('暑假生活费：平时留下个暑假的；暑假里按日子，到了哪个月那个月就是生活费，后面的继续留着（和转没转账无关）', () => {
   const d = book();
   d.settings.summerMonths = [7, 8];
   const before = m.summerGoal(d, '2026-10-08');
   assert.equal(before.target, 2500 * 2);
   assert.equal(before.by, '2027-06-30');
-  const july = m.summerGoal(d, '2027-07-03');
-  assert.equal(july.target, 2500 * 2); // 7 月还没转
+  assert.equal(m.summerGoal(d, '2027-07-03').target, 2500); // 7 月的已经是这个月的生活费，留 8 月的
   d.tx.push({ id: 'tr', type: 'transfer', date: '2027-07-02', account: 'a-save', to: 'a-live', amount: 2300 });
-  assert.equal(m.summerGoal(d, '2027-07-03').target, 2500);
+  assert.equal(m.summerGoal(d, '2027-07-03').target, 2500); // 转不转账都一样
+  assert.equal(m.summerGoal(d, '2027-08-03').name, '2028 年暑假生活费'); // 最后一个暑假月：开始留下一个暑假的
   assert.equal(m.summerGoal(d, '2027-09-03').name, '2028 年暑假生活费');
 });
-
-test('每月数额计算：生活费卡这边应该有 = 心愿基金 + 这个月生活费还剩的', () => {
-  const d = book();
-  d.tx = [
-    { id: 'tr1', type: 'transfer', date: '2026-08-01', account: 'a-save', to: 'a-live', amount: 2300 }, ex('2026-08-05', 2000),
-    { id: 'tr2', type: 'transfer', date: '2026-09-01', account: 'a-save', to: 'a-live', amount: 2300 }, ex('2026-09-05', 2000),
-    { id: 'tr3', type: 'transfer', date: '2026-10-01', account: 'a-save', to: 'a-live', amount: 2300 }, ex('2026-10-05', 500), ex('2026-10-06', 200, 'c-medical'),
-  ];
-  const c = m.cardCheck(d, T);
-  assert.equal(c.expected, 600 + 1800);
-  assert.equal(c.actual, 600 + 1800 - 200);
-  assert.equal(c.diff, -200); // 买药从生活费卡付的 → 从存钱卡转 200 过来
+test('和卡无关：钱在哪个账户都一样分；一共 = 所有账户（美元按汇率）+ 别人欠我 − 我欠别人', () => {
+  const d = savingsBook();
+  d.accounts.find((a) => a.id === 'a-save').opening = 5000;
+  d.accounts.find((a) => a.id === 'a-live').opening = 3000;
+  d.accounts.push({ id: 'a-usd', name: 'USD', currency: 'USD', opening: 100 });
+  const s = m.savingsMap(d, T, 7);
+  assert.equal(s.all, 5000 + 3000 + 700);
+  assert.equal(s.emergency.have, 3000);
+  assert.equal(s.medical.have, 1000);
+  assert.equal(s.free.have, 8700 - 4000);
+  // 钱挪到另一张卡：一分不变
+  d.tx.push({ id: 'mv', type: 'transfer', date: '2026-10-02', account: 'a-save', to: 'a-live', amount: 4000 });
+  assert.equal(m.savingsMap(d, T, 7).free.have, 4700);
 });
 
-test('欠别人的钱先从存款里扣掉；封存家庭存款不算别人还欠我的', () => {
+test('心愿基金和这个月生活费还剩的先留出来，剩下的才是存款', () => {
+  const d = book(); // 生活预算 2300；8、9 月没花 → 心愿基金 4600；10 月还剩 2300
+  const s = m.savingsMap(d, T, 7);
+  assert.equal(s.wish.total, 4600);
+  assert.equal(s.living, 2300);
+  assert.equal(s.bal, 10000 - 4600 - 2300);
+});
+
+test('任何收入都先补医疗备用金；一次性的钱不算收入、不进心愿基金，直接进存款', () => {
+  const d = savingsBook();
+  d.accounts.find((a) => a.id === 'a-save').opening = 6000;
+  d.categories.push({ id: 'i-lump', name: '编的补助', kind: 'income', lump: true });
+  d.tx = [ex('2026-10-02', 400, 'c-doctor'), inc('2026-10-03', 300, 'i-gift', 'a-live')];
+  assert.equal(m.wishFunds(d, T).med, 1000 - 400 + 300); // 红包进生活费那边也补
+  d.tx.push(inc('2026-10-04', 5000, 'i-lump', 'a-save'));
+  const st = m.periodStats(d, m.periodFor(d, T));
+  assert.equal(st.income, 300); // 补助不算这个月的收入
+  assert.equal(m.wishFunds(d, T).small, 0);
+  const s = m.savingsMap(d, T, 7);
+  assert.equal(s.free.have, 6000 - 400 + 300 + 5000 - 3000 - 1000);
+});
+
+test('对账和卡无关：一边多一边少只改余额；加起来少了记在 spend 上算漏记的花销；多了直接进存款', () => {
   const d = book();
+  const adj = (idx, account, amount, extra = {}) => ({ id: `a${idx}`, type: 'adjust', date: '2026-10-05', account, amount, rec: 'r1', ...extra });
+  d.tx = [adj(1, 'a-wechat', -200), adj(2, 'a-live', 200)];
+  let st = m.periodStats(d, m.periodFor(d, T));
+  assert.equal(st.living, 0);
+  d.tx = [adj(1, 'a-save', -500, { spend: 300 }), adj(2, 'a-live', 200)]; // 加起来少 300
+  st = m.periodStats(d, m.periodFor(d, T));
+  assert.equal(st.spent.daily, 300);
+  d.tx = [adj(1, 'a-save', 800)];
+  st = m.periodStats(d, m.periodFor(d, T));
+  assert.equal(st.total, 0);
+  assert.equal(st.income, 0);
+});
+test('欠别人的钱先从存款里扣掉；封存家庭存款不算别人还欠我的', () => {
+  const d = savingsBook();
   d.accounts.find((a) => a.id === 'a-save').opening = 17000;
   d.people = [{ id: 'p1', name: '甲' }, { id: 'p2', name: '乙' }];
   d.tx = [ex('2026-10-02', 2000, 'c-lunch', { account: null, person: 'p1' }), // 甲帮我付的，我欠他
@@ -198,7 +241,7 @@ test('欠别人的钱先从存款里扣掉；封存家庭存款不算别人还�
 });
 
 test('首页应急钱：封存的家庭存款先保着、欠别人的先扣掉', () => {
-  const d = book();
+  const d = savingsBook();
   d.accounts.find((a) => a.id === 'a-save').opening = 12000;
   d.family = { sealed: 10000, log: [] };
   d.people = [{ id: 'p1', name: '甲' }];
@@ -206,14 +249,6 @@ test('首页应急钱：封存的家庭存款先保着、欠别人的先扣掉',
   const floor = m.health(d, T, 7).items.find((x) => x.key === 'floor');
   assert.equal(floor.level, 'bad');
   assert.match(floor.text, /只留到 ¥0/);
-});
-
-test('暑假：只有转到生活费卡这边才算这个月的生活费转出来了', () => {
-  const d = book();
-  d.settings.summerMonths = [7, 8];
-  d.accounts.push({ id: 'a-usd', name: 'USD', currency: 'USD', opening: 0 });
-  d.tx.push({ id: 'top', type: 'transfer', date: '2027-07-02', account: 'a-save', to: 'a-usd', amount: 100, toAmount: 14 });
-  assert.equal(m.summerGoal(d, '2027-07-03').target, 2500 * 2);
 });
 
 test('用以前留好的钱花的（专项、心愿）不打断存钱达标；看病照算但首页不催', () => {
