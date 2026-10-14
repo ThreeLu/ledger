@@ -131,7 +131,7 @@ function milestoneCard() {
     h('div', { class: 'milestone-icon' }, icon('sparkle')),
     h('div', { class: 'grow' },
       fresh.map(([, x]) => h('b', { class: 'block' }, x.text)),
-      h('span', { class: 'muted small' }, '一步一步来，你做得很好。')),
+      h('span', { class: 'muted small' }, '慢慢攒，就会有。')),
     h('button', { class: 'small secondary', onclick: ok }, '好'));
 }
 
@@ -296,14 +296,25 @@ function render() {
 // ---------- 通用组件 ----------
 
 const round2 = (n) => Math.round(n * 100) / 100;
-// 精确金额：列表里每一笔用这个（最多两位小数）
-const exact = (n, cur = '¥') => `${cur}${Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+// 精确金额：真实发生的钱（每一笔、余额、花了多少）用这个。整数不写 .00，有零头就写满两位（¥1.50）
+const exact = (n, cur = '¥') => {
+  const a = Math.abs(round2(n));
+  return `${cur}${a.toLocaleString('zh-CN', { minimumFractionDigits: Number.isInteger(a) ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
+// 卡片上的大数字：和列表一样精确到分（整数不写 .00），¥ 和分缩小
+function bigMoney(n, cls = '', cur = '¥') {
+  const [yuan, fen] = Math.abs(round2(n)).toFixed(2).split('.');
+  return h('div', { class: `big-num exact${cls ? ` ${cls}` : ''}` }, n < 0 ? '−' : null, h('span', { class: 'cur' }, cur),
+    Number(yuan).toLocaleString('zh-CN'), fen !== '00' ? h('span', { class: 'fen' }, `.${fen}`) : null);
+}
 const curOf = (accId) => (isUsd(store.data, accId) ? '$' : '¥');
 const accName = (id) => account(store.data, id)?.name || '（账户已删除）';
 const catName = (id) => (id === ADJUST_CAT ? '对账差额（漏记的）' : category(store.data, id)?.name || '未分类');
 
 // 一次只出一条提示：新的换掉旧的；底部有「撤销」时放在它上面，不压住
 function toast(message, kind = 'ok') {
+  // 底部已经有「…  撤销」时，普通的「已保存」就不再叠一条了，只出错误
+  if (kind !== 'error' && document.querySelector('.toast.undo')) return;
   for (const x of document.querySelectorAll('.toast:not(.undo)')) x.remove();
   const el = h('div', { class: `toast ${kind}${document.querySelector('.toast.undo') ? ' raised' : ''}` }, message);
   document.body.append(el);
@@ -728,7 +739,7 @@ function homeHeader(p) {
     h('div', { class: 'head-actions' }, helpButton('首页怎么看', HOME_HELP)));
 }
 // 精确到分：首页「还能花」「每天约」用它（用户 2026-10-06 要的，不四舍五入到元）
-const cents = (n) => `${n < 0 ? '−' : ''}¥${Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const cents = (n) => `${n < 0 ? '−' : ''}${exact(n)}`;
 
 // 这个月还能花：左边圆环是生活预算用了多少（超了变红），右边是精确的还能花多少；下面一条是预算月过了多少天，和圆环比一比快慢
 // ok：一切正常时那句结论放在卡片最上面一行（有事要做时结论在「要做的事」里）
@@ -739,7 +750,6 @@ function spendLeftCard(hl, st, ok = null) {
   const p = hl.period;
   const part = partial(store.data, p);
   const timePct = Math.min(100, (p.dayIndex / p.days) * 100);
-  const [yuan, fen] = cents(Math.abs(hl.left)).replace('¥', '').split('.');
   return h('div', { class: 'card spend-left hero' },
     ok ? h('div', { class: `summary ${hl.overGroups?.length ? 'soft' : 'good'}` }, h('span', { class: 'summary-title' }, ok.title), h('span', { class: 'summary-text' }, ok.text)) : null,
     h('div', { class: 'hero-top' },
@@ -747,7 +757,7 @@ function spendLeftCard(hl, st, ok = null) {
         h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,
       h('div', { class: 'spend-text' },
         h('div', { class: 'muted small' }, over ? '这个月超了' : '这个月还能花'),
-        h('div', { class: `big-num exact${over ? ' warn-text' : ''}` }, h('span', { class: 'cur' }, '¥'), yuan, h('span', { class: 'fen' }, `.${fen}`)),
+        bigMoney(Math.abs(hl.left), over ? 'warn-text' : ''),
         h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天 · 每天约 ${cents(hl.perDay)}` : `剩 ${hl.daysLeft} 天`))),
     h('div', { class: 'time-bar', 'aria-label': `预算月过了 ${Math.round(timePct)}%` },
       h('div', { class: 'time-track' }, h('span', { class: 'time-fill', style: `width:${timePct.toFixed(1)}%` }), h('span', { class: 'spend-mark', style: `left:${Math.min(100, used).toFixed(1)}%` })),
@@ -1359,10 +1369,10 @@ function accountsView() {
   const assets = totalAssets(d, rate);
   return h('div', {},
     header('账户', helpButton('账户怎么用', ACC_HELP)),
-    h('div', { class: 'card spend-left' },
+    h('div', { class: 'card money-total' },
       h('div', { class: 'muted small' }, '总资产'),
-      h('div', { class: 'big-num' }, money(assets)),
-      d.accounts.some((a) => a.currency === 'USD') ? h('div', { class: 'muted small' }, `美元按 1 : ${rate.toFixed(4)} 折算`) : null),
+      bigMoney(assets),
+      d.accounts.some((a) => a.currency === 'USD') ? h('div', { class: 'muted small' }, `1 美元按 ¥${rate.toFixed(2)} 算`) : null),
     h('a', { class: 'receipt-link', href: '#/money' }, icon('wallet'), ' 钱都在哪：每一类钱有多少'),
     h('div', { class: 'group' }, d.accounts.map((a) => {
       const b = balance(d, a.id);
@@ -1383,7 +1393,7 @@ function receivablesCard() {
     rc.toMe ? cell({ href: rc.claims.some((c) => c.pending > 0) ? '#/claims' : '#/people', ic: 'arrowdown', color: 'var(--sage)', title: '别人欠你', meta: money(rc.toMe),
       sub: [rc.claims.length ? `垫付 ${rc.claims.length} 件` : null, rc.people.filter((x) => x.net > 0).length ? `${rc.people.filter((x) => x.net > 0).length} 个人` : null].filter(Boolean).join(' · ') }) : null,
     rc.iOwe ? cell({ href: '#/people', ic: 'swap', color: 'var(--danger)', title: '你欠别人', meta: money(rc.iOwe) }) : null,
-    cell({ href: '#/accounts', title: '净资产', sub: '账户 + 别人欠你的 − 你欠别人的', meta: money(assets + rc.toMe - rc.iOwe) }));
+    cell({ href: '#/accounts', title: '净资产', sub: '账户 + 别人欠你的 − 你欠别人的', meta: cents(assets + rc.toMe - rc.iOwe) }));
 }
 
 function accountView(id) {
@@ -1445,7 +1455,7 @@ function accountView(id) {
     header(a.name),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, '余额'),
-      h('div', { class: 'big-num' }, exact(b, cur)),
+      bigMoney(b, '', cur),
       a.currency === 'USD' ? h('div', { class: 'muted small' }, `≈ ${money(b * usdRate())}`) : null,
       a.note ? h('div', { class: 'muted small' }, a.note) : null),
     h('div', { class: 'actions' },
@@ -1693,7 +1703,7 @@ function claimView(id) {
     headerSub(c.name, `${c.payer ? `${c.payer}报销 · ` : ''}${md(c.createdAt)}建`, h('button', { class: 'icon-btn', 'aria-label': '改信息', onclick: rename }, icon('gear'))),
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, settled ? `${md(c.settledAt)}结清` : '还差'),
-      h('div', { class: `big-num${settled ? ' good-text' : ''}` }, settled ? '已结清 ✓' : money(Math.max(0, cs.pending))),
+      settled ? h('div', { class: 'big-num good-text' }, '已结清 ✓') : bigMoney(Math.max(0, cs.pending)),
       h('div', { class: 'muted small' }, settled ? `垫了 ${money(cs.advanced)} · 报回 ${money(cs.repaid)}${cs.writeoff > 0 ? ` · 报不回的 ${money(cs.writeoff)} 算了花销` : cs.writeoff < 0 ? ` · 多报回 ${money(-cs.writeoff)}` : ''}`
         : `垫了 ${money(cs.advanced)} · 报回 ${money(cs.repaid)}${cs.since ? ` · 已经 ${daysSince(cs.since)} 天` : ''}`)),
     h('div', { class: 'actions' },
@@ -1844,7 +1854,7 @@ function peopleView() {
   return h('div', {},
     header('人情账', h('button', { class: 'icon-btn', 'aria-label': '加一个人', onclick: () => newPerson((id) => go(`#/person/${id}`)) }, icon('plus')), helpButton('人情账怎么用', PEOPLE_HELP)),
     h('div', { class: 'card spend-left' },
-      h('div', { class: 'muted small' }, '别人一共欠你'), h('div', { class: 'big-num' }, money(list.reduce((s, x) => s + Math.max(0, x.net), 0))),
+      h('div', { class: 'muted small' }, '别人一共欠你'), bigMoney(list.reduce((s, x) => s + Math.max(0, x.net), 0)),
       rc.iOwe ? h('div', { class: 'small warn-text' }, `你欠别人 ${money(rc.iOwe)}`) : h('div', { class: 'muted small' }, '你不欠谁钱')),
     socialCard(),
     favorsCard(open.filter((f) => f.dir === 'owe'), '我欠的人情', { withName: true }),
@@ -1882,7 +1892,7 @@ function personView(id) {
     p.archived ? h('p', { class: 'muted small' }, '已经不来往了（在生活网站里归档的）。') : null,
     h('div', { class: 'card spend-left' },
       h('div', { class: 'muted small' }, ps.net > 0 ? '他欠你' : ps.net < 0 ? '你欠他' : '钱两清了'),
-      h('div', { class: `big-num${ps.net < 0 ? ' warn-text' : ''}` }, money(Math.abs(ps.net))),
+      bigMoney(Math.abs(ps.net), ps.net < 0 ? 'warn-text' : ''),
       ps.since ? h('div', { class: 'muted small' }, `最早一笔没结清的是 ${md(ps.since)}，${daysSince(ps.since)} 天前`) : null),
     h('div', { class: 'actions' },
       h('button', { onclick: () => record('repay', `${p.name}还我钱`, '钱到了哪个账户就选哪个，和当初从哪张卡付的没关系。', Math.max(0, ps.net)) }, '他还我钱'),
@@ -2046,7 +2056,7 @@ function weekHead(ws) {
     h('div', { class: 'wh-top' },
       h('div', {},
         h('div', { class: 'muted small' }, '这周生活花了'),
-        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(st.living).toLocaleString('zh-CN'))),
+        bigMoney(st.living)),
       h('span', { class: `wh-tag ${ws.pace}` }, tag)),
     plan > 0 ? h('div', { class: 'time-bar' },
       h('div', { class: 'time-track', 'aria-label': `用了这周计划的 ${Math.round(used * 100)}%` },
@@ -2074,7 +2084,7 @@ function monthHead(ms) {
     h('div', { class: 'wh-top' },
       h('div', {},
         h('div', { class: 'muted small' }, label),
-        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(big).toLocaleString('zh-CN'))),
+        bigMoney(big)),
       lb > 0 ? h('span', { class: `wh-tag ${ms.pace}` }, tag) : null),
     st.income ? h('div', { class: 'mh-stats' },
       h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
@@ -2271,7 +2281,7 @@ function yearHead(d, ys) {
     h('div', { class: 'wh-top' },
       h('div', {},
         h('div', { class: 'muted small' }, label),
-        h('div', { class: 'big-num exact' }, h('span', { class: 'cur' }, '¥'), Math.round(big).toLocaleString('zh-CN'))),
+        bigMoney(big)),
       planAll > 0 ? h('span', { class: `wh-tag ${good ? 'good' : 'warn'}` }, good ? (ongoing ? '存钱在计划里' : '存够了计划') : (ongoing ? '比计划慢一点' : '比计划少存了')) : null),
     h('div', { class: 'mh-stats' },
       h('div', {}, h('span', { class: 'muted small' }, '收入'), h('b', {}, money(st.income))),
@@ -3304,7 +3314,7 @@ function wishesView() {
     header('心愿单', h('button', { class: 'icon-btn', 'aria-label': '加一个心愿', onclick: () => wishForm() }, icon('plus')), helpButton('心愿单怎么用', wishHelp(d))),
     h('div', { class: 'card wish-fund' },
       h('div', { class: 'muted small' }, '心愿基金 · 现在能用'),
-      h('div', { class: 'big-num' }, money(f.small)),
+      bigMoney(f.small),
       bigSaving.length ? h('div', { class: 'muted small fund-split' }, `另外 ${bigSaving.map((x) => `${money(x.saved)} 攒给「${x.w.name}」`).join('、')}，不算在里面`) : null,
       fundRows.length ? h('div', { class: 'fund-rows' }, fundRows.map(([k, v]) => [h('span', {}, k), h('b', {}, sign(v))]))
         : h('div', { class: 'muted small' }, `${md(periodFor(d, t).end)}以后，这个月没花完的会进来`),
@@ -4014,7 +4024,7 @@ function moneyView(inSummary = false) {
       : headerSub('钱都在哪', '每一类钱有多少、存到哪了', helpButton('钱都在哪', MONEY_HELP)),
     h('div', { class: 'card money-total' },
       h('div', { class: 'muted small' }, '一共'),
-      h('div', { class: 'big-num' }, cents(total))),
+      bigMoney(total)),
     jarCard([{ title: '存着不动', jars: kept }]),
     jarCard([{ title: '能自由用', jars: usable }, { title: '这个月', jars: month }]));
 }
