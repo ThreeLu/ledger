@@ -236,7 +236,7 @@ export const bigFavorOf = (data, t) => {
 };
 export function txGroup(data, t) {
   if (t.type === 'adjust') return 'daily';
-  if (t.type === 'expense' && (t.special || bigFavorOf(data, t))) return 'none';
+  if (t.type === 'expense' && (t.special || t.wishFund || bigFavorOf(data, t))) return 'none';
   return category(data, t.category)?.group || 'daily';
 }
 // 生活费卡这边（存钱卡、美元账户以外的人民币账户）
@@ -249,7 +249,8 @@ export function spendOf(data, t) {
 }
 export const ADJUST_CAT = 'c-adjust'; // 对账差额在「花在哪了」里的名字
 // 用以前留好的钱花的（专项、大额人情、心愿）：判断「这个月存钱达标没有」时不算（2026-10-08 用户选的）
-export const isFromSaved = (data, t) => t.type === 'expense' && (Boolean(t.special) || Boolean(bigFavorOf(data, t)) || t.category === 'c-wish');
+// wishFund：记账时勾了「用心愿基金的钱」的（2026-10-14 用户要的，小东西不用先放进心愿单），类别照常，从心愿基金能随便用的出
+export const isFromSaved = (data, t) => t.type === 'expense' && (Boolean(t.special) || Boolean(t.wishFund) || Boolean(bigFavorOf(data, t)) || t.category === 'c-wish');
 
 export function periodStats(data, p) {
   const inP = data.tx.filter((t) => t.date >= p.start && t.date <= p.end);
@@ -445,7 +446,7 @@ export function wishFunds(data, today) {
       if (t.category === 'i-med') push(t.date, 'medBack', cny(t));
       else if (t.account && t.account === floorAcc) push(t.date, 'refill', cny(t));
     } else if (t.type === 'expense') {
-      if (t.category === 'c-wish' && t.wishKind === 'small') push(t.date, 'smallWish', cny(t));
+      if ((t.category === 'c-wish' && t.wishKind === 'small') || t.wishFund) push(t.date, 'smallWish', cny(t));
       else if (txGroup(data, t) === 'med') push(t.date, 'med', cny(t));
       else if (t.special) push(t.date, 'special', cny(t), { id: t.special, budget: Number(data.goals.find((g) => g.id === t.special)?.target) || 0 });
       else if (bigFavorOf(data, t)) push(t.date, 'special', cny(t), { id: `f:${t.favor}`, budget: Number(bigFavorOf(data, t).estimate) || 0 });

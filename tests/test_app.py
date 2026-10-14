@@ -255,13 +255,13 @@ def _(c):
     p.get_by_label("应急钱底线").fill("99999")
     p.get_by_role("button", name="保存").click()
     p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".summary.bad")).to_contain_text("先别从存钱卡里转钱出来花")
+    expect(p.locator(".todo-item.bad", has_text="应急钱")).to_contain_text("先别从存钱卡里转钱出来花")
     c.go("#/budget")
     p.get_by_label("应急钱底线").fill("8000")
     p.get_by_label("吃饭").fill("2000")
     p.get_by_role("button", name="保存").click()
     p.wait_for_function("location.hash === '#/'")
-    expect(p.locator(".summary.bad")).to_have_count(0)
+    expect(p.locator(".todo-item.bad")).to_have_count(0)
     assert c.data()["budget"]["food"] == 2000
     # 形象预算：单独一组，算进生活预算
     c.go("#/budget")
@@ -644,8 +644,9 @@ def _(c):
     expect(ear).to_contain_text("攒了 ¥100 / ¥1,200")
     expect(ear.locator(".wish-tags")).to_contain_text("正在攒")
     assert next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")["saveStart"] == TODAY
-    expect(p.locator(".big-num")).to_have_text(f"¥{fund:,}")  # 合计不变，只是分出来一份
-    expect(p.locator(".fund-split")).to_contain_text(f"能随便用 ¥{fund - 100:,} · 降噪耳机攒着 ¥100")
+    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 100:,}")  # 大字是现在能用的，攒给大额心愿的单独写
+    expect(p.locator(".fund-split")).to_contain_text("另外 ¥100 攒给「降噪耳机」")
+    expect(p.locator(".fund-rows")).to_contain_text("攒给大额心愿−¥100")
     # 一次只攒一个：键盘排队，可以不排
     kb = p.locator(".wish", has_text="机械键盘")
     kb.get_by_role("button", name="排队攒").click()
@@ -724,7 +725,7 @@ def _(c):
     book = next(w for w in c.data()["wishes"] if w["name"] == "一本闲书")
     assert (book["status"], book["boughtPrice"]) == ("bought", 60), book
     assert cart() == [(ids["降噪耳机"], None)], cart()
-    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 60:,}")
+    expect(p.locator(".big-num")).to_have_text(f"¥{fund - 160:,}")
     p.locator(".cart").get_by_role("button", name="清空").click()
     expect(p.locator(".cart")).to_have_count(0)
     assert cart() == []
@@ -740,7 +741,7 @@ def _(c):
     c.wait_saved(n + 2)
     split = sorted((x["category"], x["amount"]) for x in c.tx()[-2:])
     assert split == sorted([("c-wish", small - 60), ("c-like", 250 - (small - 60))]), split
-    expect(p.locator(".big-num")).to_have_text("¥100")
+    expect(p.locator(".big-num")).to_have_text("¥0")
     expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("攒了 ¥100 / ¥1,200")
     # 不想要了：攒的退回能随便用
     p.locator(".wish", has_text="降噪耳机").get_by_role("button", name="不想要了").click()
@@ -748,7 +749,7 @@ def _(c):
     expect(p.locator(".big-num")).to_have_text("¥100")
     expect(p.locator(".fund-split")).to_have_count(0)
     p.locator(".wish", has_text="机械键盘").get_by_role("button", name="不想要了").click()
-    expect(p.locator(".done-wishes")).to_contain_text("省下 ¥1,800")
+    expect(p.locator(".done-wishes summary")).to_have_text("实现了 2 个 · 放弃了 2 个")  # 放弃的不算省下多少钱
     # 「我们的花钱方式」里有心愿单和存款的规则
     c.go("#/rules")
     expect(p.locator(".rule", has_text="心愿单：只花省下来的钱")).to_contain_text("1/3")
@@ -1510,8 +1511,17 @@ def _(c):
     # 「还能花」在「要做的事」前面
     assert p.evaluate("() => { const t = document.querySelector('.todo'); return !t || !!(document.querySelector('.hero').compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING); }")
     if p.locator(".todo").count():
-        expect(p.locator(".todo > h3")).to_have_text("要做的事")
-        assert p.locator(".todo > .todo-part").count() <= 3 or p.locator(".todo-more").count() == 0
+        expect(p.locator(".todo h3")).to_have_text("要做的事")
+        expect(p.locator(".todo-count")).to_contain_text("件")
+        # 每个要留意 / 要处理的指标单独一行（以前只露第一个）
+        if p.locator(".todo-more").count():
+            p.locator(".todo-more").click()
+        for name in p.locator(".health-tile.warn .tile-name, .health-tile.bad .tile-name").all_inner_texts():
+            expect(p.locator(".todo-item.tap", has_text=name)).to_have_count(1)
+    # 即将扣款单独一张卡：一笔一行，美元账户最下面写够不够；健康指标里没有它了
+    expect(p.locator(".health-tile", has_text="即将扣款")).to_have_count(0)
+    expect(p.locator(".charges .charge-row").first).to_be_visible()
+    expect(p.locator(".charges .charge-foot")).to_contain_text("Apple ID余额")
     expect(p.locator(".summary-title")).to_have_count(1)
     # 健康指标两列：窄的格子是双数
     assert p.locator(".health-tile:not(.wide)").count() % 2 == 0
@@ -1519,6 +1529,52 @@ def _(c):
     assert hd["title"] == "整体还在计划里" and "日常超了 ¥540" in hd["text"], hd
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [] }))""")
     assert hd["title"].startswith("一切正常"), hd
+
+
+@step("记账时用心愿基金的钱（不占预算、从能随便用的扣，不够不让记）；订阅页写清这个月的订阅钱")
+def _(c):
+    p = c.page
+    c.add(100, kind="收入", cat="兼职", acc="存钱卡")   # 兼职三成进心愿基金，保证有钱可用
+    c.go("#/wishes")
+    have = float(p.locator(".big-num").inner_text().replace("¥", "").replace(",", ""))
+    assert have >= 30, have
+    c.go("#/add")
+    p.get_by_label("金额", exact=True).fill(str(int(have) + 50))
+    p.get_by_role("button", name="饮料奶茶", exact=True).first.click()
+    p.get_by_role("group", name="账户").get_by_role("button", name="生活费卡", exact=True).click()
+    sw = p.get_by_role("checkbox", name="用心愿基金的钱")
+    expect(p.locator(".fund-hint")).to_contain_text(f"心愿基金能用 ¥{int(have):,}")
+    sw.check()
+    expect(p.locator(".fund-hint")).to_contain_text("不够这一笔")
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    expect(p.locator(".toast")).to_contain_text("不够这一笔")
+    assert len(c.tx()) == n
+    p.get_by_label("金额", exact=True).fill("20")
+    expect(p.locator(".fund-hint")).to_contain_text(f"记好后心愿基金还能用 ¥{int(have) - 20:,}")
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    t = c.tx()[-1]
+    assert t["wishFund"] is True and t["category"] == "c-drink" and t["amount"] == 20, t
+    c.go("#/wishes")
+    expect(p.locator(".big-num")).to_have_text(f"¥{int(have) - 20:,}")
+    c.go("#/list")
+    expect(p.locator(".tx", has_text="饮料奶茶").first).to_contain_text("心愿基金")
+    # 改这一笔、去掉勾：回到普通花销
+    c.go(f"#/add?edit={t['id']}")
+    expect(p.get_by_role("checkbox", name="用心愿基金的钱")).to_be_checked()
+    p.get_by_role("checkbox", name="用心愿基金的钱").uncheck()
+    p.get_by_role("button", name="保存").click()
+    p.wait_for_timeout(500)
+    assert "wishFund" not in next(x for x in c.tx() if x["id"] == t["id"])
+    # 订阅页：这个预算月的订阅（已扣、还要扣、够不够预算），美元订阅的钱怎么走
+    c.go("#/subs")
+    card = p.locator(".sub-month")
+    expect(card).to_contain_text("这个预算月的订阅")
+    expect(card).to_contain_text("预算 ¥")
+    expect(card.locator(".sub-sum")).to_contain_text("都扣完大约")
+    expect(p.locator(".sub-flow")).to_contain_text("记一笔「转账」")
+    expect(p.locator(".sub-flow .charge-foot")).to_contain_text("Apple ID余额")
 
 
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")

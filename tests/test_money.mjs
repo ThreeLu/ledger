@@ -242,4 +242,19 @@ test('对账：生活费卡这边少了的算漏记的日常花销（先扣心�
   assert.equal(m.wishFunds(d, T).parts.saved, 100 + 2300); // 8 月只省 100，9 月一分没花
 });
 
+test('记账时勾了「用心愿基金的钱」：类别照常，不占生活预算，从能随便用里扣；大额心愿攒着的不动', () => {
+  const d = book();
+  d.tx = [ex('2026-08-05', 2000), ex('2026-09-05', 2000)]; // 省下 600
+  d.wishes = [wish('耳机', 1200, { saveStart: '2026-09-02' })];
+  const before = m.wishFunds(d, T);
+  d.tx.push(ex('2026-10-03', 80, 'c-clothes', { wishFund: true }));
+  const f = m.wishFunds(d, T);
+  assert.equal(f.small, before.small - 80);
+  assert.equal(f.env['耳机'], before.env['耳机']);
+  const st = m.periodStats(d, m.periodFor(d, '2026-10-03'));
+  assert.equal(st.living, 0);
+  assert.equal(st.fromSaved, 80);
+  assert.equal(st.spent.none, 80);
+});
+
 console.log(`\n${n} 项通过`);

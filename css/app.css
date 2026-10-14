@@ -684,3 +684,61 @@ button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: 
 @keyframes flip-in { from { transform: perspective(1400px) rotateY(-80deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { #view.flip-in { animation: none; } }
 .from-saved { margin-top: 8px; }
+
+/* 记账：用心愿基金的钱 */
+.fund-switch { display: flex; align-items: flex-start; gap: 12px; margin: 14px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; transition: background-color .15s ease, box-shadow .15s ease; }
+.fund-switch.on { background: color-mix(in srgb, var(--accent) 9%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.fund-switch input { width: 22px; height: 22px; min-height: 0; margin: 1px 0 0; accent-color: var(--accent); flex: none; }
+.fund-switch-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.fund-switch-title svg { width: 16px; height: 16px; color: var(--accent); }
+.fund-hint { display: block; margin-top: 2px; }
+
+/* 要做的事（2026-10-14 重做）：每件一行，左边小圆点图标 */
+.todo { padding: 4px 16px 8px; }
+.todo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 12px 0 4px; }
+.todo-head h3 { margin: 0; }
+.todo-count { font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 9px; }
+.todo-count.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
+.todo-item { --tone: var(--accent); display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 12px 0; border-top: 0.5px solid var(--line); text-align: left; }
+.todo-head + .todo-item { border-top: 0; }
+.todo-item.bad { --tone: var(--danger); }
+.todo-item.warn { --tone: var(--amber); }
+.todo-item.calm { --tone: var(--sage); }
+button.todo-item { min-height: 0; border-radius: 0; background: none; color: var(--text); font-weight: 400; box-shadow: none; }
+.todo-dot { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; margin-top: 1px; color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, var(--card)); }
+.todo-dot svg { width: 16px; height: 16px; }
+.todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.todo-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 15px; }
+.todo-tag { font-size: 11px; font-weight: 600; color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, var(--card)); border-radius: 6px; padding: 1px 6px; }
+.todo-text { font-size: 14px; line-height: 1.5; color: var(--muted); }
+.todo-item.bad .todo-text { color: var(--text); }
+.todo-item > .i.chev { flex: none; align-self: center; width: 14px; height: 14px; color: var(--muted); opacity: .6; }
+.todo-item .todo-part { padding: 0; border: 0; }
+.todo-item .todo-part h3 { margin: 4px 0 6px; font-size: 15px; color: var(--text); }
+.todo-item .todo-part.token-banner { font-size: 14px; line-height: 1.5; }
+.todo-item .milestone-icon { display: none; }
+.todo-item .payday-row:first-of-type, .todo-item .favor-ask:first-of-type { margin-top: 0; }
+.todo-more { display: block; margin: 2px auto 4px; }
+
+/* 即将扣款：一笔一行，左边日子 */
+.charges { padding: 4px 16px 10px; }
+.charge-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--line); }
+.todo-head + .charge-row { border-top: 0; }
+.charge-date { flex: none; width: 44px; height: 46px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; }
+.charge-date b { font-size: 18px; font-weight: 700; }
+.charge-date span { font-size: 11px; }
+.charge-name { font-weight: 600; font-size: 15px; }
+.charge-amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.charge-foot { --tone: var(--sage); display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 9px 12px; border-radius: 12px; font-size: 13px; color: var(--muted); background: color-mix(in srgb, var(--tone) 10%, var(--card)); }
+.charge-foot b { color: var(--tone); font-weight: 600; }
+.charge-foot.warn { --tone: var(--amber); }
+.charge-foot.bad { --tone: var(--danger); }
+
+/* 订阅：这个预算月的订阅钱 */
+.sub-big { margin: 2px 0 8px; font-size: 14px; }
+.sub-big b { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sub-line { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; font-size: 14px; border-top: 0.5px solid var(--line); font-variant-numeric: tabular-nums; }
+.label-sm + .sub-line { border-top: 0; }
+.sub-sum { margin: 10px 0 2px; }
+.flow-steps { margin: 4px 0 10px; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.flow-steps li { margin: 4px 0; }
