@@ -770,7 +770,15 @@ def _(c):
     expect(p.locator(".big-num")).to_have_text("¥100")
     expect(p.locator(".fund-split")).to_have_count(0)
     p.locator(".wish", has_text="机械键盘").get_by_role("button", name="不想要了").click()
-    expect(p.locator(".done-wishes summary")).to_have_text("实现了 2 个 · 放弃了 2 个")  # 放弃的不算省下多少钱
+    expect(p.locator(".done-wishes summary")).to_have_text("实现了 2 个")  # 放弃的不算省下多少钱
+    expect(p.locator(".dropped-wishes summary")).to_have_text("这个月放下的 · 2 个")
+    # 放回来：大额心愿回到单子上，要重新点「开始攒」
+    p.locator(".dropped-wishes summary").click()
+    p.locator(".dropped-wishes .manage-row", has_text="降噪耳机").get_by_role("button", name="放回来").click()
+    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("开始攒")
+    expect(p.locator(".big-num")).to_have_text("¥100")
+    assert "saveStart" not in next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")
+    expect(p.locator(".dropped-wishes summary")).to_have_text("这个月放下的 · 1 个")
     # 「我们的花钱方式」里有心愿单和存款的规则
     c.go("#/rules")
     expect(p.locator(".rule", has_text="心愿单：只花省下来的钱")).to_contain_text("1/3")

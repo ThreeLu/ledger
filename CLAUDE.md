@@ -23,6 +23,7 @@
   claims: [{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind: 'pdf'|'image', submitted }] }],
   people: [{ id, name, archived? }], favors: [{ id, person, dir: 'owe'|'owed', text, date, createdAt, status: 'open'|'done', doneAt, doneTx?, doneNote?, skip?, plan? }], reconciled: { 预算月开始日: 对账日 },
   wishes: [{ id, name, price, want: 'bit'|'nice'|'want'|'very'|'most', kind: ''|'need'|'grow'|'joy'|'feel'|'gift', reason, link, targetDate, createdAt, status: 'open'|'bought'|'dropped', boughtAt, boughtPrice, saveStart? }],
+  wishTrail: [{ id, price, saveStart, droppedAt }],
   wishAdvice: { at, summary, order: [id], items: { id: { when, need, comment } } }, wishCart: [{ id: 心愿id, price? }], categoryVersion,
   decisions: [{ id, at, item, price, verdict, choice: 'buy'|'wish'|'skip', review?: 'worth'|'meh'|'regret' }],
   taxYears: { 年: { done, refund } }, subReview: { last, notes: { 订阅id: 'keep'|'downgrade'|'stop' } }, goals: [{ id, name, target, by, note, createdAt, status?: 'done'|'cancelled', doneAt? }], family: { sealed, log: [{ date, amount }] },
@@ -38,6 +39,7 @@
   - 记账时「用心愿基金的钱」（2026-10-14）：支出（没有 AA / 别人帮付、不是专项）可以打开，tx 带 `wishFund: true`，类别照常；`txGroup` 算 `none`（不占预算）、`isFromSaved`、`wishFunds` 当小额心愿从能随便用里扣。超过能随便用的不让记。流水里标「心愿基金」。推送脚本 `group_of` 同样排除。
   - 心愿单大字是**能随便用的**（`small`，用户 2026-10-14：307 里 100 给大额心愿就显示 207），来源各行最后一行「攒给大额心愿 −env」，加起来等于大字；「更多」和钱都在哪的心愿基金也显示能用的。`cardCheck` 仍用 total（卡里实际的钱）。放弃的心愿不再算「省下多少」（用户说有时只是选择而已）。
   - **能随便用的上限 `WISH_CAP` 1 万**（2026-10-14 用户定）：满了再进来的（结余、兼职、大额心愿退回的）不进心愿基金，算存款（`parts.toFree`，钱留在生活费卡上，对账页数额计算会让转回存钱卡、进自由存款）；给大额心愿的 1/3 照常。从开始记账就按这个算。
+  - 放弃的心愿（2026-10-15 用户定的）：只留到这个预算月结束。心愿单最下面「这个月放下的 · N 个」（折起来）每个有「放回来」；新的预算月打开网站时 `checkDrops` 把之前放弃的整个删掉（`expiredDrops` / `forgetDrops`），不留记录，年总结、月度小信也不再提放弃。大额心愿攒过钱的，删掉或放回来前把攒钱经过（不带名字）记进 `wishTrail`，`wishFunds` 照样算它，心愿基金的数才不变；放回来（`restoreWish`）的大额心愿去掉 `saveStart`，要重新点「开始攒」。「实现了 N 个」是开始记账以来的总数，点开列出买了什么。
   - 小额心愿用能随便用买，超出的记 `c-like`（自由钱）。买了记 `c-wish`（不占预算）。冷静 `coolDays` 天。分类 `kind`（选填，`WISH_KIND`）：生活必需品、提升自己、提升幸福感、情怀、送人（送人时日期框改成「哪天前送出去」），卡片上显示，也发给 AI。想要程度 5 档（`WANT`，从低到高：有点想、有了更好、想要、很想要、非常想要；老数据只有 very / nice，键名没变）。排序（`WISH_SORTS`：默认、冷静期、价格（再点一下高低切换）、想要程度、加入时间、AI 建议）只改显示，存 localStorage `ledger-wish-sort`。
   - 存款（`savingsMap`）：存钱卡余额 + 别人欠我的（垫付先当作还在）− 我欠别人的，按顺序分：家庭存款（已封存的）→ 应急底线 → 医疗备用金 → 专项（按日子，近的先，同一天先加的先）→ 自由存款；钱不够时反过来，所以缺口总落在自由存款、最远的专项上。专项 `sealed` = 留够了（封存）；`short` = 按 预计收入 − 预算 每月能存的，到那天会差多少（琥珀色提醒）。
   - 医疗备用金：`settings.medTarget`（1000）。看病、买药是「医疗」组（`med`，`CATEGORY_VERSION` 4），不占生活预算；水位 `wishFunds().med`：花了往下降（超了按超支扣），存钱卡的收入和「医保报销」（`i-med`）补回去。低于 300 首页「要做的事」提一句（`medLowCard`）；记满一年后看病买药超过目标，钱都在哪里建议调高。

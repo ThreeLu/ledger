@@ -90,6 +90,40 @@ test('不想要了：攒的全部退回能随便用，下一个开始', () => {
   assert.equal(f.small, 500);
 });
 
+test('上个预算月放下的心愿删掉；攒过钱的删掉后心愿基金的数不变', () => {
+  const d = book();
+  d.tx = [ex('2026-08-05', 2000), ex('2026-09-05', 2000)];
+  d.wishes = [wish('耳机', 1200, { saveStart: '2026-08-02', status: 'dropped', droppedAt: '2026-09-02' }), wish('键盘', 600, { saveStart: '2026-08-03' }),
+    wish('杯子', 30, { status: 'dropped', droppedAt: T })];
+  const before = m.wishFunds(d, T);
+  const old = m.expiredDrops(d, T).map((w) => w.id);
+  assert.deepEqual(old, ['耳机']); // 这个预算月放下的杯子还留着
+  m.forgetDrops(d, old, T);
+  assert.deepEqual(d.wishes.map((w) => w.id), ['键盘', '杯子']);
+  assert.equal(d.wishTrail.length, 1);
+  assert.equal(d.wishTrail[0].name, undefined);
+  const after = m.wishFunds(d, T);
+  assert.equal(after.small, before.small);
+  assert.equal(after.env['键盘'], before.env['键盘']);
+  assert.equal(after.total, before.total);
+});
+
+test('放回来：回到心愿单；大额的重新从只在单子上开始，心愿基金的数不变', () => {
+  const d = book();
+  d.tx = [ex('2026-08-05', 2000), ex('2026-09-05', 2000)];
+  d.wishes = [wish('耳机', 1200, { saveStart: '2026-08-02', status: 'dropped', droppedAt: '2026-10-02' }), wish('键盘', 600, { saveStart: '2026-08-03' })];
+  const before = m.wishFunds(d, T);
+  m.restoreWish(d, '耳机', T);
+  const w = d.wishes.find((x) => x.id === '耳机');
+  assert.equal(w.status, 'open');
+  assert.equal(w.saveStart, undefined);
+  assert.equal(w.droppedAt, undefined);
+  const after = m.wishFunds(d, T);
+  assert.equal(after.small, before.small);
+  assert.equal(after.total, before.total);
+  assert.equal(after.env['耳机'], undefined);
+});
+
 test('超支先扣能随便用，只扣到 100；攒着的不扣；扣不动的由存款补', () => {
   const d = book();
   d.tx = [ex('2026-08-05', 1700), ex('2026-09-05', 2900)]; // 8 月省 600，9 月超 600

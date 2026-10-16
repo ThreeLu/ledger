@@ -4,7 +4,7 @@ import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
-  isBigWish, wishFunds, bigWishPlan, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
+  isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
 } from './money.js';
@@ -97,7 +97,7 @@ async function refresh() {
   }
   if (!hadData || loadError || store.missing) render();
   else if (store.head !== before && !EDITING_ROUTES.test(currentPath())) render();
-  if (!loadError && store.data) { postRecurring(); checkMilestones(); checkFamily(); }
+  if (!loadError && store.data) { postRecurring(); checkMilestones(); checkFamily(); checkDrops(); }
 }
 
 // 自由存款超过 2000 的部分凑够一万，就封存进家庭存款（放着不动）
@@ -109,6 +109,14 @@ function checkFamily() {
     data.family.sealed = (Number(data.family.sealed) || 0) + amt;
     (data.family.log ||= []).push({ date: today(), amount: amt });
   }).then(() => { toast(`自由存款攒够了，家庭存款封存了 ${money(amt)}`); if (!EDITING_ROUTES.test(currentPath())) render(); }).catch(() => {});
+}
+
+// 放弃的心愿只留到这个预算月结束，之前的删掉（不留记录）
+function checkDrops() {
+  const ids = expiredDrops(store.data, today()).map((w) => w.id);
+  if (!ids.length) return;
+  save(`心愿单：清掉上个月放下的 ${ids.length} 个`, (data) => forgetDrops(data, ids, today()))
+    .then(() => { if (!EDITING_ROUTES.test(currentPath())) render(); }).catch(() => {});
 }
 
 // 新达到的里程碑记下来（日期），首页祝贺 7 天
@@ -2105,7 +2113,7 @@ const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。最上面是这周生活花了多少：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月总结', ['按预算月算（和发钱对齐）。', '最上面是这个月存下多少（暑假没收入时是花了多少），进度条是生活预算用了多少；这个月还没过完时，竖线是按日子到今天该花到哪。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
   ['月度小信', ['每个预算月结束后，打开那个月的总结，AI 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
-  ['年总结', ['按自然年。最上面是这一年存下多少，下面是收入、花了、储蓄率；进度条是存下了计划的多少（计划 = 每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」），这一年还没过完时，竖线是按日子到今天该存到哪。', '下面还有每月存下多少、钱花在哪、实现和放弃了几个心愿。每年 1 月初首页会提醒你看去年的。']],
+  ['年总结', ['按自然年。最上面是这一年存下多少，下面是收入、花了、储蓄率；进度条是存下了计划的多少（计划 = 每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」），这一年还没过完时，竖线是按日子到今天该存到哪。', '下面还有每月存下多少、钱花在哪、实现了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
   ['钱都在哪', ['右上角点「钱都在哪」，整页翻过来，看每一类钱有多少、存到哪了；再点「总结」翻回来。']],
 ];
@@ -2205,7 +2213,7 @@ async function writeLetter(p) {
     `各块花销 / 预算：${GROUPS.filter((g) => d.budget[g.id] || st.spent[g.id]).map((g) => `${g.name} ${Math.round(st.spent[g.id])} / ${Math.round((d.budget[g.id] || 0) * part.factor)}`).join('；')}。`,
     `花得最多的类别：${Object.entries(st.byCat).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, v]) => `${catName(id)} ${Math.round(v)}`).join('、') || '无'}。`,
     prev ? `上个预算月：收入 ${Math.round(prev.income)}，花销 ${Math.round(prev.total)}，存下 ${Math.round(prev.income - prev.total)}。` : '这是第一个记账的月份，没有上个月可以比。',
-    `这个月实现的心愿：${d.wishes.filter((w) => w.status === 'bought' && inP(w.boughtAt)).map((w) => w.name).join('、') || '无'}；放弃的心愿：${d.wishes.filter((w) => w.status === 'dropped' && inP(w.droppedAt)).map((w) => w.name).join('、') || '无'}。`,
+    `这个月实现的心愿：${d.wishes.filter((w) => w.status === 'bought' && inP(w.boughtAt)).map((w) => w.name).join('、') || '无'}。`,
     `这个月的里程碑：${Object.values(d.milestones?.reached || {}).filter((x) => inP(x.at)).map((x) => x.text).join('、') || '无'}。`,
     `网站按规则给的建议：${monthSummary(d, p.end, usdRate()).advice}`,
   ].join('\n');
@@ -2321,7 +2329,6 @@ function yearView(d, year, head, seg, navRow) {
     h('div', { class: 'card' }, h('h3', {}, '这一年还有'),
       h('div', { class: 'tax-grid' },
         h('span', {}, '实现的心愿'), h('b', {}, ys.wishesBought.length ? `${ys.wishesBought.length} 个` : '—'),
-        h('span', {}, '放弃的心愿'), h('b', {}, ys.wishesDropped.length ? `${ys.wishesDropped.length} 个` : '—'),
         h('span', {}, '订阅一共'), h('b', {}, money(ys.subs)),
         h('span', {}, '个税退回'), h('b', {}, ys.taxRefund ? money(ys.taxRefund) : '—'),
         ys.lump ? [h('span', {}, '一次性的钱'), h('b', {}, `${money(ys.lump)}（直接进存款）`)] : null),
@@ -2913,6 +2920,8 @@ function wishHelp(d) {
     ['大额心愿', ['放进来时只在单子上，不攒钱。确定真的要买了，点「开始攒」，从「能随便用」里拿 ¥100 放进去，之后每次进账分 1/3 给它。',
       `「能随便用」不到 ${money(WISH_SEED)} 时不能开始。一次只攒一个：正在攒一个时再点别的，它排队，轮到它时再拿那 ¥100。`,
       '攒够了才能买，没攒够不买，存款不动。实际比攒的便宜，多的退回「能随便用」。', '不想要了，攒的钱全部退回「能随便用」。']],
+    ['放下的心愿', ['点「不想要了」的心愿放在最下面「这个月放下的」，这个预算月里点「放回来」就回到心愿单。', '到了下个预算月就清掉，不留记录。', '大额心愿放回来，要重新点「开始攒」。']],
+    ['实现了的', ['买了的心愿都记着，最下面「实现了 N 个」点开能看到买了什么、哪天、多少钱。']],
     ['预下单', ['点「挑几个算一算」，在心愿上打勾，看看一起买要多少钱、心愿基金还剩多少。选好的会存下来，手机电脑都能看到。',
       '价格可以改成实际要付的（比如有优惠），只用来算账，不改心愿本身。',
       '小额的从「能随便用」出，超出的算进这个月的自由钱；大额的只有攒够了才能买。',
@@ -3184,7 +3193,8 @@ function wishesView() {
   const open = d.wishes.filter((w) => w.status === 'open');
   const small = open.filter((w) => !isBigWish(d, w));
   const big = open.filter((w) => isBigWish(d, w));
-  const done = d.wishes.filter((w) => w.status !== 'open').reverse();
+  const bought = d.wishes.filter((w) => w.status === 'bought').reverse();
+  const dropped = d.wishes.filter((w) => w.status === 'dropped').reverse();
   const upd = (message, fn) => save(message, fn).then(render).catch(() => {});
 
   // 预下单：选了哪些、改过的价格（存在 data.wishCart）
@@ -3235,7 +3245,7 @@ function wishesView() {
   const drop = (w) => {
     const back = f.env[w.id] || 0;
     saveUndoable(`放弃心愿：${w.name}`, (data) => { Object.assign(data.wishes.find((x) => x.id === w.id), { status: 'dropped', droppedAt: today() }); data.wishCart = data.wishCart.filter((c) => c.id !== w.id); },
-      back ? `「${w.name}」不要了，攒的 ${money(back)} 退回心愿基金` : `「${w.name}」挪到放弃的心愿`).then(render).catch(() => {});
+      back ? `「${w.name}」不要了，攒的 ${money(back)} 退回心愿基金` : `「${w.name}」放下了，这个月里还能放回来`).then(render).catch(() => {});
   };
 
   let sort = { by: 'order', desc: false, ...readJson(WISH_SORT_KEY) };
@@ -3329,10 +3339,14 @@ function wishesView() {
     big.length ? [h('div', { class: 'section-title' }, `大额心愿（每次进账分 1/3，一次攒一个）`),
       sorted(big).map((w) => card(w))] : null,
     !open.length ? h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有心愿。想买但不急的东西，点右上角 ＋ 放进来。')) : null,
-    done.length ? h('details', { class: 'card done-wishes' }, h('summary', {}, `实现了 ${done.filter((w) => w.status === 'bought').length} 个 · 放弃了 ${done.filter((w) => w.status === 'dropped').length} 个`),
-      done.map((w) => h('div', { class: 'manage-row' },
-        h('span', { class: 'grow' }, w.name, h('span', { class: 'muted small block' }, w.status === 'bought' ? `${md(w.boughtAt)}买的 · ${money(w.boughtPrice)}` : `${md(w.droppedAt || w.createdAt)}放弃`)),
-        w.status === 'dropped' ? h('button', { class: 'link', onclick: () => upd(`重新想要：${w.name}`, (data) => { const x = data.wishes.find((y) => y.id === w.id); x.status = 'open'; delete x.droppedAt; }) }, '又想要了') : null))) : null,
+    dropped.length ? h('details', { class: 'card dropped-wishes' }, h('summary', {}, `这个月放下的 · ${dropped.length} 个`),
+      h('p', { class: 'muted small' }, `${md(periodFor(d, t).end)}以后就清掉了，在那之前还能放回来。`),
+      dropped.map((w) => h('div', { class: 'manage-row' },
+        h('span', { class: 'grow' }, w.name, h('span', { class: 'muted small block' }, `${md(w.droppedAt || w.createdAt)}放下 · ${money(w.price)}`)),
+        h('button', { class: 'link', onclick: () => upd(`放回来：${w.name}`, (data) => restoreWish(data, w.id, t)) }, '放回来')))) : null,
+    bought.length ? h('details', { class: 'card done-wishes' }, h('summary', {}, `实现了 ${bought.length} 个`),
+      bought.map((w) => h('div', { class: 'manage-row' },
+        h('span', { class: 'grow' }, w.name, h('span', { class: 'muted small block' }, `${md(w.boughtAt)}买的 · ${money(w.boughtPrice)}`))))) : null,
     wishPicking ? h('div', { class: 'actions sticky cart-bar' },
       h('div', { class: 'grow' }, h('b', {}, cart.length ? `选了 ${cart.length} 个 · 共 ${money(calc.total)}` : '还没选'),
         cart.length ? h('div', { class: `small ${calc.over > 0 ? 'soon' : 'muted'}` }, calc.small.length ? (calc.over > 0 ? `心愿基金不够，超出 ${money(calc.over)}` : `买完心愿基金剩 ${money(calc.fundAfter)}`) : '都是大额心愿，用各自攒的钱') : null),

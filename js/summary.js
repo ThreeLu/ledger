@@ -182,7 +182,6 @@ export function yearSummary(data, year, rate = data.settings.usdRate) {
     cats: Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8),
     days: days.size, span,
     wishesBought: data.wishes.filter((w) => w.status === 'bought' && inYear(w.boughtAt)),
-    wishesDropped: data.wishes.filter((w) => w.status === 'dropped' && inYear(w.droppedAt)),
     lump: st.lump, // 一次性的钱，年总结里单独写一行
     taxRefund: data.tx.filter((t) => t.category === 'i-tax' && inYear(t.date)).reduce((a, t) => a + cny(t), 0),
     subs,

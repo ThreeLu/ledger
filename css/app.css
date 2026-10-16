@@ -391,7 +391,7 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .wish-actions { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
 .wish-actions .link { min-height: 34px; }
 .ai-summary { margin: 0 0 10px; line-height: 1.65; }
-.done-wishes summary { font-size: 15px; }
+.done-wishes summary, .dropped-wishes summary { font-size: 15px; }
 /* 心愿基金：大数字 + 从哪来的几行 */
 .wish-fund { text-align: center; }
 .fund-rows { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 10px auto 12px; max-width: 260px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); text-align: left; }

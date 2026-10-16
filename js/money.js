@@ -146,6 +146,7 @@ export function migrate(data) {
   // 心愿单
   data.wishCart ||= []; // 预下单：[{ id: 心愿 id, price?: 改过的价格（只用来算账，买了按它记） }]
   data.wishes ||= []; // { id, name, price, want: bit|nice|want|very|most, kind: ""|need|grow|joy|feel|gift, reason, link, createdAt, status: 'open'|'bought'|'dropped', targetDate, boughtAt, boughtPrice }
+  data.wishTrail ||= []; // 删掉 / 放回来的大额心愿当初攒钱的经过：[{ id, price, saveStart, droppedAt }]，没有名字，只让心愿基金的数不变
   data.settings.wishBigFrom ??= 300; // 多少钱以上算大额心愿
   data.settings.coolDays ??= 3; // 新心愿冷静几天
   return data;
@@ -463,7 +464,9 @@ export function wishFunds(data, today) {
       else if (bigFavorOf(data, t)) push(t.date, 'special', cny(t), { id: `f:${t.favor}`, budget: Number(bigFavorOf(data, t).estimate) || 0 });
     } else if (t.type === 'writeoff') push(t.date, 'cover', cny(t));
   }
-  const bigs = data.wishes.filter((w) => isBigWish(data, w) && w.saveStart);
+  const trail = (data.wishTrail || []).map((x) => ({ ...x, status: 'dropped' }));
+  const all = [...data.wishes, ...trail];
+  const bigs = all.filter((w) => isBigWish(data, w) && w.saveStart);
   for (const w of bigs) {
     push(w.saveStart, 'queue', 0, { w });
     if (w.status === 'bought' && w.boughtAt) push(w.boughtAt, 'buyBig', Number(w.boughtPrice) || 0, { w });
@@ -489,7 +492,7 @@ export function wishFunds(data, today) {
     parts.toFree = r2(parts.toFree - (x - keep));
   };
   const log = [];
-  const price = (id) => Number(data.wishes.find((w) => w.id === id)?.price) || 0;
+  const price = (id) => Number(all.find((w) => w.id === id)?.price) || 0;
   const active = () => queue.find((id) => started[id] && env[id] < price(id));
   const tryStart = (date) => {
     if (active()) return;
@@ -546,6 +549,31 @@ export function wishFunds(data, today) {
   const envTotal = r2(Object.values(env).reduce((a, b) => a + b, 0));
   return { small: r2(small), env, saved: env, envTotal, total: r2(small + envTotal), saving, waiting, started, log, parts, med: r2(med), spill,
     fromJobs: parts.jobs };
+}
+
+// 放弃的心愿只留到这个预算月结束（2026-10-15 用户定的）：之前预算月放弃的，打开网站时删掉，不留记录。
+export const expiredDrops = (data, today) => {
+  const from = periodFor(data, today).start;
+  return data.wishes.filter((w) => w.status === 'dropped' && (w.droppedAt || w.createdAt || '') < from);
+};
+// 大额心愿攒过钱的，删掉 / 放回来之前把那段攒钱的经过记进 wishTrail（不带名字），心愿基金算出来的数才不会变
+const keepTrail = (data, w, today) => {
+  if (!w.saveStart || w.status !== 'dropped') return;
+  (data.wishTrail ||= []).push({ id: `${w.id}~${w.droppedAt || today}`, price: w.price, saveStart: w.saveStart, droppedAt: w.droppedAt || today });
+};
+export function forgetDrops(data, ids, today) {
+  for (const w of data.wishes.filter((x) => ids.includes(x.id))) keepTrail(data, w, today);
+  data.wishes = data.wishes.filter((w) => !ids.includes(w.id));
+  data.wishCart = (data.wishCart || []).filter((c) => !ids.includes(c.id));
+}
+// 放回来：回到心愿单；大额的攒的钱当初已经退回了，放回来从「只在单子上」重新开始
+export function restoreWish(data, id, today) {
+  const w = data.wishes.find((x) => x.id === id);
+  if (!w || w.status !== 'dropped') return;
+  keepTrail(data, w, today);
+  w.status = 'open';
+  delete w.droppedAt;
+  delete w.saveStart;
 }
 
 // 还没买的大额心愿现在的状态：idle 只在单子上 / waiting 排队 / saving 正在攒 / ready 攒够了
