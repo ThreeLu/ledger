@@ -640,16 +640,19 @@ def _(c):
     d = c.data()
     d["openingDate"] = prev.isoformat()
     d["tx"].append({"id": "lastpay", "type": "income", "date": prev.isoformat(), "account": "a-save", "amount": 8000, "category": "i-salary", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
-    d["tx"].append({"id": "lastmonth", "type": "expense", "date": prev.isoformat(), "account": "a-live", "amount": 2400, "category": "c-lunch", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
+    # 预算月头 7 天对的账，差额记在上个预算月最后一天（少了的算漏记的花销）；午饭少记这么多，上个月一共还是花 2400
+    leak = sum(t.get("spend", 0) for t in d["tx"] if prev.isoformat() <= t["date"] < cur.isoformat() and t["type"] == "adjust")
+    d["tx"].append({"id": "lastmonth", "type": "expense", "date": prev.isoformat(), "account": "a-live", "amount": 2400 - leak, "category": "c-lunch", "note": "上个月", "createdAt": "2020-01-01T00:00:00Z"})
     for w in d["wishes"]:
         if w["name"] == "降噪耳机":
             w["createdAt"] = prev.isoformat()
     living_before = sum(t["amount"] for t in d["tx"] if prev.isoformat() <= t["date"] < cur.isoformat() and t["type"] == "expense"
                         and t["category"] not in ("c-ai", "c-soft", "c-member", "c-fee", "c-trip", "c-wish"))
+    living_before += leak
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
     p.reload()
-    base = 3000 - living_before
+    base = round(3000 - living_before)
     writeoff = sum(t["amount"] for t in d["tx"] if t["type"] == "writeoff")
     fund = base - min(writeoff, max(0, base - 100))
     assert fund >= 260 and writeoff, (base, writeoff)
@@ -1142,7 +1145,7 @@ def _(c):
     p = c.page
     # 上次的价格（「比平时贵」要有 3 次以上的记录）
     d = c.data()
-    d["tx"].append({"id": "lunch3", "type": "expense", "date": (date.today() - timedelta(days=1)).isoformat(), "account": "a-campus", "amount": 15, "category": "c-lunch", "note": "食堂午饭", "createdAt": "2020-01-01T00:00:00Z"})
+    d["tx"].append({"id": "lunch3", "type": "expense", "date": max(date.today() - timedelta(days=1), period_start(date.today())).isoformat(), "account": "a-campus", "amount": 15, "category": "c-lunch", "note": "食堂午饭", "createdAt": "2020-01-01T00:00:00Z"})
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.go("#/list")
     p.reload()
@@ -1612,7 +1615,7 @@ def _(c):
     c.go("#/wishes")
     expect(p.locator(".big-num")).to_have_text(f"¥{int(have) - 20:,}")
     c.go("#/list")
-    expect(p.locator(".tx", has_text="饮料奶茶").first).to_contain_text("心愿基金")
+    expect(p.locator(f'.tx[href="#/add?edit={t['id']}"]')).to_contain_text("心愿基金")  # 按 id 找：网页时钟被前面固定过，同一天的先后不可靠
     # 改这一笔、去掉勾：回到普通花销
     c.go(f"#/add?edit={t['id']}")
     expect(p.get_by_role("checkbox", name="用心愿基金的钱")).to_be_checked()
