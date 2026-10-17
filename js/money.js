@@ -41,11 +41,11 @@ export const EXPENSE_CATEGORIES = [
   C('c-skin', '护肤', 'look'), C('c-makeup', '化妆', 'look'), C('c-scent', '香水和打理', 'look'),
   C('c-fun', '娱乐', 'free'), C('c-hobby', '爱好', 'free'), C('c-like', '喜欢的小东西', 'free'),
   C('c-ai', 'AI 订阅', 'sub'), C('c-soft', '软件订阅', 'sub'), C('c-member', '会员', 'sub'),
-  C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'), C('c-wish', '心愿', 'none'),
+  C('c-special', '专项', 'none'), C('c-fee', '手续费', 'none'), C('c-trip', '出差自付', 'none'), C('c-wish', '心愿', 'none'),
 ];
 // 老版本的类别：以前记的账还显示原来的名字，但记新账时不再出现
 const RETIRED = { 'c-meal': '三餐', 'c-daily': '日用品', 'c-transport': '交通', 'c-study': '学习' };
-export const CATEGORY_VERSION = 4; // 3：加了「形象」组（护肤、化妆、香水和打理）；4：看病、买药单独成「医疗」组（从医疗备用金出）
+export const CATEGORY_VERSION = 5; // 3：加了「形象」组（护肤、化妆、香水和打理）；4：看病、买药单独成「医疗」组（从医疗备用金出）；5：加「专项」（学费、住宿费这类从专项里交的钱）
 
 // 第一次使用时的默认账本。这里的代码是公开的，所以只放通用的东西；
 // 具体的账户名、收入、固定扣费、规则说明都写在私有仓库的 finance.json 里，在网页上改。

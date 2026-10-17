@@ -1066,7 +1066,7 @@ function addView(q) {
     return [h('div', { class: 'label-sm' }, '算在哪个专项里（选填，不占这个月的预算）'),
       h('div', { class: 'chips special-chips', role: 'group', 'aria-label': '算在哪个专项里' }, list.map((g) => h('button', {
         type: 'button', class: `chip${st.special === g.id ? ' on' : ''}`, 'aria-pressed': String(st.special === g.id),
-        onclick: () => { st.special = st.special === g.id ? '' : g.id; if (st.special) st.wishFund = false; draw(); },
+        onclick: () => { st.special = st.special === g.id ? '' : g.id; if (st.special) { st.wishFund = false; if (!st.category) st.category = 'c-special'; } draw(); },
       }, g.name)))];
   };
   // 用心愿基金的钱（2026-10-14 用户要的）：小东西不用先放进心愿单再买，记账时勾上就从心愿基金能随便用的出，不占这个月预算
@@ -1208,6 +1208,7 @@ function addView(q) {
     if (st.type === 'expense' && st.split === 'paidby' && !st.person) return toast('选一下是谁帮你付的', 'error');
     if ((st.type === 'expense' || st.type === 'income') && !st.category) return toast(st.type === 'income' ? '选一下收入来源' : '选一下类别', 'error');
     if (st.type === 'expense' && FREEFORM.includes(st.category) && !st.what.trim()) return toast('写一下具体是什么', 'error');
+    if (st.type === 'expense' && st.category === 'c-special' && !st.special) return toast('选一下是哪个专项', 'error');
     if (st.type === 'transfer' && !st.to) return toast('选一下转到哪个账户', 'error');
     const useFund = st.type === 'expense' && st.wishFund && st.split === 'none';
     if (useFund && amountCny() > wishFundLeft() + 0.001) return toast(`心愿基金能用的只有 ${money(wishFundLeft())}，不够这一笔`, 'error');

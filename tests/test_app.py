@@ -1637,7 +1637,7 @@ def _(c):
 def _(c):
     p = c.page
     d = c.data()
-    d["goals"].append({"id": "g-fee", "name": "2099 年编的费用", "target": 800, "by": "2099-10-20", "category": "c-print", "createdAt": TODAY})
+    d["goals"].append({"id": "g-fee", "name": "2099 年编的费用", "target": 800, "by": "2099-10-20", "category": "c-special", "createdAt": TODAY})
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     p.reload()
     c.go("#/goals")
@@ -1646,11 +1646,12 @@ def _(c):
     expect(p.locator(".special-chips .chip.on")).to_contain_text("编的费用")
     assert next(g for g in c.data()["goals"] if g["id"] == "g-fee").get("status") is None  # 还没记，不算办完
     n = len(c.tx())
+    expect(p.get_by_role("button", name="专项", exact=True)).to_have_class(re.compile("on"))  # 类别里有「专项」，办完了带过来
     p.get_by_role("button", name="记好了").click()
     c.wait_saved(n + 1)
     assert next(g for g in c.data()["goals"] if g["id"] == "g-fee").get("status") == "done"  # 花够了自己办完
     t = c.tx()[-1]
-    assert t["special"] == "g-fee" and t["amount"] == 800 and t["category"] == "c-print", t
+    assert t["special"] == "g-fee" and t["amount"] == 800 and t["category"] == "c-special", t
 
 
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")
