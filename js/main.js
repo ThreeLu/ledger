@@ -1269,7 +1269,10 @@ function addView(q) {
             data.quick.push({ id: newId('q'), name: rec.note || rec.what || catName(rec.category), amount: n, category: rec.category, account: rec.account, ...(rec.what ? { what: rec.what } : {}) });
           }
         }
+        // 这笔把专项花够了：专项自己办完
+        if (rec.special) for (const id of goalsPaid(data, today())) Object.assign(data.goals.find((g) => g.id === id), { status: 'done', doneAt: today() });
       });
+      if (rec.special) checkYearly(); // 办完的每年的专项，下一年的马上出来
       if (!editing) writeJson(LAST_KEY, { account: st.type === 'transfer' || paidBy ? last.account : st.account });
       const jobShare = !editing && st.type === 'income' && st.category === 'i-job' && d.settings.sideIncomeSave != null ? round2(n * (1 - d.settings.sideIncomeSave)) : 0;
       toast(editing ? '已保存' : `已记：${title} ${exact(n, curOf(st.account))}${st.type === 'income' && category(d, st.category)?.lump ? '，不算这个月的收入，直接进存款' : ''}${paidBy ? `（${personName(st.person) || '他'}代付）` : ''}${useFund ? '，从心愿基金出' : ''}${jobShare ? `，其中 ${money(jobShare)} 进了心愿基金` : ''}`);

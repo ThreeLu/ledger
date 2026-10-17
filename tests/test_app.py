@@ -918,23 +918,6 @@ def _(c):
     expect(p.locator(".health-tile", has_text="订阅体检")).to_have_count(0)
 
 
-@step("专项「办完了」：跳到记账，专项、金额、账户、类别先填好，点记好了才扣；花够了自己办完")
-def _(c):
-    p = c.page
-    d = c.data()
-    d["goals"].append({"id": "g-fee", "name": "2099 年编的费用", "target": 800, "by": "2099-10-20", "category": "c-print", "createdAt": TODAY})
-    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
-    c.go("#/goals")
-    p.locator(".card.goal", has_text="编的费用").get_by_role("button", name="办完了").click()
-    expect(p.get_by_label("金额", exact=True)).to_have_value("800")
-    expect(p.locator(".special-chips .chip.on")).to_have_text("编的费用")
-    assert next(g for g in c.data()["goals"] if g["id"] == "g-fee").get("status") is None  # 还没记，不算办完
-    p.get_by_role("button", name="记好了").click()
-    c.wait(lambda d: next(g for g in d["goals"] if g["id"] == "g-fee").get("status") == "done", "花够了自己办完")
-    t = c.tx()[-1]
-    assert t["special"] == "g-fee" and t["amount"] == 800 and t["category"] == "c-print", t
-
-
 @step("专项存款：按日子排、每月要留多少、记账选专项不占预算、办完了结余回自由存款；钱都在哪")
 def _(c):
     p = c.page
@@ -970,11 +953,11 @@ def _(c):
     t = c.tx()[-1]
     assert t["special"] == next(x for x in c.data()["goals"] if x["name"] == "考研报名")["id"], t
     c.go("#/goals")
-    exam = p.locator(".card.goal", has_text="考研报名")
-    expect(exam).to_contain_text("已经花了 ¥320 / ¥300")
-    exam.get_by_role("button", name="办完了").click()
-    expect(p.locator(".toast")).to_contain_text("超了 ¥20，先从心愿基金扣")
-    expect(p.locator(".done-wishes")).to_contain_text("考研报名")
+    # 花够了（超了 ¥20）专项自己办完，不用再点；超的部分先从心愿基金扣
+    expect(p.locator(".card.goal", has_text="考研报名")).to_have_count(0)
+    p.locator(".done-wishes summary").click()
+    expect(p.locator(".done-wishes")).to_contain_text("考研报名 ")
+    expect(p.locator(".done-wishes")).to_contain_text("花了 ¥320 / ¥300")
     assert next(x for x in c.data()["goals"] if x["name"] == "考研报名")["status"] == "done"
     # 钱都在哪：圆圈和数额计算
     c.go("#/money")
@@ -1648,6 +1631,26 @@ def _(c):
     expect(card.locator(".sub-sum")).to_contain_text("都扣完大约")
     expect(p.locator(".sub-flow")).to_contain_text("记一笔「转账」")
     expect(p.locator(".sub-flow .charge-foot")).to_contain_text("Apple ID余额")
+
+
+@step("专项「办完了」：跳到记账，专项、金额、账户、类别先填好，点记好了才扣；花够了自己办完")
+def _(c):
+    p = c.page
+    d = c.data()
+    d["goals"].append({"id": "g-fee", "name": "2099 年编的费用", "target": 800, "by": "2099-10-20", "category": "c-print", "createdAt": TODAY})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
+    c.go("#/goals")
+    p.locator(".card.goal", has_text="编的费用").get_by_role("button", name="办完了").click()
+    expect(p.get_by_label("金额", exact=True)).to_have_value("800")
+    expect(p.locator(".special-chips .chip.on")).to_contain_text("编的费用")
+    assert next(g for g in c.data()["goals"] if g["id"] == "g-fee").get("status") is None  # 还没记，不算办完
+    n = len(c.tx())
+    p.get_by_role("button", name="记好了").click()
+    c.wait_saved(n + 1)
+    assert next(g for g in c.data()["goals"] if g["id"] == "g-fee").get("status") == "done"  # 花够了自己办完
+    t = c.tx()[-1]
+    assert t["special"] == "g-fee" and t["amount"] == 800 and t["category"] == "c-print", t
 
 
 @step("外观和「生活」一致：问候、预算月和发工资小标签、还能花的圆环、角落一句；记账页不放")
