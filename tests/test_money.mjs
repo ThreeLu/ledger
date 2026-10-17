@@ -358,6 +358,11 @@ test('每年一次的专项：这一年的不用交就跳过；办完了 / 花�
   assert.deepEqual(m.yearlyPaid(d, '2026-10-18'), ['y-room-2026']);
   Object.assign(d.goals.find((g) => g.id === 'y-room-2026'), { status: 'done' });
   assert.deepEqual(m.yearlyDue(d, '2026-10-18').map((g) => g.id), ['y-room-2027']);
+  // 按农历：小年（腊月廿三）每年在 1～2 月；今年的已经过了就不补，生成明年的
+  d.yearly = [{ id: 'home', name: '回家车票', amount: 440, lunar: { m: 12, d: 23 } }];
+  d.goals = [];
+  const home = m.yearlyDue(d, '2026-10-18');
+  assert.deepEqual(home.map((g) => [g.id, g.by]), [['y-home-2027', '2027-01-30']]);
 });
 
 
