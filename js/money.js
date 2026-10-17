@@ -137,7 +137,7 @@ export function migrate(data) {
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
   data.goals ||= []; // 专项存款（自己加的）：{ id, name, target, by: 'YYYY-MM-DD', note, status?: 'done'|'cancelled', doneAt? }；记账时 tx.special = id
-  data.yearly ||= []; // 每年一次的专项（学费、住宿费……）：{ id, name, amount, month, day（或 lunar: { m, d } 按农历）, skip: [不用交的年份], note }；到时候自动生成一个专项（goals 里带 yearly / yearlyYear）
+  data.yearly ||= []; // 每年一次的专项（学费、住宿费……）：{ id, name, amount, category（办完了时先填的类别）, month, day（或 lunar: { m, d } 按农历）, skip: [不用交的年份], note }；到时候自动生成一个专项（goals 里带 yearly / yearlyYear）
   data.family ||= { sealed: 0, log: [] }; // 家庭存款：已经封存了多少（一万一万地封），log: [{ date, amount }]
   data.settings.medTarget ??= 1000; // 医疗备用金
   data.milestones ||= {}; // 里程碑：{ reached: { key: { at, text } }, seen: { key: true } }
@@ -697,16 +697,16 @@ export function yearlyDue(data, today) {
       // lunar: { m, d } 按农历算（比如小年 12 月 23），取这一公历年里的那一天
       const by = it.lunar ? nextLunar(it.lunar.m, it.lunar.d, `${y}-01-01`, 366) : `${y}-${String(it.month).padStart(2, '0')}-${String(it.day || 15).padStart(2, '0')}`;
       if (!by || !by.startsWith(`${y}-`) || by < today) continue; // 日子已经过了的不新生成
-      out.push({ id: `y-${it.id}-${y}`, name: `${y} 年${it.name}`, target: amount, note: it.note || '', yearly: it.id, yearlyYear: y, by, createdAt: today });
+      out.push({ id: `y-${it.id}-${y}`, name: `${y} 年${it.name}`, target: amount, note: it.note || '', yearly: it.id, yearlyYear: y, by, ...(it.category ? { category: it.category } : {}), createdAt: today });
       break;
     }
   }
   return out;
 }
 
-// 每年一次的专项已经花够了，就算办完了（不用手动点）
-export function yearlyPaid(data, today) {
-  return (data.goals || []).filter((g) => g.yearly && !g.status
+// 专项已经花够了，就算办完了（记那笔花销以后自己办完，不用再点）
+export function goalsPaid(data, today) {
+  return (data.goals || []).filter((g) => Number(g.target) > 0 && !g.status
     && data.tx.filter((t) => t.special === g.id && t.date <= today).reduce((s, t) => s + cny(t), 0) >= (Number(g.target) || 0) - 0.005).map((g) => g.id);
 }
 

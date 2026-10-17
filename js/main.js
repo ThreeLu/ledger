@@ -6,7 +6,7 @@ import {
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, yearlyPaid,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
@@ -100,12 +100,12 @@ async function refresh() {
   if (!loadError && store.data) { postRecurring(); checkMilestones(); checkYearly(); checkFamily(); checkDrops(); }
 }
 
-// 每年一次的专项（学费、住宿费）：花够了自动办完，下一年的马上生成
+// 专项花够了自动办完；每年一次的（学费、住宿费）下一年的马上生成
 function checkYearly() {
-  const paid = yearlyPaid(store.data, today());
+  const paid = goalsPaid(store.data, today());
   const add = yearlyDue(store.data, today());
   if (!paid.length && !add.length) return;
-  save(`每年的专项：${[...paid.map(() => '办完'), ...add.map((g) => g.name)].join('、')}`, (data) => {
+  save(`专项：${[...paid.map(() => '办完'), ...add.map((g) => g.name)].join('、')}`, (data) => {
     for (const id of paid) Object.assign(data.goals.find((g) => g.id === id), { status: 'done', doneAt: today() });
     for (const g of yearlyDue(data, today())) data.goals.push(g);
   }).then(() => { if (!EDITING_ROUTES.test(currentPath())) render(); }).catch(() => {});
@@ -896,6 +896,11 @@ function addView(q) {
   // 从「这次要还的人情」点进来：类别先选聚餐请客，人情先选上
   if (!editing && q.favor && d.favors.some((f) => f.id === q.favor && f.status !== 'done')) {
     st.favor = q.favor; st.who = d.favors.find((f) => f.id === q.favor).person; st.category = 'c-social'; st.sub = category(d, 'c-social')?.sub || null;
+  }
+  // 从专项点「办完了」进来：专项先选上、类别和金额先填好，点「记好了」才算数
+  if (!editing && q.special && d.goals.some((g) => g.id === q.special && !g.status)) {
+    st.special = q.special;
+    if (q.category && d.categories.some((c) => c.id === q.category && c.kind === 'expense')) { st.category = q.category; st.sub = category(d, q.category)?.sub || null; }
   }
   if (!account(d, st.account)) st.account = firstCny;
   // Siri / 快捷指令带来的一句话：「午饭 18」→ 金额、类别、备注先填好，还是要点「记好了」
@@ -3854,7 +3859,7 @@ const SPECIAL_HELP = (d) => [
   ['怎么存', ['不用另外存，也不看钱在哪张卡上：所有账户加起来，先留出心愿基金和这个月的生活费，再留家庭存款、应急底线、医疗备用金，剩下的按日子先后给专项，日子最近的先存够。',
     '存够了就封存，只给这件事用。新来一个急的，自动排到最前面，最后面的先停一停。', '「每月留」是还差的钱平均到剩下有收入的月份；按现在每月能存的来不及，会提前用黄色提醒。']],
   ['怎么花', ['记账时在「算在哪个专项里」选上它，这笔钱从专项出，不占当月预算。一件事可以记好几笔。', '还大额人情时，记那笔钱、选上「还的是哪个人情」就行。']],
-  ['办完了', ['点「办完了」：有结余回到自由存款；超了先从心愿基金扣（留 ¥100），不够的由存款补。', '不用了（比如婚礼不办了）点「不用了」，留着的钱回到自由存款。']],
+  ['办完了', ['点「办完了」会带你去记那笔花销：专项、金额、账户先填好，点「记好了」才算数。花够了专项自己办完，有结余回到自由存款；超了先从心愿基金扣（留 ¥100），不够的由存款补。', '不用了（比如婚礼不办了）点「不用了」，留着的钱回到自由存款。']],
   ['暑假生活费', ['自动算：暑假那几个月的预算，暑假开始前一天存够。暑假里还没转出来的那几个月继续留着。', '花起来按生活费算：结余照样进心愿基金。']],
 ];
 
@@ -3887,6 +3892,13 @@ function goalsView() {
     });
   };
   const finish = (x, status) => {
+    // 办完了 = 去记那笔花销（专项先选上、金额填还剩的）；花够了专项自己办完。没有要花的了才直接办完
+    if (status === 'done' && x.target > 0) {
+      const q = new URLSearchParams({ special: x.id, amount: String(round2(x.target)), note: x.name.replace(/^\d{4} 年/, ''), account: d.settings.floorAccount || '' });
+      if (x.category) q.set('category', x.category);
+      window.location.hash = `#/add?${q}`;
+      return;
+    }
     const left = round2(x.budget - x.spent);
     const msg = status === 'cancelled' ? `「${x.name}」不用了，留着的钱回到自由存款`
       : left >= 0 ? `「${x.name}」办完了${left > 0 ? `，结余 ${money(left)} 回到自由存款` : ''}` : `「${x.name}」办完了，超了 ${money(-left)}，先从心愿基金扣`;
