@@ -6,7 +6,7 @@ import {
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, yearlyPaid,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
@@ -97,7 +97,18 @@ async function refresh() {
   }
   if (!hadData || loadError || store.missing) render();
   else if (store.head !== before && !EDITING_ROUTES.test(currentPath())) render();
-  if (!loadError && store.data) { postRecurring(); checkMilestones(); checkFamily(); checkDrops(); }
+  if (!loadError && store.data) { postRecurring(); checkMilestones(); checkYearly(); checkFamily(); checkDrops(); }
+}
+
+// 每年一次的专项（学费、住宿费）：花够了自动办完，下一年的马上生成
+function checkYearly() {
+  const paid = yearlyPaid(store.data, today());
+  const add = yearlyDue(store.data, today());
+  if (!paid.length && !add.length) return;
+  save(`每年的专项：${[...paid.map(() => '办完'), ...add.map((g) => g.name)].join('、')}`, (data) => {
+    for (const id of paid) Object.assign(data.goals.find((g) => g.id === id), { status: 'done', doneAt: today() });
+    for (const g of yearlyDue(data, today())) data.goals.push(g);
+  }).then(() => { if (!EDITING_ROUTES.test(currentPath())) render(); }).catch(() => {});
 }
 
 // 自由存款超过 2000 的部分凑够一万，就封存进家庭存款（放着不动）

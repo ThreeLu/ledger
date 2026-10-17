@@ -344,4 +344,21 @@ test('能随便用的满 1 万就不再进：多的算存款；给大额心愿�
   assert.ok(g.small <= m.WISH_CAP);
 });
 
+test('每年一次的专项：这一年的不用交就跳过；办完了 / 花够了，马上生成下一年的', () => {
+  const d = savingsBook();
+  d.yearly = [{ id: 'fee', name: '学费', amount: 8000, month: 9, day: 20, skip: [2026] }, { id: 'room', name: '住宿费', amount: 1200, month: 10, day: 20 }];
+  const due = m.yearlyDue(d, '2026-10-16');
+  assert.deepEqual(due.map((g) => g.id), ['y-fee-2027', 'y-room-2026']); // 2026 年学费不用交
+  assert.equal(due[1].by, '2026-10-20');
+  d.goals.push(...due);
+  assert.equal(m.yearlyDue(d, '2026-10-16').length, 0); // 不重复生成
+  assert.equal(m.savingsMap(d, '2026-10-16').specials.length, 2);
+  // 住宿费花够了 → 算办完 → 下一年的出来
+  d.tx = [{ id: 'p1', type: 'expense', date: '2026-10-18', amount: 1200, account: 'a-save', category: 'c-other', special: 'y-room-2026' }];
+  assert.deepEqual(m.yearlyPaid(d, '2026-10-18'), ['y-room-2026']);
+  Object.assign(d.goals.find((g) => g.id === 'y-room-2026'), { status: 'done' });
+  assert.deepEqual(m.yearlyDue(d, '2026-10-18').map((g) => g.id), ['y-room-2027']);
+});
+
+
 console.log(`\n${n} 项通过`);
