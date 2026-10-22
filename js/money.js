@@ -286,6 +286,26 @@ export function periodStats(data, p) {
   return { tx: inP, spent, byCat, income, total, living, saved: income - total, fromSaved, planSaved: income - total + fromSaved };
 }
 
+// 不占预算的花销按来源分：心愿基金、专项、人情，其余按类别名（手续费、出差自付……），多的在前
+export function noneParts(data, txs) {
+  const out = {};
+  for (const t of txs) {
+    const v = spendOf(data, t);
+    if (!v || txGroup(data, t) !== 'none') continue;
+    const name = t.wishFund || t.category === 'c-wish' ? '心愿基金' : t.special ? '专项' : bigFavorOf(data, t) ? '人情'
+      : t.type === 'writeoff' ? '出差自付' : category(data, t.category)?.name || '其他';
+    out[name] = (out[name] || 0) + v;
+  }
+  return Object.entries(out).map(([name, v]) => ({ name, v })).sort((a, b) => b.v - a.v);
+}
+// 一句话：「另有 ¥406 是心愿基金的钱，不占预算」/「另有 ¥500 不占预算：心愿基金 ¥406、手续费 ¥94」
+export function noneLine(parts) {
+  const all = parts.reduce((s, x) => s + x.v, 0);
+  if (all < 1) return '';
+  if (parts.length === 1) return `另有 ${money(all)} 是${parts[0].name}的钱，不占预算`;
+  return `另有 ${money(all)} 不占预算：${parts.map((x) => `${x.name} ${money(x.v)}`).join('、')}`;
+}
+
 export const budgetTotal = (data) => GROUPS.reduce((s, g) => s + (Number(data.budget?.[g.id]) || 0), 0);
 export const livingBudget = (data) => LIVING.reduce((s, g) => s + (Number(data.budget?.[g]) || 0), 0);
 

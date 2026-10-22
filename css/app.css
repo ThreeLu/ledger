@@ -351,8 +351,8 @@ button.chip:not(.on):not(.quick-chip) { background: var(--chip); color: var(--te
 .wh-tag.good { background: color-mix(in srgb, var(--sage) 14%, var(--card)); color: var(--sage); }
 .wh-tag.warn { background: color-mix(in srgb, var(--amber) 14%, var(--card)); color: var(--amber); }
 .week-head .time-bar { margin-top: 12px; }
-.week-head .wh-fill { background: var(--accent); }
-.week-head .wh-fill.over { background: var(--amber); }
+.time-fill.wh-fill { background: var(--accent); }
+.time-fill.wh-fill.over { background: var(--amber); }
 .wh-over { color: var(--amber); }
 .mh-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
 .mh-stats > div { display: flex; flex-direction: column; gap: 1px; }

@@ -184,7 +184,7 @@ def _(c):
     fee = c.tx()[-1]
     assert fee["category"] == "c-fee" and fee["amount"] == 1
     p.wait_for_function("location.hash === '#/'")
-    expect(p.get_by_text("另有不占预算的花销")).to_be_visible()
+    expect(p.get_by_text("另有 ¥1 是手续费的钱，不占预算")).to_be_visible()
     # 充值 Apple ID：140 元按 1:7 估成 20 美元
     c.go("#/add")
     p.locator(".segmented").get_by_role("button", name="转账").click()
@@ -1612,6 +1612,13 @@ def _(c):
     c.wait_saved(n + 1)
     t = c.tx()[-1]
     assert t["wishFund"] is True and t["category"] == "c-drink" and t["amount"] == 20, t
+    # 首页和周总结写清是心愿基金的钱（不说成手续费、出差自付），首页进度条和周总结一样：紫色是花了多少
+    c.go("#/")
+    expect(p.locator(".legend")).to_contain_text("心愿基金")
+    expect(p.get_by_text(re.compile(r"另有 ¥[\d,.]+ (是心愿基金的钱，不占预算|不占预算：.*心愿基金)"))).to_be_visible()
+    expect(p.locator(".spend-left .time-fill.wh-fill")).to_be_visible()
+    c.go("#/summary?mode=week")
+    expect(p.locator(".week-head .from-saved")).to_contain_text("心愿基金")
     c.go("#/wishes")
     expect(p.locator(".big-num")).to_have_text(f"¥{int(have) - 20:,}")
     c.go("#/list")

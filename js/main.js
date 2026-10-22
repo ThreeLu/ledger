@@ -6,7 +6,7 @@ import {
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
@@ -512,7 +512,7 @@ const HOME_HELP = [
   ['一句结论', ['一切正常时，在「这个月还能花」最上面一行。有事留意或要处理时，放在下面的「要做的事」里，直接告诉你做什么，点「为什么」看解释。']],
   ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里，一件一行：红色是要处理，琥珀色是留意一下，紫色是待办。点一行看为什么。事多时先露 4 件，点「还有 N 件」看全部。']],
   ['即将扣款', ['接下来一个多月要自动扣的订阅，一笔一行，左边是哪天。美元的最下面写 Apple ID 余额够不够；不够会写哪天前充多少。点「订阅」看这个月订阅一共多少钱。']],
-  ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条是这个预算月过了多少天，竖线是钱用到哪了：竖线在紫色里面，说明花得比日子慢。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
+  ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条和周总结一样：紫色是钱用了多少，竖线是按日子到今天该花到哪，紫色没过竖线就是花得比日子慢。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
   ['健康指标', ['每一格一个小圆环：绿 = 很好，黄 = 留意一下，红 = 需要做点什么。', '圆环有多满：安全垫按 3 个月算满，应急钱按底线算满，花钱节奏是生活预算用了多少（小白点是按日子该用到哪），本月存钱是离目标多近。其他的只看颜色。', '每一格都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
   ['总结', ['底部「总结」看每周、每个预算月的图表。']],
@@ -525,7 +525,8 @@ function flowCard(st, part, title = '这个月的钱') {
   const segs = [
     { name: '生活', v: st.living, color: 'var(--accent)' },
     { name: '订阅', v: st.spent.sub, color: 'var(--g-sub)' },
-    { name: '其他', v: st.spent.none, color: 'var(--g-none)' },
+    // 不占预算的按来源分开写，心愿基金用暖色（和「钱都在哪」的心愿基金罐子一样）
+    ...noneParts(store.data, st.tx).map((x) => ({ ...x, color: x.name === '心愿基金' ? 'var(--jar-w2)' : 'var(--g-none)' })),
   ];
   const base = Math.max(st.income, st.total, 1);
   const kept = Math.max(0, st.income - st.total);
@@ -553,7 +554,7 @@ function budgetCard(st, part) {
         h('div', { class: 'budget-top' }, h('span', {}, g.name), h('span', { class: sp > b ? 'warn-text' : 'muted' }, `${money(sp)} / ${money(b)}`)),
         bar(b ? sp / b : 0, g.color, sp > b));
     }),
-    st.spent.none ? h('p', { class: 'muted small' }, `另有不占预算的花销 ${money(st.spent.none)}（手续费、出差自付等）`) : null);
+    st.spent.none >= 1 ? h('p', { class: 'muted small' }, noneLine(noneParts(d, st.tx))) : null);
 }
 
 // 发钱日一条龙：收入到了点一下记上，再点一下把这个月的生活费从存钱卡转出来
@@ -778,8 +779,8 @@ function spendLeftCard(hl, st, ok = null) {
         h('div', { class: 'muted small' }, over ? '这个月超了' : '这个月还能花'),
         bigMoney(Math.abs(hl.left), over ? 'warn-text' : ''),
         h('div', { class: 'muted small' }, hl.left > 0 ? `剩 ${hl.daysLeft} 天 · 每天约 ${cents(hl.perDay)}` : `剩 ${hl.daysLeft} 天`))),
-    h('div', { class: 'time-bar', 'aria-label': `预算月过了 ${Math.round(timePct)}%` },
-      h('div', { class: 'time-track' }, h('span', { class: 'time-fill', style: `width:${timePct.toFixed(1)}%` }), h('span', { class: 'spend-mark', style: `left:${Math.min(100, used).toFixed(1)}%` })),
+    h('div', { class: 'time-bar', 'aria-label': `生活预算用了 ${Math.round(used)}%，预算月过了 ${Math.round(timePct)}%` },
+      h('div', { class: 'time-track' }, h('span', { class: `time-fill wh-fill${over ? ' over' : ''}`, style: `width:${used.toFixed(1)}%` }), h('span', { class: 'spend-mark', style: `left:${timePct.toFixed(1)}%`, title: '按日子到今天该花到这' })),
       h('div', { class: 'time-legend muted small' },
         h('span', {}, `第 ${p.dayIndex} / ${p.days} 天`),
         h('span', {}, used <= timePct ? '花得比日子慢 ✓' : '花得比日子快'))),
@@ -2086,6 +2087,7 @@ function weekHead(ws) {
         h('div', { class: 'muted small' }, '这周生活花了'),
         bigMoney(st.living)),
       h('span', { class: `wh-tag ${ws.pace}` }, tag)),
+    st.byGroup.none >= 1 ? h('div', { class: 'muted small from-saved' }, noneLine(noneParts(store.data, st.tx))) : null,
     plan > 0 ? h('div', { class: 'time-bar' },
       h('div', { class: 'time-track', 'aria-label': `用了这周计划的 ${Math.round(used * 100)}%` },
         h('span', { class: `time-fill wh-fill${over ? ' over' : ''}`, style: `width:${Math.min(100, used * 100).toFixed(1)}%` }),
@@ -2130,7 +2132,7 @@ function monthHead(ms) {
 }
 
 const SUMMARY_HELP = [
-  ['周总结', ['一周从周一到周日。最上面是这周生活花了多少：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
+  ['周总结', ['一周从周一到周日。最上面是这周生活花了多少（心愿基金、专项这些不占预算的另写一行，不算在里面）：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月总结', ['按预算月算（和发钱对齐）。', '最上面是这个月存下多少（暑假没收入时是花了多少），进度条是生活预算用了多少；这个月还没过完时，竖线是按日子到今天该花到哪。', '花钱曲线：实线是这个月累计花了多少，虚线是按计划到这天该花多少。实线在虚线下面，就是花得比计划慢。', '存钱趋势和总资产趋势看最近几个月。总资产一直往上走，就说明一切都在正轨上。']],
   ['月度小信', ['每个预算月结束后，打开那个月的总结，AI 会根据这个月的汇总数字写几句话：一件做得好的事、一条下个月可以试试的建议。写一次就存下来。']],
   ['年总结', ['按自然年。最上面是这一年存下多少，下面是收入、花了、储蓄率；进度条是存下了计划的多少（计划 = 每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」），这一年还没过完时，竖线是按日子到今天该存到哪。', '下面还有每月存下多少、钱花在哪、实现了几个心愿。每年 1 月初首页会提醒你看去年的。']],

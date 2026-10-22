@@ -367,4 +367,15 @@ test('每年一次的专项：这一年的不用交就跳过；办完了 / 花�
 });
 
 
+test('不占预算的花销按来源分开写（心愿基金不说成手续费）', () => {
+  const d = book();
+  d.tx = [ex('2026-10-02', 30), ex('2026-10-03', 120, 'c-other', { wishFund: true }), ex('2026-10-04', 80, 'c-wish'), ex('2026-10-05', 5, 'c-fee')];
+  const st = m.periodStats(d, m.periodFor(d, '2026-10-05'));
+  assert.equal(st.living, 30);
+  assert.deepEqual(m.noneParts(d, st.tx), [{ name: '心愿基金', v: 200 }, { name: '手续费', v: 5 }]);
+  assert.equal(m.noneLine(m.noneParts(d, st.tx)), '另有 ¥205 不占预算：心愿基金 ¥200、手续费 ¥5');
+  assert.equal(m.noneLine(m.noneParts(d, st.tx.slice(0, 2))), '另有 ¥120 是心愿基金的钱，不占预算');
+  assert.equal(m.noneLine([]), '');
+});
+
 console.log(`\n${n} 项通过`);
