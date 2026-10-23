@@ -2,10 +2,11 @@
 
 import {
   GROUPS, LIVING, periodFor, shiftPeriod, periodStats, partial, livingBudget, budgetTotal, totalAssets,
-  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup, spendOf, isFromSaved, isLump, ADJUST_CAT,
+  receivables, cny, category, addDays, parseYmd, ymd, money, md, txGroup, spendOf, isFromSaved, isLump, ADJUST_CAT, PACE_SLACK, plannedSoFar, onPace, wishFunds,
 } from './money.js';
 
 const groupOf = (data, t) => txGroup(data, t);
+const r2 = (n) => Math.round(n * 100) / 100;
 
 // 一周：周一到周日
 export function weekOf(day) {
@@ -71,7 +72,7 @@ export function weekSummary(data, day, now = ymd(new Date())) {
   const ongoing = w.start <= now && now < w.end;
   const soFar = ongoing ? perDay * weekDays.filter((x) => counted(x) && x <= now).length : plan;
   const diff = st.living - plan;
-  const pace = st.living <= soFar * 1.1 ? 'good' : 'warn';
+  const pace = st.living <= soFar * PACE_SLACK ? 'good' : 'warn';
   const headline = !st.total ? '这周还没有花销记录。'
     : ongoing ? `这周生活花了 ${money(st.living)}，${diff < 0 ? `还能花 ${money(-diff)}` : `超了 ${money(diff)}`}`
       : `这周生活花了 ${money(st.living)}，${Math.abs(diff) < plan * 0.05 ? '和计划差不多' : diff < 0 ? `比计划少 ${money(-diff)}` : `比计划多 ${money(diff)}`}`;
@@ -89,6 +90,43 @@ export function cumulative(data, p) {
     const plannedDays = x.day < part.from ? 0 : Math.round((parseYmd(x.day) - parseYmd(part.from)) / 86400000) + 1;
     return { day: x.day, actual: sum, planned: perDay * plannedDays };
   });
+}
+
+// 心愿基金按预算月看（只看「能随便用」的，和心愿单上的大字同一个数）：
+// 月初 → 月底、中间每一类进出；省下率 = 生活费省下的 ÷ 生活预算（这个月过完才有）；最近 6 个月每月多了 / 少了多少、月底多少
+export const WISH_FLOW = [
+  ['saved', '生活费省下'], ['jobs', '兼职收入的三成'], ['back', '大额心愿退回'],
+  ['over', '生活费超支扣回'], ['cover', '帮专项、看病补'], ['wish', '买心愿'], ['toBig', '攒给大额心愿'], ['toFree', '满一万转去存款'],
+];
+export function wishMonth(data, p, now = ymd(new Date())) {
+  const f = wishFunds(data, now);
+  const upTo = (day) => r2(f.flow.filter((x) => x.date <= day).reduce((a, x) => a + x.v, 0));
+  const rows = (q) => {
+    const by = {};
+    for (const x of f.flow) if (x.date >= q.start && x.date <= q.end) by[x.k] = r2((by[x.k] || 0) + x.v);
+    return WISH_FLOW.filter(([k]) => by[k]).map(([k, name]) => ({ k, name, v: by[k] }));
+  };
+  const lbOf = (q) => livingBudget(data) * partial(data, q).factor;
+  const rateOf = (q) => {
+    const l = f.log.find((x) => x.p.start === q.start);
+    const lb = lbOf(q);
+    return l && lb > 0 ? { leftover: l.leftover, rate: l.leftover / lb } : null;
+  };
+  const ongoing = p.start <= now && now <= p.end;
+  const start = upTo(addDays(p.start, -1));
+  const end = upTo(ongoing ? now : p.end);
+  const prevP = shiftPeriod(data, p, -1);
+  const hist = [];
+  for (let q = p, i = 0; i < 6 && !(data.openingDate && q.end < data.openingDate); q = shiftPeriod(data, q, -1), i++) {
+    const qEnd = upTo(q.start <= now && now <= q.end ? now : q.end);
+    hist.unshift({ p: q, net: r2(qEnd - upTo(addDays(q.start, -1))), end: qEnd });
+  }
+  return {
+    start, end, rows: rows(p), ongoing, rate: rateOf(p), prevRate: rateOf(prevP),
+    // 还没过完：现在生活费还剩多少（过完剩下的会进来，超了会扣）
+    livingNow: ongoing ? r2(lbOf(p) - periodStats(data, p).living) : null,
+    hist,
+  };
 }
 
 // 最近 n 个预算月：收入、花销、存下、月底总资产
@@ -146,7 +184,7 @@ export function monthSummary(data, day, rate, now = ymd(new Date())) {
   // 这个预算月还没过完时，按「到今天该花多少」看生活花销的节奏
   const ongoing = p.start <= now && now < p.end;
   const soFar = ongoing ? (curve.find((x) => x.day === now)?.planned ?? lb) : lb;
-  const pace = st.living <= soFar * 1.1 ? 'good' : 'warn';
+  const pace = (ongoing ? onPace(st.living, plannedSoFar(data, p, now)) : st.living <= soFar * PACE_SLACK) ? 'good' : 'warn';
   return {
     p, st, prevSt, part, headline, lb, ongoing, soFar, pace,
     curve,

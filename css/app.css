@@ -280,6 +280,10 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; }
 .budget-row { margin-bottom: 12px; }
 .budget-row:last-child { margin-bottom: 0; }
+.wm-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.wm-top b { font-size: 17px; }
+.wm-rows { margin: 8px 0 4px; }
+.wm-row { display: flex; justify-content: space-between; font-size: 14px; padding: 7px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .budget-top { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 5px; font-variant-numeric: tabular-nums; }
 .bar-track { display: block; height: 8px; border-radius: 4px; background: var(--chip); overflow: hidden; }
 .bar { display: block; height: 100%; border-radius: 4px; }

@@ -506,11 +506,16 @@ export function wishFunds(data, today) {
   const spentOn = {};
   const parts = { saved: 0, over: 0, jobs: 0, spent: 0, cover: 0, toFree: 0 };
   // 往能随便用里加钱：满 WISH_CAP 的部分不进心愿基金，算成存款（钱要从生活费卡转回存钱卡，对账页的数额计算会算出来）
+  // flow：能随便用的每一次变化 { date, k, v }，按月总结心愿基金用（加起来就是 small）
+  const flow = [];
+  let at = '';
+  const mark = (k, v) => { if (Math.abs(v) >= 0.005) flow.push({ date: at, k, v: r2(v) }); };
   const addSmall = (x) => {
     const room = Math.max(0, WISH_CAP - small);
     const keep = r2(Math.min(x, room));
     small = r2(small + keep);
     parts.toFree = r2(parts.toFree - (x - keep));
+    mark('toFree', keep - x);
   };
   const log = [];
   const price = (id) => Number(all.find((w) => w.id === id)?.price) || 0;
@@ -521,6 +526,7 @@ export function wishFunds(data, today) {
     if (!next || small < WISH_SEED) return;
     const seed = Math.min(WISH_SEED, price(next));
     small = r2(small - seed);
+    mark('toBig', -seed);
     env[next] = seed;
     started[next] = date;
   };
@@ -528,6 +534,8 @@ export function wishFunds(data, today) {
     const a = active();
     const give = a ? r2(Math.min(x * WISH_SHARE, price(a) - env[a])) : 0;
     if (a) env[a] = r2(env[a] + give);
+    mark(kind, x);
+    mark('toBig', -give);
     addSmall(r2(x - give));
     parts[kind] = r2(parts[kind] + x);
     tryStart(date);
@@ -536,17 +544,19 @@ export function wishFunds(data, today) {
     const take = r2(Math.min(x, Math.max(0, small - WISH_KEEP)));
     small = r2(small - take);
     parts[kind] = r2(parts[kind] - take);
+    mark(kind, -take);
     spill = r2(spill + x - take);
     return take;
   };
   const leave = (id) => { const i = queue.indexOf(id); if (i >= 0) queue.splice(i, 1); };
   for (const e of ev) {
+    at = e.date;
     if (e.k === 'close') {
       const before = small;
       if (e.v >= 0) inflow(e.v, 'saved', e.date); else deduct(-e.v, 'over');
       log.push({ p: e.p, leftover: e.v, change: r2(small - before) });
     } else if (e.k === 'job') inflow(e.v, 'jobs', e.date);
-    else if (e.k === 'smallWish') { const v = Math.min(e.v, small); small = r2(small - v); parts.spent = r2(parts.spent - v); }
+    else if (e.k === 'smallWish') { const v = Math.min(e.v, small); small = r2(small - v); parts.spent = r2(parts.spent - v); mark('wish', -v); }
     else if (e.k === 'med') { med = r2(med - e.v); if (med < 0) { deduct(-med, 'cover'); med = 0; } }
     else if (e.k === 'medBack' || e.k === 'refill') med = r2(Math.min(medT, med + e.v));
     else if (e.k === 'special') {
@@ -558,6 +568,7 @@ export function wishFunds(data, today) {
     else if (e.k === 'queue') { queue.push(e.w.id); env[e.w.id] = 0; tryStart(e.date); }
     else if (e.k === 'buyBig' || e.k === 'dropBig') {
       const back = r2(Math.max(0, (env[e.w.id] || 0) - (e.k === 'buyBig' ? e.v : 0)));
+      mark('back', back);
       addSmall(back);
       parts.spent = r2(parts.spent - ((env[e.w.id] || 0) - back));
       env[e.w.id] = 0;
@@ -568,7 +579,7 @@ export function wishFunds(data, today) {
   const saving = active() || null;
   const waiting = queue.filter((id) => !started[id]);
   const envTotal = r2(Object.values(env).reduce((a, b) => a + b, 0));
-  return { small: r2(small), env, saved: env, envTotal, total: r2(small + envTotal), saving, waiting, started, log, parts, med: r2(med), spill,
+  return { small: r2(small), env, saved: env, envTotal, total: r2(small + envTotal), saving, waiting, started, log, flow, parts, med: r2(med), spill,
     fromJobs: parts.jobs };
 }
 
@@ -894,6 +905,18 @@ export { money };
 export const md = (s) => `${Number(s.slice(5, 7))}月${Number(s.slice(8, 10))}日`;
 
 // 开始记账那天在预算月中间时，这个预算月只算记账之后的部分：预算按天数打折，收入不算（开始之前到的没记）
+// 花钱节奏：首页、健康指标、月总结都用这一条（周总结用同样的 1.1 倍）。到今天该花的 = 生活预算 × 记了账的天数（含今天）÷ 这个月要算的天数；
+// 没超过它的 1.1 倍都算节奏正常；头 3 天花得多也不算快（一笔大的就会显得很快）
+export const PACE_SLACK = 1.1;
+export function plannedSoFar(data, p, today) {
+  const part = partial(data, p);
+  const lb = livingBudget(data) * part.factor;
+  if (!part.days) return { lb, planned: 0, elapsed: 0 };
+  const elapsed = Math.min(part.days, Math.max(1, daysBetween(part.from, today) + 1));
+  return { lb, planned: lb * (elapsed / part.days), elapsed };
+}
+export const onPace = (living, { planned, elapsed }) => elapsed <= 3 || living <= planned * PACE_SLACK;
+
 export function partial(data, p) {
   const from = data.openingDate && data.openingDate > p.start ? data.openingDate : p.start;
   const days = daysBetween(from, p.end) + 1;
@@ -937,9 +960,8 @@ export function health(data, today, rate = data.settings.usdRate) {
 
   // 3. 花钱节奏（吃饭 + 日常 + 自由钱）
   const part = partial(data, p);
-  const lb = livingBudget(data) * part.factor;
-  const elapsed = Math.max(1, daysBetween(part.from, today) + 1);
-  const planned = lb * (elapsed / part.days);
+  const soFar = plannedSoFar(data, p, today);
+  const { lb, planned } = soFar;
   const left = lb - st.living;
   const daysLeft = p.days - p.dayIndex + 1;
   const ratio = planned ? st.living / planned : 0;
@@ -947,7 +969,7 @@ export function health(data, today, rate = data.settings.usdRate) {
   let text;
   if (!lb) text = '还没设生活预算';
   else if (st.living > lb) { level = 'bad'; text = `生活预算已经超了 ${money(st.living - lb)}`; }
-  else if (ratio > 1.15 && elapsed > 3) { level = 'warn'; text = `比计划快 ${Math.round((ratio - 1) * 100)}%`; }
+  else if (!onPace(st.living, soFar)) { level = 'warn'; text = `比计划快 ${Math.round((ratio - 1) * 100)}%`; }
   else if (st.living === 0) text = '还没花生活费';
   else if (ratio < 0.9) text = `比计划慢 ${Math.round((1 - ratio) * 100)}%`;
   else text = '和计划差不多';

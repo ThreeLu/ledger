@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 
 const m = await import(new URL('../js/money.js', import.meta.url));
+const sm = await import(new URL('../js/summary.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -172,6 +173,31 @@ test('大额人情：还的时候不占预算，从专项出', () => {
   assert.equal(m.periodStats(d, m.periodFor(d, '2026-09-20')).living, 0);
   const f = m.wishFunds(d, T);
   assert.equal(f.parts.cover, -Math.min(200, Math.max(0, 2300 - 100))); // 超了 200 先扣心愿基金
+});
+
+test('心愿基金按月看：每一类进出加起来就是月初到月底的变化，能随便用的数对得上；省下率 = 省下 ÷ 生活预算', () => {
+  const d = book();
+  d.wishes = [wish('w-big', 600, { saveStart: '2026-08-20' })];
+  d.tx = [ex('2026-08-05', 2000), inc('2026-08-25', 1000, 'i-job', 'a-live'), ex('2026-09-05', 2400),
+    ex('2026-09-10', 50, 'c-wish', { wishKind: 'small' }), ex('2026-10-03', 100)];
+  d.settings.sideIncomeSave = 0.7;
+  const f = m.wishFunds(d, T);
+  assert.equal(Math.round(f.flow.reduce((a, x) => a + x.v, 0) * 100) / 100, f.small);
+  for (const day of ['2026-08-15', '2026-09-15', T]) {
+    const w = sm.wishMonth(d, m.periodFor(d, day), T);
+    assert.equal(Math.round((w.start + w.rows.reduce((a, x) => a + x.v, 0)) * 100) / 100, w.end);
+  }
+  const aug = sm.wishMonth(d, m.periodFor(d, '2026-08-15'), T);
+  assert.equal(aug.rate.leftover, 300);
+  assert.equal(Math.round(aug.rate.rate * 1000), Math.round((300 / 2300) * 1000));
+  assert.ok(aug.rows.some((x) => x.k === 'jobs' && x.v === 300));
+  assert.ok(aug.rows.some((x) => x.k === 'toBig' && x.v < 0));
+  const sep = sm.wishMonth(d, m.periodFor(d, '2026-09-15'), T);
+  assert.ok(sep.rows.some((x) => x.k === 'over' && x.v < 0) && sep.rows.some((x) => x.k === 'wish' && x.v === -50));
+  const oct = sm.wishMonth(d, m.periodFor(d, T), T);
+  assert.ok(oct.ongoing && oct.rate === null && oct.livingNow === 2200);
+  assert.equal(oct.end, f.small);
+  assert.equal(oct.hist.length, 3);
 });
 
 test('存款的顺序：家庭 → 应急 → 医疗 → 专项（日子近的先）→ 自由；凑够一万封存', () => {

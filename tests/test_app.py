@@ -557,7 +557,18 @@ def _(c):
     expect(p.get_by_role("img", name="花钱曲线")).to_be_visible()
     expect(p.locator(".advice")).to_contain_text("下个月可以试试")
     expect(p.get_by_role("img", name="总资产")).to_be_visible()
+    # 心愿基金这个月：月初 → 现在，每一行进出加起来对得上
+    wm = p.locator(".wish-month")
+    expect(wm.locator("h3")).to_have_text("心愿基金")
+    expect(wm.locator(".wm-top")).to_contain_text("月初 → 现在")
+    got = p.evaluate("""() => Promise.all([import('./js/summary.js'), import('./js/money.js')]).then(([s, m]) => {
+      const d = JSON.parse(localStorage.getItem('ledger-cache') || 'null');
+      return d && s.wishMonth(d.data || d, m.periodFor(d.data || d, m.ymd(new Date())));
+    })""")
+    if got:
+        assert abs(got["start"] + sum(x["v"] for x in got["rows"]) - got["end"]) < 0.01, got
     p.get_by_role("link", name="上一个").click()
+    expect(p.locator(".wish-month")).to_be_visible()
     expect(p.locator(".period-nav")).to_be_visible()
     p.get_by_role("button", name="怎么用").click()
     expect(p.locator(".sheet")).to_contain_text("花钱曲线")
@@ -1578,7 +1589,9 @@ def _(c):
     d["recurring"] = [r for r in d["recurring"] if r["id"] != "r-yearly-test"]
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     p.reload()
-    expect(p.locator(".summary-title")).to_have_count(1)
+    # 一切正常那句只在没有要留意的指标时出现（前面几步花了多少、今天几号会让花钱节奏有时偏快）
+    warns = p.locator(".health-tile.warn, .health-tile.bad").count()
+    expect(p.locator(".summary-title")).to_have_count(0 if warns else 1)
     # 健康指标两列：窄的格子是双数
     assert p.locator(".health-tile:not(.wide)").count() % 2 == 0
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [{ name: '日常', over: 540 }] }))""")
