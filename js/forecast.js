@@ -12,11 +12,13 @@
 // 四、往后：蒙特卡洛，每条路径抽一个 P 和每笔收入的 p，按月走：收入、生活花销（30 天的和，用 P 的均值方差做正态近似）、
 //    订阅预算、专项到日子扣掉；生活费省下的进心愿基金（满 1 万的进存款），超了先扣心愿基金（留 100）再扣存款；
 //    月底按 家庭 → 应急 → 医疗 → 专项 → 自由 分，满了封存家庭存款（和 ahead.js 一样）。
+// 五、建议（第二批，只在有用时出）：敏感性分析（二分法找「预算每月调低多少」能把按时留够提到 90% / 碰底线压到 5%）、
+//    预算的可信区间（贝叶斯自助法）、方差分解（一年后存款的不确定来自收入还是花销）。
 // 随机数按日子固定种子：同一天打开几次结果一样，记了新账才变。
 
 import {
   periodFor, shiftPeriod, partial, periodStats, livingBudget, closedPeriods, savingsMap, wishFunds, spendOf, txGroup,
-  addDays, daysBetween, planCategory, medTarget, budgetTotal, LIVING, FREE_KEEP, FAMILY_STEP, WISH_KEEP, WISH_CAP,
+  addDays, daysBetween, planCategory, medTarget, budgetTotal, LIVING, GROUPS, FREE_KEEP, FAMILY_STEP, WISH_KEEP, WISH_CAP, money,
 } from './money.js';
 import { dueEvents, reservesAfter } from './ahead.js';
 
@@ -214,12 +216,16 @@ export function incomeModels(data, today) {
 }
 
 // ---------- 四、往后：蒙特卡洛 ----------
-export function simulateAhead(data, today, { fc = null, score = null, paths = PATHS, months = 12, rate = data.settings.usdRate } = {}) {
+// 建议用的几个开关（第二批）：cut = 从下个月起生活预算每月调低多少；spendCut = 实际花销也一起少这么多
+// （只调预算、花的不变：本来就花不到预算才有用——省下的不进心愿基金了，进存款；花得比新预算多，多的还是从存款出）；
+// fixIncome = 收入不抽、按「金额 × 可能」算；fixSpend = 生活花销不抽、按后验均值算（方差分解用）
+export function simulateAhead(data, today, { fc = null, score = null, paths = PATHS, months = 12, rate = data.settings.usdRate, cut = 0, spendCut = false, fixIncome = false, fixSpend = false } = {}) {
   const map = savingsMap(data, today, rate);
   const p0 = periodFor(data, today);
   const part0 = partial(data, p0);
   const st0 = periodStats(data, p0);
   const LB = livingBudget(data);
+  const LBk = Math.max(0, LB - cut); // 下个月起的生活预算
   const subB = Number(data.budget?.sub) || 0;
   const subLeft = Math.max(0, subB * part0.factor - st0.spent.sub);
   const budget0 = LB * part0.factor;
@@ -252,6 +258,7 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
   const onTime = goals.map(() => 0);
   // 这个月的生活花销：从 monthForecast 的分布（同样的混合）里抽
   const curSpent = periodStats(data, p0).living;
+  const postMean = (PRIOR_DAYS * prior.mean + xs.reduce((a, x) => a + x, 0)) / (PRIOR_DAYS + xs.length);
   for (let k = 0; k < paths; k++) {
     const P = drawP(R, xs, prior);
     const ps = incomes.map((x) => R.beta(x.a, x.b));
@@ -263,10 +270,11 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
     periods.forEach((p, i) => {
       let inc = 0; let L; let B;
       if (i === 0) {
-        if (!part0.isPartial && !p.summer) incomes.forEach((x, j) => { if (!x.arrived && R.u() < ps[j]) inc += x.amount; });
+        if (!part0.isPartial && !p.summer) incomes.forEach((x, j) => { const u = R.u(); if (!x.arrived) inc += fixIncome ? x.amount * x.p : u < ps[j] ? x.amount : 0; });
         if (!part0.isPartial && !p.summer) inc += Math.max(0, fallbackIncome - st0.income);
         // 这个月还要花的：从这个月预测的分布里抽（分位数插值），已经花的算上
-        L = Math.max(curSpent, fromQuantiles(month.quant, R.u(), month.qLevels)); B = budget0;
+        const u = R.u();
+        L = fixSpend ? Math.max(curSpent, month.median) : Math.max(curSpent, fromQuantiles(month.quant, u, month.qLevels)); B = budget0;
         const overNow = Math.max(0, curSpent - budget0); // 已经超了的，存款里已经少了
         const d = L - B;
         total += inc - subLeft - evAt[i];
@@ -275,8 +283,10 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
           wish -= cover; total -= d - overNow - cover;
         }
       } else {
-        if (!p.summer) { incomes.forEach((x, j) => { if (R.u() < ps[j]) inc += x.amount; }); inc += fallbackIncome; }
-        L = Math.max(0, p.days * P.mean + Math.sqrt(p.days * P.var) * R.normal()); B = LB;
+        if (!p.summer) { incomes.forEach((x, j) => { const u = R.u(); inc += fixIncome ? x.amount * x.p : u < ps[j] ? x.amount : 0; }); inc += fallbackIncome; }
+        const z = R.normal();
+        L = fixSpend ? p.days * postMean : Math.max(0, p.days * P.mean + Math.sqrt(p.days * P.var) * z); B = LBk;
+        if (spendCut) L = Math.max(0, L - cut);
         const d = L - B;
         total += inc - subB - B - evAt[i];
         if (d < 0) wish -= d; else {
@@ -315,5 +325,116 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
       pReach: ks.filter(Number.isFinite).length / paths, p10: at(0.1), p50: at(0.5), p90: at(0.9) };
   });
   return { now: map.total, fan, pBelow: belowAny / paths, goals: goalOut, month, incomes, prior: { mean: r2(prior.mean), cv: PRIOR_CV, alpha: PRIOR_DAYS },
-    days: xs.length, paths, budget: budgetTotal(data), living: LB };
+    days: xs.length, paths, budget: budgetTotal(data), living: LB, endVar: variance(totals[M - 1]) };
+}
+const variance = (arr) => { const n = arr.length; const m = arr.reduce((a, x) => a + x, 0) / n; return arr.reduce((a, x) => a + (x - m) ** 2, 0) / n; };
+
+// ---------- 五、建议（第二批）：只在有用时出 ----------
+export const ON_TIME = 0.9; // 专项按时留够的可能低于这个，才找办法
+export const BELOW_MAX = 0.05; // 碰到底线的可能高于这个，才找办法
+export const ADVICE_PATHS = 1000;
+export const CRED_DAYS = 45; // 记满这么多天，才看预算定得合不合适
+const pct = (p) => (p < 0.005 ? '不到 1%' : p > 0.995 ? '超过 99%' : `${Math.round(p * 100)}%`);
+const roundUp = (n, step) => Math.ceil(n / step) * step;
+
+// 敏感性分析：生活预算每月最少调低多少（10 块一档；spend = 花的也一起少这么多），ok(模拟结果) 就满足。同一个种子（共同随机数），结果随 cut 单调。
+// 调低一半还不行返回 null；不用调返回 { cut: 0 }
+export function cutNeeded(data, today, opts, ok, { spend = false } = {}) {
+  const run = (c) => simulateAhead(data, today, { ...opts, paths: ADVICE_PATHS, cut: c, spendCut: spend });
+  const s0 = run(0);
+  if (ok(s0)) return { cut: 0, sim: s0 };
+  let lo = 0;
+  let hi = Math.floor(livingBudget(data) / 2 / 10) * 10;
+  if (!hi) return null;
+  let sHi = run(hi);
+  if (!ok(sHi)) return null;
+  while (hi - lo > 10) {
+    const mid = Math.round((lo + hi) / 20) * 10;
+    if (mid <= lo || mid >= hi) break;
+    const sm = run(mid);
+    if (ok(sm)) { hi = mid; sHi = sm; } else lo = mid;
+  }
+  return { cut: hi, sim: sHi };
+}
+
+// 预算的可信区间：每一组每天花多少，贝叶斯自助法（Dirichlet(1…1) 权重）抽 draws 次日均 × 一个月的平均天数
+export function budgetCredible(data, today, { draws = 2000 } = {}) {
+  if (!data.openingDate) return [];
+  const from = data.openingDate;
+  const to = addDays(today, -1);
+  const n = daysBetween(from, to) + 1;
+  if (n < CRED_DAYS) return [];
+  const idx = new Map();
+  const rows = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) { idx.set(d, rows.length); rows.push(Object.fromEntries(LIVING.map((g) => [g, 0]))); }
+  for (const t of data.tx) {
+    const i = idx.get(t.date);
+    if (i == null) continue;
+    const v = spendOf(data, t);
+    const g = v > 0 ? txGroup(data, t) : null;
+    if (g && LIVING.includes(g)) rows[i][g] += v;
+  }
+  const R = rng(`budget|${today}`);
+  const perMonth = 365.25 / 12;
+  const ws = Array.from({ length: draws }, () => { const w = rows.map(() => -Math.log(R.u())); const sum = w.reduce((a, x) => a + x, 0); return w.map((x) => x / sum); });
+  const out = [];
+  for (const g of LIVING) {
+    const b = Number(data.budget?.[g]) || 0;
+    if (!b || rows.filter((r) => r[g] > 0).length < 5) continue; // 这一组几乎没花过，不说
+    const ms = ws.map((w) => w.reduce((a, wi, i) => a + wi * rows[i][g], 0) * perMonth).sort((a, b2) => a - b2);
+    const mean = ms.reduce((a, x) => a + x, 0) / ms.length;
+    const lo = quantile(ms, 0.025);
+    const hi = quantile(ms, 0.975);
+    const pUnder = ms.filter((x) => x < b).length / ms.length;
+    out.push({ group: g, name: GROUPS.find((x) => x.id === g).name, budget: b, mean: r2(mean), lo: r2(lo), hi: r2(hi), pUnder, pOver: 1 - pUnder, days: n });
+  }
+  return out;
+}
+
+// 方差分解：一年后存款的方差里，有多少是收入到不到账带来的、多少是每月花多少带来的（把一样固定成平均，看方差少了多少）
+export function uncertaintySources(data, today, opts = {}) {
+  const run = (o) => simulateAhead(data, today, { ...opts, paths: ADVICE_PATHS, ...o });
+  const base = run({});
+  if (base.endVar < 1e4) return null; // 标准差不到 100，没什么好分的
+  let inc = Math.max(0, 1 - run({ fixIncome: true }).endVar / base.endVar);
+  let sp = Math.max(0, 1 - run({ fixSpend: true }).endVar / base.endVar);
+  if (inc + sp > 1) { const t = inc + sp; inc /= t; sp /= t; }
+  return { income: inc, spend: sp, sd: Math.sqrt(base.endVar), irregular: base.incomes.filter((x) => !x.regular).map((x) => x.name) };
+}
+
+// 建议：sim 是页面上那次模拟（4000 条）。没有要说的就是空的
+export function adviceItems(data, today, sim, opts = {}) {
+  const items = [];
+  // 先看只调预算行不行（本来就花不到预算），不行再看「少花 + 预算一起调低」
+  const lever = (ok) => {
+    const r = cutNeeded(data, today, opts, ok);
+    if (r) return { ...r, how: `从下个月起把生活预算每月调低 ${money(r.cut)} 就够（你本来就花不到预算，省下的就进存款，不进心愿基金了）` };
+    const r2b = cutNeeded(data, today, opts, ok, { spend: true });
+    return r2b ? { ...r2b, how: `从下个月起每月少花 ${money(r2b.cut)}，生活预算也一起调低这么多（这样省下的进存款，不进心愿基金）` } : null;
+  };
+  if (sim.pBelow > BELOW_MAX) {
+    const r = lever((s) => s.pBelow <= BELOW_MAX);
+    items.push({ key: 'floor', tone: 'warn', short: `碰到底线的可能 ${pct(sim.pBelow)}`,
+      text: r ? `往后一年碰到底线的可能 ${pct(sim.pBelow)}。${r.how}，能降到 ${pct(r.sim.pBelow)}。`
+        : `往后一年碰到底线的可能 ${pct(sim.pBelow)}。每月少花一半也压不到 ${pct(BELOW_MAX)}：要靠多一点收入，或者把要用大钱的事往后挪。` });
+  }
+  for (const g of sim.goals.filter((x) => x.by && x.pOnTime != null && x.pOnTime < ON_TIME).sort((a, b) => a.pOnTime - b.pOnTime).slice(0, 2)) {
+    const r = lever((s) => (s.goals.find((x) => x.id === g.id)?.pOnTime ?? 0) >= ON_TIME);
+    items.push({ key: `goal-${g.id}`, tone: 'warn', short: `「${g.name}」按时留够的可能 ${pct(g.pOnTime)}`,
+      text: r ? `「${g.name}」按时留够的可能 ${pct(g.pOnTime)}。${r.how}，能到 ${pct(r.sim.goals.find((x) => x.id === g.id).pOnTime)}。`
+        : `「${g.name}」按时留够的可能 ${pct(g.pOnTime)}。每月少花一半也到不了 ${pct(ON_TIME)}：可以把日子往后挪，或者少留一点。` });
+  }
+  for (const b of budgetCredible(data, today)) {
+    if (b.pUnder >= 0.95 && b.hi <= b.budget * 0.9) {
+      const to = Math.max(roundUp(b.hi, 50), b.group === 'free' ? 200 : 0);
+      if (to < b.budget) {
+        items.push({ key: `budget-${b.group}`, tone: 'calm', short: `${b.name}预算可以调低`,
+          text: `${b.name}实际每月约 ${money(b.mean)}（95% 在 ${money(b.lo)}～${money(b.hi)}），低于预算 ${money(b.budget)} 的可能 ${pct(b.pUnder)}。预算调到 ${money(to)} 也够，多出来的 ${money(b.budget - to)} 每月进存款。`, href: '#/rules' });
+      }
+    } else if (b.pOver >= 0.9) {
+      items.push({ key: `budget-${b.group}`, tone: 'warn', short: `${b.name}多半会超预算`,
+        text: `${b.name}实际每月约 ${money(b.mean)}（95% 在 ${money(b.lo)}～${money(b.hi)}），超过预算 ${money(b.budget)} 的可能 ${pct(b.pOver)}。要么这块收一收，要么预算定得太紧了。`, href: '#/rules' });
+    }
+  }
+  return items;
 }

@@ -16,7 +16,7 @@ import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } fr
 import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { monthReport, yearReport } from './report.js';
 import { aheadPlan } from './ahead.js';
-import { scoreModels, monthForecast, simulateAhead } from './forecast.js';
+import { scoreModels, monthForecast, simulateAhead, adviceItems, uncertaintySources, ON_TIME, BELOW_MAX, CRED_DAYS } from './forecast.js';
 import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx, makeWorkbook } from './xlsx.js';
@@ -739,6 +739,7 @@ function todoCard(hl) {
     wrap(favorHolidayCard(), 'accent', 'people'), // 假期只有几天，排在发钱日（整个月都在）前面
     wrap(paydayCard(), payday(d, today()).waiting.some((x) => x.late) ? 'warn' : 'accent', 'wallet'), // 钱晚到了是琥珀色
     ...warn.map((x) => healthTodo(x, hl)),
+    adviceTodo(),
     wrap(medLowCard(), 'calm', 'shield'),
     wrap(milestoneCard(), 'accent', 'sparkle'),
   ].filter(Boolean);
@@ -2691,7 +2692,8 @@ const SUMMARY_HELP = [
     '怎么算的：两个模型预测每天的生活花销（网页里的贝叶斯模型，和每天在 GitHub 上跑的 Chronos-2），按每天预测得准不准打分、定权重；收入按以前到没到账估一个可能；再模拟几千种可能的未来，数一数有多少种碰到底线、专项按时留够。公式和你自己的参数在页面最下面「怎么算的」。',
     '图：实线是中位数（一半的可能比它高），深的阴影是 50% 的可能落在里面，浅的是 80%。虚线是底线：家庭存款 + 应急底线 + 医疗备用金。',
     '学费、住宿费、年费、人情这些专项到了日子就当花掉；暑假两个月没有收入。兼职、补助这种不一定有的钱不算。',
-    '首页「这个月还能花」下面一行也是这个模型：月底大约花多少、超预算的可能。同一天打开几次结果一样，记了新账才会变。']],
+    '首页「这个月还能花」下面一行也是这个模型：月底大约花多少、超预算的可能。同一天打开几次结果一样，记了新账才会变。',
+    '建议只在有用时出现：专项按时留够的可能不到 90%、碰到底线的可能超过 5% 时，算出每月少多少刚好够；记满 45 天以后，哪一块预算明显定宽了或定紧了也会说。首页「要做的事」里会提一句，点「做完了」这个预算月就不再提（换了别的建议会再出现）。']],
   ['翻看', ['左右箭头看以前的。']],
   ['钱都在哪', ['右上角点「钱都在哪」，整页翻过来，看每一类钱有多少、存到哪了；再点「总结」翻回来。']],
 ];
@@ -2808,6 +2810,36 @@ function forecasts() {
   return fcMemo.v;
 }
 const aheadForecast = () => { const v = forecasts(); return (v.ahead ||= simulateAhead(store.data, today(), { fc: v.fc, score: v.score, rate: usdRate() })); };
+// 建议（第二批）：要多跑几次模拟，首页不在画页面时算——先画，空下来再算，有建议才重画一次
+const forecastAdvice = () => { const v = forecasts(); return (v.advice ||= adviceItems(store.data, today(), aheadForecast(), { fc: v.fc, score: v.score, rate: usdRate() })); };
+let advicePending = false;
+function adviceLater() {
+  const v = forecasts();
+  if (v.advice) return v.advice;
+  if (!advicePending) {
+    advicePending = true;
+    setTimeout(() => {
+      advicePending = false;
+      // 正在打字、开着弹出框时不重画（下次画页面时就会出现）
+      const busy = document.querySelector('.sheet-overlay') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+      if (forecastAdvice().length && !busy && /^#\/?$/.test(window.location.hash || '#/')) render();
+    }, 300);
+  }
+  return [];
+}
+// 首页「要做的事」里一行：有建议、这个预算月没点过「知道了」（换了建议会再出现）
+function adviceTodo() {
+  const items = adviceLater();
+  if (!items.length) return null;
+  const p = periodFor(store.data, today());
+  const sig = `${p.start}|${items.map((x) => x.key).join(',')}`;
+  if (store.data.todoDone?.forecast === sig) return null;
+  const row = todoItem(items.some((x) => x.tone === 'warn') ? 'warn' : 'calm', 'chart',
+    h('a', { class: 'todo-tap', href: '#/summary?mode=ahead' }, h('span', { class: 'todo-body' },
+      h('span', { class: 'todo-title' }, '预测有建议'), h('span', { class: 'todo-text' }, items.length > 1 ? `${items[0].short}，还有 ${items.length - 1} 条` : items[0].short))));
+  row.append(doneButton('预测的建议', (data) => { data.todoDone = { ...(data.todoDone || {}), forecast: sig }; }));
+  return row;
+}
 // 概率写法：不到 1%、超过 99%，其余取整
 const pct = (p) => (p < 0.005 ? '不到 1%' : p > 0.995 ? '超过 99%' : `${Math.round(p * 100)}%`);
 
@@ -2858,7 +2890,7 @@ function aheadView(d, head, seg) {
     h('div', { class: 'rep-kpis' },
       kpi('现在存款', money(s.now)),
       kpi(`${aheadMonth(lastEnd)} · 中位数`, money(end.q[2])),
-      kpi('80% 的范围', `${jarMoney(end.q[0])}～${jarMoney(end.q[4]).replace('¥', '')}`, 'small-num'),
+      kpi('80% 的范围', `${jarMoney(end.q[0])}～${end.q[4] < 0 ? jarMoney(end.q[4]) : jarMoney(end.q[4]).replace('¥', '')}`, 'small-num'),
       kpi('碰到底线的可能', pct(s.pBelow), risky ? 'warn' : '')),
     s.days < 30 ? h('p', { class: 'muted small' }, `才记了 ${s.days} 天，主要还是按预算和收入计划估的；记得越久，范围越准。`) : null);
 
@@ -2895,7 +2927,15 @@ function aheadView(d, head, seg) {
         h('span', { class: 'muted small' }, money(g.target)));
     })) : null;
 
-  return h('div', { class: 'report ahead' }, head, seg, mast, top, chart, bigDays, goalCard, howCard(v, s));
+  // 建议（只在有用时）+ 一年后的不确定从哪来
+  const advice = forecastAdvice();
+  const unc = end.q[4] - end.q[0] >= 1000 ? (v.unc ??= uncertaintySources(d, t, { fc: v.fc, score: v.score, rate: usdRate() })) : null;
+  const uncLine = unc && Math.max(unc.income, unc.spend) >= 0.5
+    ? `一年后存款为什么有这么宽的范围：大约 ${pct(unc.income)} 来自收入到不到账${unc.irregular.length ? `（主要是不定时的${unc.irregular.map((x) => `「${x}」`).join('、')}）` : ''}，${pct(unc.spend)} 来自每月花多少。` : null;
+  const adviceCard = advice.length || uncLine ? repSection(advice.length ? '建议' : '分析',
+    advice.map((x) => h(x.href ? 'a' : 'div', { class: `advice-row tone-${x.tone}`, href: x.href }, h('span', { class: 'advice-dot' }), h('span', { class: 'grow' }, x.text))),
+    uncLine ? h('p', { class: 'muted small advice-note' }, uncLine) : null) : null;
+  return h('div', { class: 'report ahead' }, head, seg, mast, top, adviceCard, chart, bigDays, goalCard, howCard(v, s));
 }
 
 // 怎么算的（用户选的：写出方法名和公式，带上他自己的参数；只说明，不教）
@@ -2936,7 +2976,13 @@ function howCard(v, s) {
       `模拟 ${s.paths} 条可能的未来。每条先抽一个 P 和每笔收入的 p，再一个月一个月走：收入、生活花销（一个月的和，用 P 的均值和方差做正态近似）、订阅预算、到日子的专项。`,
       '规矩和网站一样：生活费省下的进心愿基金（满 1 万的进存款），超了先扣心愿基金（留 100）再扣存款；月底按 家庭 → 应急 → 医疗 → 专项 → 自由 分，自由存款满了封存。',
       f('P(碰到底线) = 有哪个月底 存款 < 家庭 + 应急 + 医疗 的路径 ÷ 全部路径'),
-      '随机数按日子定种子：同一天打开几次结果一样，记了新账才会变。'));
+      '随机数按日子定种子：同一天打开几次结果一样，记了新账才会变。'),
+    block('七、建议怎么来的（只在有用时出）',
+      `敏感性分析：专项按时留够的可能低于 ${pct(ON_TIME)}、或者碰到底线的可能高于 ${pct(BELOW_MAX)} 时，用二分法找「从下个月起每月少多少」刚好够（10 块一档，同一组随机数，结果随它单调）。先试只把预算调低（你本来就花不到预算时，省下的就进存款），不够再试「少花 + 预算一起调低」。`,
+      f('c* = min { c : P(按时留够 | 每月 −c) ≥ 90% }'),
+      `预算的可信区间（记满 ${CRED_DAYS} 天才看）：每一组每天花多少，用贝叶斯自助法（Dirichlet(1, …, 1) 权重）抽 2000 次日均 × 30.44，得到每月的 95% 区间；低于预算的可能 ≥ 95% 而且区间上边不到预算的九成，建议调低；超过预算的可能 ≥ 90%，提醒一句。`,
+      '方差分解：一年后存款的方差里，把收入固定成「金额 × 可能」再模拟一次、把花销固定成后验均值再模拟一次，看方差各少了多少：',
+      f('收入的份额 = 1 − Var(固定收入) / Var(全部)，花销的份额 = 1 − Var(固定花销) / Var(全部)')));
 }
 
 // ---------- 月度财务报表（2026-10-25，替换原来的月总结） ----------
@@ -4939,7 +4985,7 @@ function jarSvg(fill, { sealed = false, warn = false, color = 'var(--accent)' } 
   return el;
 }
 // 罐子下面的金额：1 万以上写「¥2.6万」
-const jarMoney = (n) => (Math.abs(n) >= 10000 ? `¥${(Math.round(n / 1000) / 10).toLocaleString('zh-CN')}万` : money(n));
+const jarMoney = (n) => (Math.abs(n) >= 10000 ? `${n < 0 ? '−' : ''}¥${(Math.round(Math.abs(n) / 1000) / 10).toLocaleString('zh-CN')}万` : money(n));
 let moneyOpen = null; // 展开的是哪个罐子（只在内存）
 
 function moneyDetail(title, lines, rows = [], extra = null) {

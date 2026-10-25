@@ -640,4 +640,57 @@ test('往后蒙特卡洛：收入几乎一定到时中位数和按计划一样�
   assert.ok(fc.simulateAhead(poor, T, { paths: 1000 }).pBelow > 0.99);
 });
 
+test('建议·敏感性分析：专项来不及时，二分法找出每月最少要少花多少（再少 10 块就不够）；只调预算没用时说要少花；一切正常时没有建议', () => {
+  // 每天正好花 74（差不多就是预算），工资每月 1 号都到了
+  const d = dailyBook(74);
+  for (const x of ['2026-08-01', '2026-09-01', '2026-10-01']) d.tx.push(inc(x, 5000));
+  d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 1 号' }];
+  d.goals = [{ id: 'g1', name: '买电脑', target: 28000, by: '2027-06-30', createdAt: '2026-08-01' }];
+  const s = fc.simulateAhead(d, T, { paths: 1000 });
+  const ok = (x) => x.goals.find((y) => y.id === 'g1').pOnTime >= 0.9;
+  assert.ok(!ok(s));
+  assert.equal(fc.cutNeeded(d, T, {}, ok), null); // 花的和预算差不多：只调预算没用
+  const r = fc.cutNeeded(d, T, {}, ok, { spend: true });
+  assert.ok(r && r.cut > 0 && r.cut <= 1150, JSON.stringify(r?.cut));
+  assert.ok(ok(r.sim));
+  assert.ok(!ok(fc.simulateAhead(d, T, { paths: fc.ADVICE_PATHS, cut: r.cut - 10, spendCut: true })));
+  const item = fc.adviceItems(d, T, s).find((x) => x.key === 'goal-g1');
+  assert.ok(item.text.includes(`每月少花 ¥${r.cut.toLocaleString('zh-CN')}`), item.text);
+  d.goals[0].target = 100000; // 少花一半也不够
+  assert.ok(fc.adviceItems(d, T, fc.simulateAhead(d, T, { paths: 1000 })).find((x) => x.key === 'goal-g1').text.includes('少花一半也到不了'));
+  // 本来就花得少（每天 30）：只调预算就够
+  const thrifty = dailyBook(30);
+  for (const x of ['2026-08-01', '2026-09-01', '2026-10-01']) thrifty.tx.push(inc(x, 5000));
+  thrifty.incomePlan = d.incomePlan;
+  thrifty.goals = [{ id: 'g1', name: '买电脑', target: 28000, by: '2027-06-30', createdAt: '2026-08-01' }];
+  const ts = fc.simulateAhead(thrifty, T, { paths: 1000 });
+  if (!ok(ts)) assert.ok(fc.adviceItems(thrifty, T, ts).find((x) => x.key === 'goal-g1').text.includes('把生活预算每月调低'));
+  const fine = savingsBook();
+  fine.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 1 号' }];
+  assert.deepEqual(fc.adviceItems(fine, T, fc.simulateAhead(fine, T, { paths: 1000 })), []);
+});
+
+test('建议·预算的可信区间：吃饭每天都花 40（一个月约 1218）→ 低于 1500 几乎一定，建议调到 1250；记得少（< 45 天）或这一组几乎没花不说', () => {
+  const d = dailyBook(40);
+  const cred = fc.budgetCredible(d, T);
+  const food = cred.find((x) => x.group === 'food');
+  near(food.mean, 40 * 365.25 / 12, 0.5);
+  assert.equal(food.pUnder, 1);
+  assert.equal(cred.find((x) => x.group === 'daily'), undefined);
+  const item = fc.adviceItems(d, T, { pBelow: 0, goals: [] }).find((x) => x.key === 'budget-food');
+  assert.ok(item.text.includes('预算调到 ¥1,250'), item.text);
+  const short = dailyBook(40); short.openingDate = '2026-09-01';
+  assert.deepEqual(fc.budgetCredible(short, T), []);
+  const over = dailyBook(80); // 一个月约 2435，预算 1500
+  assert.equal(fc.adviceItems(over, T, { pBelow: 0, goals: [] }).find((x) => x.key === 'budget-food').tone, 'warn');
+});
+
+test('建议·方差分解：有不定时收入时，一年后存款的不确定大部分来自收入；两块加起来不超过 1', () => {
+  const d = savingsBook();
+  d.incomePlan = [{ name: '补贴', amount: 4000, category: 'i-job' }];
+  const u = fc.uncertaintySources(d, T);
+  assert.ok(u.income > 0.8 && u.income + u.spend <= 1 + 1e-9, JSON.stringify(u));
+  assert.deepEqual(u.irregular, ['补贴']);
+});
+
 console.log(`\n${n} 项通过`);
