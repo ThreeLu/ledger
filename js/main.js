@@ -2781,7 +2781,7 @@ function summaryView(q) {
       weekHead(ws),
       h('div', { class: 'card' }, h('h3', {}, '每天的生活花销'),
         barChart(ws.days.map((x, i) => ({ label: `周${WEEKDAYS[i]}`, v: x.v, color: x.v > ws.perDay ? 'var(--amber)' : 'var(--accent)' })),
-          { line: ws.perDay, lineLabel: `每天预算 ${money(ws.perDay)}`, title: '每天的生活花销' })),
+          { line: ws.perDay, lineLabel: `预算 ${money(ws.perDay)}`, title: '每天的生活花销' })),
       h('div', { class: 'card' }, h('h3', {}, '花在哪了'),
         ws.st.total ? spendDonut(ws.st, groups, { sub: '这周花销', title: '花在哪了', extra: (g) => arrow(ws.st.byGroup[g.id], ws.prev.byGroup[g.id]) })
           : h('p', { class: 'muted small' }, '这周还没有花销。')),

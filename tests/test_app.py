@@ -510,6 +510,11 @@ def _(c):
     c.go("#/summary")
     expect(p.get_by_role("img", name="每天的生活花销")).to_be_visible()
     expect(p.locator(".summary-head")).to_contain_text("这周")
+    # 这周没有「下一周」：占位的那个不显示（2026-10-25 样式被误删过，变成一个白圆圈）
+    expect(p.locator(".period-nav .ghost")).to_be_hidden()
+    expect(p.get_by_role("img", name="每天的生活花销")).to_contain_text("预算 ¥")
+    expect(p.get_by_role("img", name="每天的生活花销")).not_to_contain_text("每天预算")
+    p.screenshot(path=ART / "summary-week.png")
     # 最上面那张：大字花了多少、和计划比的标签和进度条、上周多少（先加两笔，看完还原）
     d0 = c.data()
     d = json.loads(json.dumps(d0))

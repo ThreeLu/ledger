@@ -115,6 +115,10 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   background: var(--card); color: var(--accent); display: grid; place-items: center;
   box-shadow: var(--shadow); cursor: pointer; min-height: 0;
 }
+/* 总结页的「‹ 上一周 ›」；没有下一个时占个位、不显示 */
+.period-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.period-nav .icon-btn { font-size: 24px; flex: none; }
+.icon-btn.ghost { visibility: hidden; }
 
 .card { background: var(--card); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
 
