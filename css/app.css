@@ -816,4 +816,10 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 .sim-actions .sim-sell { background: var(--down); color: #fff; }
 .sim-review p { line-height: 1.7; margin: 0 0 8px; }
 .sim-look textarea { margin-top: 8px; }
+.sim-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 6px; }
+.sim-key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; background: var(--c); }
+.sim-key:not(:first-child) { margin-left: 8px; }
+.sim-key.dot { width: 9px; height: 9px; border-radius: 50%; }
+.sim-bench { margin-bottom: 4px; }
+.chip.sim-sure { min-width: 44px; justify-content: center; }
 .strong { font-weight: 600; }

@@ -17,7 +17,7 @@ import { weekOf, weekSummary, monthSummary, yearSummary, wishMonth } from './sum
 import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
-import { START_CASH, HOLD, holdName, LOOK, lookName, zoned, bjDate, marketState, marketOf, tPlus0, lot, fees, currentGame, cash, positions, checkOrder, maxBuy, worth, worthSeries, lookbackDue, reviewDue } from './sim.js';
+import { START_CASH, HOLD, holdName, SURE, BENCH, benchSeries, tradeMarks, LOOK, lookName, zoned, bjDate, marketState, marketOf, tPlus0, lot, fees, currentGame, cash, positions, checkOrder, maxBuy, worth, worthSeries, lookbackDue, reviewDue } from './sim.js';
 import { fetchQuotes, fetchDaily, searchStocks } from './quotes.js';
 import { icon } from './icons.js';
 import { solarTerm, greeting } from './solar.js';
@@ -1390,7 +1390,9 @@ const SIM_HELP = [
     '买按「卖一」价成交，卖按「买一」价成交。涨停时没人卖、买不到；跌停时没人买、卖不出去。',
     '手续费：A 股每笔最低 5 元，股票卖出另收千分之 0.5 印花税；美股每笔大约 2 美元。']],
   ['颜色', ['红色是涨，绿色是跌，和国内的炒股软件一样。']],
-  ['买卖的时候', ['写一句为什么，选打算拿多久。点「下一步」后 AI 会问一两句，可以答，也可以不答。']],
+  ['买卖的时候', ['写一句为什么，选打算拿多久，点一下有几成把握（1 没底，5 很有把握）。点「下一步」后 AI 会问一两句，可以答，也可以不答。']],
+  ['两条线', ['「一共」下面的图里，蓝线是：如果开局时把钱全买成沪深 300 ETF、一直不动，现在值多少。比一比，看自己挑的有没有比它好。']],
+  ['股票页的圆点', ['走势图上的红点是你买的那天，绿点是你卖的那天。']],
   ['回头看', ['卖出一周后、买入一个月后，会问一句当时想对了没有。']],
   ['复盘', ['每个月初 AI 自动写上个月的复盘；想复盘的时候也可以点「现在复盘」。']],
   ['导出', ['「导出给 ChatGPT」把全部记录和一段问题复制好，打开 ChatGPT 粘贴就行。']],
@@ -1468,7 +1470,7 @@ function simView() {
   }
   const rate = usdRate();
   const look = lookbackDue(sim, bjDate());
-  needQuotes([...positions(sim, g.id).map((p) => p.sym), ...d.simWatch.map((w) => w.sym), look?.sym].filter(Boolean));
+  needQuotes([...positions(sim, g.id).map((p) => p.sym), ...d.simWatch.map((w) => w.sym), look?.sym, BENCH.sym].filter(Boolean));
   const w = worth(sim, g.id, simQ, rate);
   const due = reviewDue(sim, bjDate());
   if (due && !simBusy.has(`review:${due}`) && !simReviewFailed.has(due)) simReview(due);
@@ -1509,6 +1511,12 @@ function simView() {
     h('p', { class: 'center small' }, h('button', { class: 'link', onclick: () => restartGame(g, w) }, '重开一局')));
 }
 
+// 对照：开局时的钱一直拿着沪深 300，这些天每天值多少；还没读到是 null
+function simBench(g, dates) {
+  const rows = needDaily(BENCH.k, { days: 800, from: addDays(g.start, -10), adjust: 'qfq' });
+  return rows?.length ? benchSeries(rows, g.start, g.cash, dates, bjDate(), simQ[BENCH.sym]?.price) : null;
+}
+
 function worthCard(sim, g, w, rate) {
   const gain = w.total - w.start;
   const syms = [...new Set(store.data.simTrades.filter((t) => t.game === g.id).map((t) => t.k))];
@@ -1521,13 +1529,20 @@ function worthCard(sim, g, w, rate) {
   }
   const live = Object.fromEntries(Object.entries(simQ).map(([s, q]) => [s, q.price]));
   const series = ready ? worthSeries(sim, g.id, closes, rate, bjDate(), live) : [];
+  const bench = simBench(g, series.length ? series.map((x) => x[0]) : [bjDate()]);
+  const benchNow = bench?.at(-1)?.[1];
+  const diff = benchNow ? w.total - benchNow : 0;
   return h('div', { class: 'card sim-worth' },
     h('div', { class: 'muted small' }, '一共'),
     bigMoney(w.total),
     h('div', { class: `sim-gain ${upDown(gain)}` }, `${simSigned(gain, exact)} · ${pctText(w.pct)}`),
     h('div', { class: 'muted small' }, `现金 ${exact(w.cash)} · 持有 ${exact(w.hold)}`),
-    series.length >= 2 ? lineChart([{ values: series.map((x) => x[1]), color: 'var(--accent)' }, { values: series.map(() => w.start), color: 'var(--muted)', dashed: true }],
+    series.length >= 2 ? lineChart([{ values: series.map(() => w.start), color: 'var(--muted)', dashed: true },
+      ...(bench ? [{ values: bench.map((x) => x[1]), color: 'var(--blue)' }] : []), { values: series.map((x) => x[1]), color: 'var(--accent)' }],
       { tight: true, height: 120, title: '每天一共值多少', fmt: (v) => String(Math.round(v)), xLabels: [[0, md(series[0][0])], [series.length - 1, '今天']] }) : null,
+    series.length >= 2 && bench ? h('div', { class: 'muted small sim-legend' }, h('span', { class: 'sim-key', style: '--c:var(--accent)' }), '我的', h('span', { class: 'sim-key', style: '--c:var(--blue)' }), '一直拿沪深 300') : null,
+    benchNow ? h('div', { class: 'small sim-bench' }, `一直拿沪深 300：${exact(benchNow)} · `,
+      h('span', { class: upDown(diff) }, Math.abs(diff) < 0.5 ? '和它差不多' : `你比它${diff > 0 ? '多' : '少'} ${exact(Math.abs(diff))}`)) : null,
     h('div', { class: 'muted small' }, `从 ${md(g.start)}开始 · 起始 ${exact(w.start)}`));
 }
 
@@ -1550,6 +1565,7 @@ function tradeSheet(t) {
       row(t.side === 'buy' ? '一共花了' : '一共拿回', `${exact(t.cny)}${marketOf(t.sym) === 'US' ? `（1 美元按 ¥${t.rate.toFixed(2)}）` : ''}`),
       row('为什么', t.reason),
       row('打算拿多久', holdName(t.hold)),
+      row('有几成把握', t.sure ? `${t.sure} / 5` : ''),
       (t.ask || []).map((x) => h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `AI：${x.q}`), h('div', {}, x.a || '（没答）'))),
       t.look && !t.look.skip ? h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `回头看 · ${md(t.look.at.slice(0, 10))}`), h('div', {}, [lookName(t.look.verdict), t.look.text].filter(Boolean).join('：'))) : null,
       h('p', {}, h('a', { href: `#/sim/s/${t.sym}`, onclick: () => document.querySelector('.sheet-overlay')?.remove() }, `看看 ${t.name} →`))),
@@ -1610,6 +1626,7 @@ function simStockView(sym) {
   const watching = d.simWatch.find((w) => w.sym === sym);
   const rows = needDaily(s.k, { days: simRange });
   const mine = d.simTrades.filter((t) => t.sym === sym).sort((a, b) => b.at.localeCompare(a.at));
+  const marks = rows ? tradeMarks(rows, mine).map((m) => ({ i: m.i, color: m.side === 'buy' ? 'var(--up)' : 'var(--down)' })) : [];
   const l = lot(sym);
   const rules = [st.text, tPlus0(s) ? '当天买当天能卖' : '今天买的明天才能卖', l.min === l.step ? `${l.min} ${l.unit}起` : `最少 ${l.min} 股`];
   return h('div', {},
@@ -1622,7 +1639,8 @@ function simStockView(sym) {
       h('div', { class: 'segmented sim-range' }, [[22, '1 个月'], [66, '3 个月'], [250, '1 年']].map(([n, t]) =>
         h('button', { class: `seg${simRange === n ? ' on' : ''}`, onclick: () => { simRange = n; render(); } }, t))),
       rows && rows.length >= 2 ? lineChart([{ values: rows.map((r) => r[1]), color: 'var(--accent)' }],
-        { tight: true, height: 140, title: '走势', fmt: (v) => v.toFixed(v >= 1000 ? 0 : v >= 100 ? 1 : v >= 10 ? 2 : 3), xLabels: [[0, md(rows[0][0])], [rows.length - 1, md(rows.at(-1)[0])]] }) : h('p', { class: 'muted small' }, rows ? '没有走势' : '正在读走势…'),
+        { tight: true, height: 140, title: '走势', marks, fmt: (v) => v.toFixed(v >= 1000 ? 0 : v >= 100 ? 1 : v >= 10 ? 2 : 3), xLabels: [[0, md(rows[0][0])], [rows.length - 1, md(rows.at(-1)[0])]] }) : h('p', { class: 'muted small' }, rows ? '没有走势' : '正在读走势…'),
+      marks.length ? h('div', { class: 'muted small sim-legend' }, h('span', { class: 'sim-key dot', style: '--c:var(--up)' }), '我买的那天', h('span', { class: 'sim-key dot', style: '--c:var(--down)' }), '我卖的那天') : null,
       h('div', { class: 'muted small' }, rules.join(' · '))),
     pos ? h('div', { class: 'card' },
       h('h3', {}, '我持有'),
@@ -1679,6 +1697,10 @@ function orderSheet(s, side) {
   const holdChips = h('div', { class: 'chips' }, HOLD.map(([k, t]) => h('button', { type: 'button', class: 'chip', onclick: (e) => {
     hold = k; for (const c of holdChips.children) c.classList.toggle('on', c === e.currentTarget);
   } }, t)));
+  let sure = 0;
+  const sureChips = h('div', { class: 'chips' }, SURE.map((n) => h('button', { type: 'button', class: 'chip sim-sure', 'aria-label': `把握 ${n}`, onclick: (e) => {
+    sure = n; for (const c of sureChips.children) c.classList.toggle('on', c === e.currentTarget);
+  } }, String(n))));
   const reason = h('textarea', { rows: 3, 'aria-label': `为什么${verb}`, placeholder: side === 'buy' ? '一句话就行：一直在涨、听说不错、想试试……' : '一句话就行：涨够了、跌怕了、想换一只……' });
   const quick = h('div', { class: 'chips' },
     side === 'buy' ? [h('button', { type: 'button', class: 'chip', onclick: () => { qty.value = String(l.min); est(); } }, `${l.min} 股`),
@@ -1690,12 +1712,13 @@ function orderSheet(s, side) {
     side === 'sell' && pos && pos.sellable < pos.qty ? h('p', { class: 'small soon' }, `今天买的 ${pos.qty - pos.sellable} 股明天才能卖`) : null,
     h('label', {}, `为什么${verb}`, reason),
     side === 'buy' ? [h('div', { class: 'small strong' }, '打算拿多久'), holdChips] : null,
+    h('div', { class: 'small strong' }, '有几成把握', h('span', { class: 'muted' }, ' · 1 没底，5 很有把握')), sureChips,
     err);
   est();
   const body = h('div', {}, step1);
   let step = 1;
   let asks = [];
-  const order = () => ({ qty: Number(qty.value), reason: reason.value.trim(), hold: side === 'buy' ? hold : undefined });
+  const order = () => ({ qty: Number(qty.value), reason: reason.value.trim(), hold: side === 'buy' ? hold : undefined, sure });
   const close = openSheet({
     title: `${verb} ${s.name}`, body, confirmText: '下一步',
     onConfirm: async () => {
@@ -1707,6 +1730,7 @@ function orderSheet(s, side) {
         if (chk.error) { err.textContent = chk.error; return false; }
         if (!o.reason) { err.textContent = `写一句为什么${verb}`; return false; }
         if (side === 'buy' && !hold) { err.textContent = '选一下打算拿多久'; return false; }
+        if (!sure) { err.textContent = '点一下有几成把握'; return false; }
         step = 2;
         const btn = document.querySelector('.sheet .actions button');
         btn.textContent = `确认${verb}`;
@@ -1733,7 +1757,7 @@ function orderSheet(s, side) {
       const now = new Date();
       await save(`模拟：${verb} ${s.name} ${o.qty} 股`, (data) => {
         data.simTrades.push({ id: newId('m'), game: g.id, at: now.toISOString(), date: bjDate(now), sym: s.sym, k: s.k, code: s.code, name: s.name, kind: s.kind || '',
-          side, qty: o.qty, price: chk.price, fee: chk.fee, rate: chk.rate, cny: chk.cny, reason: o.reason, ...(o.hold ? { hold: o.hold } : {}),
+          side, qty: o.qty, price: chk.price, fee: chk.fee, rate: chk.rate, cny: chk.cny, reason: o.reason, ...(o.hold ? { hold: o.hold } : {}), sure: o.sure,
           ask: asks.map((x) => ({ q: x.q, a: x.box.value.trim() })) });
       });
       toast(`${verb}了 ${o.qty} 股 ${s.name}，成交价 ${px(s.sym, chk.price)}`);
@@ -1757,7 +1781,7 @@ async function simAsk(s, side, o, q) {
 不评价对错，不建议买不买，不讲课。用大白话，每个问题 40 字以内，语气温和。
 只回 JSON：{"questions": ["…"]}`;
   const user = [`股票：${s.name}（${s.code}，${mktName(s)}）`, `现价 ${q.price}，今天 ${q.pct}%`, `${side === 'buy' ? '买' : '卖'} ${o.qty} 股`,
-    `他的理由：${o.reason}`, o.hold ? `打算拿：${holdName(o.hold)}` : null,
+    `他的理由：${o.reason}`, o.hold ? `打算拿：${holdName(o.hold)}` : null, `把握：${o.sure}/5（1 没底，5 很有把握）`,
     `现在：一共 ${w.total} 元，现金 ${w.cash} 元，持有 ${w.pos.map((p) => `${p.name} ${p.qty} 股`).join('、') || '无'}`,
     before.length ? `这只以前的买卖：\n${before.join('\n')}` : '以前没买卖过这只',
     others.length ? `最近别的买卖：\n${others.join('\n')}` : null].filter(Boolean).join('\n');
@@ -1799,6 +1823,8 @@ function simRecordText({ from = '', to = '', reviews = false } = {}) {
   if (g) {
     const w = worth(sim, g.id, simQ, rate);
     lines.push(`## 现在这一局（${g.start} 开始，起始 ${g.cash} 元）`, `一共 ${w.total} 元（${pctText(w.pct)}），现金 ${w.cash} 元`);
+    const b = simBench(g, [bjDate()])?.[0]?.[1];
+    if (b) lines.push(`对照：如果开局时 ${g.cash} 元全买沪深 300 ETF 一直不动，现在约 ${b} 元（${pctText(b / g.cash - 1)}）`);
     for (const p of w.pos) lines.push(`- 持有 ${p.name}（${p.sym.replace(/^(sh|sz|bj|us)/, '')}，${mktName(p)}）${p.qty} 股，成本 ${p.cost} 元，现在 ${p.value} 元（${pctText(p.pct)}）`);
   }
   for (const old of sim.games.filter((x) => x.end)) lines.push(`以前一局：${old.start} 到 ${old.end}，${old.cash} 元 → ${old.endValue} 元`);
@@ -1806,7 +1832,7 @@ function simRecordText({ from = '', to = '', reviews = false } = {}) {
   lines.push('', `## 买卖记录（${trades.length} 笔）`);
   for (const t of trades) {
     lines.push(`- ${timeText(t.at)}（${t.date.slice(0, 4)}）${t.side === 'buy' ? '买' : '卖'} ${t.name}（${t.code || t.sym}，${mktName(t)}）${t.qty} 股 @ ${curSign(t.sym)}${t.price}，手续费 ${t.fee}，合 ${t.cny} 元`);
-    lines.push(`  理由：${t.reason}${t.hold ? `；打算拿 ${holdName(t.hold)}` : ''}`);
+    lines.push(`  理由：${t.reason}${t.hold ? `；打算拿 ${holdName(t.hold)}` : ''}${t.sure ? `；把握 ${t.sure}/5` : ''}`);
     for (const x of t.ask || []) lines.push(`  AI 问：${x.q} 我答：${x.a || '（没答）'}`);
     if (t.look && !t.look.skip) lines.push(`  回头看（${t.look.at.slice(0, 10)}）：${lookName(t.look.verdict)}${t.look.text ? `，${t.look.text}` : ''}${t.look.price ? `；那时价格 ${t.look.price}` : ''}`);
   }
@@ -1840,7 +1866,7 @@ async function simReview(month) {
   wait && document.body.append(wait);
   try {
     const system = `你在帮一个刚开始学股票的大学生复盘他的模拟交易（假钱，规则按真的）。他完全不懂股票，想一点一点积累认识。
-根据下面的记录，用大白话写一段复盘：这段时间做了什么（几笔、买了哪些类型）；他的理由大多是哪一类；说的打算（拿多久）和实际做的一不一致；有没有反复出现的习惯（比如涨了才买、跌一点就卖、很分散或很集中、频繁买卖）；结果怎样（赚亏只当事实说）。最后留一两个值得他自己想的问题。
+根据下面的记录，用大白话写一段复盘：这段时间做了什么（几笔、买了哪些类型）；他的理由大多是哪一类；说的打算（拿多久）和实际做的一不一致；有没有反复出现的习惯（比如涨了才买、跌一点就卖、很分散或很集中、频繁买卖）；把握大的那几笔是不是真的更好；结果怎样（赚亏只当事实说，也和一直拿沪深 300 比一比）。最后留一两个值得他自己想的问题。
 不讲课，不推荐具体股票，不说该买该卖。语气温柔、安静、不评判，不用「你值得」「加油」这类话。250～450 字，可以分几段。
 只回 JSON：{"text": "…"}`;
     const user = `${month ? `复盘 ${month}` : `复盘${from ? ` ${from} 以后` : '全部'}`}\n\n${simRecordText({ from, to })}`;
@@ -1879,11 +1905,11 @@ function simTradesView() {
 }
 
 const SIM_ASK = `我在用假钱做股票模拟交易（起始 1 万元人民币，规则按真的：A 股 T+1、100 股一手、有手续费；美股按汇率换算）。我完全不懂股票，想通过模拟一点一点积累认识，将来资产稳定了再用真钱投资。
-下面是我全部的记录：每一笔买卖、当时写的理由、打算拿多久、AI 当时问我的问题和我的回答、事后回头看的结论，还有我在观察的股票和以前的复盘。
+下面是我全部的记录：每一笔买卖、当时写的理由、打算拿多久、有几成把握（1～5）、AI 当时问我的问题和我的回答、事后回头看的结论，还有我在观察的股票和以前的复盘。
 
 请你：
 1. 看看我买卖背后的逻辑是什么，有没有一贯的风格；
-2. 指出我反复出现的习惯，好的和不好的都说；
+2. 指出我反复出现的习惯，好的和不好的都说；看看我有把握的时候是不是真的更准，我挑的有没有比一直拿沪深 300 好；
 3. 用大白话解释记录里我可能没弄懂的地方；
 4. 问我几个问题，帮我想清楚下一步。
 不要直接推荐买哪只股票。`;

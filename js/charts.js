@@ -71,7 +71,8 @@ export function donut(segments, { center = '', sub = '', title = '' } = {}) {
 }
 
 // 折线图：series = [{ values: [数], color, dashed? }]，xLabels 只标头、中、尾
-export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true, fmt = short, tight = false } = {}) {
+// marks = [{ i, color }]：在第一条线的第 i 个点上画小圆点（模拟交易的买卖点）
+export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true, fmt = short, tight = false, marks = [] } = {}) {
   const top = 14;
   const bottom = 22;
   const left = 34;
@@ -97,6 +98,10 @@ export function lineChart(series, { xLabels = [], height = 160, title = '', from
     svg.append(s('path', { d, fill: 'none', style: `stroke:${ser.color}`, 'stroke-width': ser.dashed ? 1.5 : 2.5,
       'stroke-dasharray': ser.dashed ? '5 4' : null, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
     if (!ser.dashed && ser.values.length === 1) svg.append(s('circle', { cx: X(0), cy: Y(ser.values[0]), r: 3, style: `fill:${ser.color}` }));
+  }
+  for (const m of marks) {
+    const v = series[0].values[m.i];
+    if (v != null) svg.append(s('circle', { cx: X(m.i), cy: Y(v), r: 4.5, class: 'chart-mark', style: `fill:${m.color};stroke:var(--card)`, 'stroke-width': 2 }));
   }
   xLabels.forEach(([i, label]) => svg.append(s('text', { x: X(i), y: height - 6, 'text-anchor': i === 0 ? 'start' : i === n ? 'end' : 'middle', class: 'chart-label', text: label })));
   return svg;

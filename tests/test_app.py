@@ -150,7 +150,8 @@ def _(c):
     d["tx"] = []
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     p.reload()
-    expect(p.locator(".summary-title")).to_be_visible()
+    # 等重画好；不看「一切正常」那一行，月底前后 Apple ID 充值提醒会把它换掉
+    expect(p.locator(".spend-left")).to_be_visible()
 
 
 @step("记支出：金额、类别、账户；存成快捷，再点快捷记一笔")
@@ -1388,6 +1389,7 @@ SIM = {
     "sh600001": {"name": "某某股份", "code": "600001", "price": 10.5, "date": "2026-10-26", "kind": "GP-A"},
     "sz159001": {"name": "某某纳指ETF", "code": "159001", "price": 2.0, "date": "2026-10-26", "kind": "QDII-ETF"},
     "usABC": {"name": "某美股", "code": "ABC.OQ", "price": 100.0, "date": "2026-10-26", "kind": "GP"},
+    "sh510300": {"name": "沪深300ETF", "code": "510300", "price": 4.0, "date": "2026-10-26", "kind": "ETF"},
 }
 
 
@@ -1785,6 +1787,8 @@ def _(c):
     p.get_by_role("button", name="开始").click()
     expect(p.locator(".sim-worth .big-num")).to_have_text("¥10,000")
     expect(p.locator(".sim-markets")).to_contain_text("A 股开盘中")
+    # 对照：10/25 收盘 4.05 全买沪深 300，现在 4.00
+    expect(p.locator(".sim-bench")).to_contain_text("一直拿沪深 300：¥9,876.54 · 你比它多 ¥123.46")
     # 搜一只、打开
     p.get_by_role("button", name="搜一只").click()
     p.get_by_label("搜股票").fill("600001")
@@ -1800,13 +1804,20 @@ def _(c):
     sheet.get_by_role("button", name="下一步").click()
     expect(sheet).to_contain_text("最少买 100 股")
     sheet.get_by_label("买多少股").fill("200")
+    sheet.get_by_role("button", name="下一步").click()
+    expect(sheet).to_contain_text("点一下有几成把握")
+    sheet.get_by_role("button", name="把握 3").click()
+    sheet.get_by_label("买多少股").fill("200")
     expect(sheet).to_contain_text("手续费 ¥5.02")
     sheet.get_by_role("button", name="下一步").click()
     sheet.get_by_label("如果明天跌了 5%，你会怎么做？").fill("再等等")
     sheet.get_by_role("button", name="确认买").click()
     expect(p.locator(".sheet")).to_have_count(0)
     t = c.data()["simTrades"][0]
-    assert (t["side"], t["qty"], t["price"], t["fee"], t["cny"], t["hold"]) == ("buy", 200, 10.5, 5.02, 2105.02, "weeks"), t
+    assert (t["side"], t["qty"], t["price"], t["fee"], t["cny"], t["hold"], t["sure"]) == ("buy", 200, 10.5, 5.02, 2105.02, "weeks", 3), t
+    assert "把握：3/5" in LAST_AI[0]["messages"][-1]["content"]
+    expect(p.locator(".sim-quote .chart-mark")).to_have_count(1)
+    expect(p.locator(".sim-quote")).to_contain_text("我买的那天")
     assert t["ask"] == [{"q": "如果明天跌了 5%，你会怎么做？", "a": "再等等"}], t["ask"]
     assert "模拟交易" not in json.dumps(LAST_AI[0]["messages"][-1]) or "一直在涨" in LAST_AI[0]["messages"][-1]["content"]
     # 今天买的今天不能卖
@@ -1832,11 +1843,13 @@ def _(c):
     p.get_by_role("button", name="卖", exact=True).click()
     expect(sheet.get_by_label("卖多少股")).to_have_value("200")
     sheet.get_by_label("为什么卖").fill("涨够了")
+    sheet.get_by_role("button", name="把握 4").click()
     sheet.get_by_role("button", name="下一步").click()
     sheet.get_by_role("button", name="确认卖").click()
     expect(p.locator(".sheet")).to_have_count(0)
     sell = c.data()["simTrades"][1]
     assert (sell["side"], sell["price"], sell["fee"]) == ("sell", 10.99, 6.12), sell  # 买一价 10.99；佣金 5 + 过户费 0.02 + 印花税 1.10
+    expect(p.locator(".sim-quote .chart-mark")).to_have_count(2)
     # 美股：晚上开盘，按汇率换
     p.clock.set_fixed_time("2026-10-27T22:00:00+08:00")
     SIM["usABC"]["date"] = "2026-10-27"
@@ -1846,6 +1859,7 @@ def _(c):
     sheet.get_by_label("买多少股").fill("1")
     sheet.get_by_label("为什么买").fill("想试试美股")
     sheet.get_by_role("button", name="还不知道").click()
+    sheet.get_by_role("button", name="把握 1").click()
     sheet.get_by_role("button", name="下一步").click()
     sheet.get_by_role("button", name="确认买").click()
     expect(p.locator(".sheet")).to_have_count(0)
@@ -1871,7 +1885,7 @@ def _(c):
     with p.expect_download() as dl:
         p.get_by_role("button", name="下载成文件").click()
     text = Path(dl.value.path()).read_text(encoding="utf-8")
-    for want in ("不要直接推荐", "理由：一直在涨；打算拿 几周", "AI 问：如果明天跌了 5%", "回头看", "想对了，卖得刚好", "在观察的", "2026 年 10 月的复盘"):
+    for want in ("不要直接推荐", "理由：一直在涨；打算拿 几周；把握 3/5", "一直拿沪深 300", "对照：如果开局时", "AI 问：如果明天跌了 5%", "回头看", "想对了，卖得刚好", "在观察的", "2026 年 10 月的复盘"):
         assert want in text, want
     p.locator(".sheet").get_by_role("button", name="复制，去 ChatGPT").evaluate("b => b.closest('.sheet-overlay').remove()")
     # 模拟的钱不进账本

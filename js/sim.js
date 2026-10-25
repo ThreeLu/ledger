@@ -5,6 +5,10 @@ export const START_CASH = 10000;
 
 export const HOLD = [['days', '几天'], ['weeks', '几周'], ['months', '几个月'], ['years', '几年'], ['unknown', '还不知道']];
 export const holdName = (k) => HOLD.find((x) => x[0] === k)?.[1] || '';
+// 下单时点的「有几成把握」：1 没底 … 5 很有把握
+export const SURE = [1, 2, 3, 4, 5];
+// 对照：什么都不选，一直拿着沪深 300 ETF
+export const BENCH = { sym: 'sh510300', k: 'sh510300', name: '沪深 300 ETF' };
 export const LOOK = [['right', '想对了'], ['wrong', '想错了'], ['unsure', '说不清']];
 export const lookName = (k) => LOOK.find((x) => x[0] === k)?.[1] || '';
 
@@ -201,9 +205,40 @@ export function worthSeries(sim, game, closes, rate, today, live = {}) {
   return out;
 }
 function addDay(d) {
+  return addDays(d, 1);
+}
+export function addDays(d, n) {
   const x = new Date(`${d}T12:00:00Z`);
-  x.setUTCDate(x.getUTCDate() + 1);
+  x.setUTCDate(x.getUTCDate() + n);
   return x.toISOString().slice(0, 10);
+}
+
+// 对照线：开局那天把钱按前一天收盘价全换成沪深 300、一直不动，每天值多少。不算手续费和一手，看个大概
+// closes = [[日期, 收盘], …] 从小到大；live = 今天的实时价
+export function benchSeries(closes, start, money, dates, today, live = 0) {
+  if (!closes.length) return [];
+  const base = [...closes].reverse().find((r) => r[0] < start)?.[1] || closes[0][1];
+  return dates.map((d) => {
+    let p = d === today && live > 0 ? live : null;
+    if (p == null) for (const [day, close] of closes) { if (day > d) break; p = close; }
+    return [d, r2(money * (p ?? base) / base)];
+  });
+}
+
+// 走势图上的买卖点：每笔买卖落在哪一天（那天没开盘就落在下一个交易日），同一天同一边只标一次
+export function tradeMarks(rows, trades) {
+  if (!rows.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (const t of trades) {
+    if (t.date < rows[0][0]) continue;
+    let i = rows.findIndex((r) => r[0] >= t.date);
+    if (i < 0) i = rows.length - 1;
+    if (seen.has(`${i}${t.side}`)) continue;
+    seen.add(`${i}${t.side}`);
+    out.push({ i, side: t.side });
+  }
+  return out;
 }
 const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00:00Z`) - new Date(`${a}T12:00:00Z`)) / 86400000);
 
