@@ -1143,14 +1143,73 @@ def _(c):
     b = c.data()["budget"]
     assert (b["daily"], b["sub"], b["food"]) == (350, 150, 2000), b
     assert len(c.data()["budgetHistory"]) == 2
-    # 年度总结
+    # 年度报表：网页上四个数 + 图；表格只在 PDF 里；最下面三个导出
+    year = date.today().year
     c.go("#/summary?mode=year")
-    head = p.locator(".summary-head")
-    expect(head).to_have_attribute("aria-label", re.compile(f"^{date.today().year} 年收入"))
-    for text in ("这一年", "收入", "储蓄率", "计划存", "总资产"):
-        expect(head).to_contain_text(text)
-    expect(p.get_by_role("img", name="每月存下")).to_be_visible()
-    expect(p.get_by_text("花得最多的类别")).to_be_visible()
+    expect(p.locator(".rep-title")).to_have_text(f"{year} 年财务报表")
+    expect(p.locator(".rep-kpi")).to_have_count(4)
+    for img in ("每月收入、支出和储蓄率", "存钱计划", "每一块每个月用了预算的多少", "钱花在哪了", "每个月花在哪", "这一年每天的生活花销"):
+        expect(p.get_by_role("img", name=img)).to_be_visible()
+    for el in p.locator(".rep-table").all():
+        expect(el).to_be_hidden()
+    days = (date(year, 12, 31) - date(year, 1, 1)).days + 1
+    expect(p.locator(".year-cal rect")).to_have_count(days + 5 + 1)  # 每天一格 + 图例 5 格 + 今天描的一圈
+    expect(p.locator(".report")).not_to_contain_text("NaN")
+    assert p.evaluate("document.querySelector('.report').lastElementChild.classList.contains('rep-export')")
+    p.wait_for_timeout(600)  # 等淡入
+    p.screenshot(path=ART / "year.png", full_page=True)
+    # 一年的数对得上：每月加起来 = 全年
+    y = p.evaluate("""() => Promise.all([import('./js/report.js'), import('./js/money.js')]).then(([r, m]) => {
+      const d = JSON.parse(localStorage.getItem('ledger-cache')); const data = d.data || d;
+      return r.yearReport(data, new Date().getFullYear(), data.settings.usdRate || 7);
+    })""")
+    act = [m for m in y["months"] if m["active"]]
+    assert abs(sum(m["total"] for m in act) - y["key"]["total"]) < 0.05 and abs(sum(m["income"] for m in act) - y["key"]["income"]) < 0.05, act
+    assert abs(sum(x["end"] for x in y["purposes"]) - y["endNW"]["net"]) < 0.05
+    # PDF：表格都印出来
+    p.emulate_media(media="print")
+    for table in ("这一年", "每月收支", "按账户", "每月各块花了多少", "花得最多的类别", "附注"):
+        expect(p.get_by_role("table", name=table)).to_be_visible()
+    p.screenshot(path=ART / "year-print.png", full_page=True)
+    p.emulate_media(media="screen")
+    # Excel：总览、分表、每个月一张明细；数字是数字
+    import openpyxl
+    with p.expect_download() as dl:
+        p.get_by_role("button", name="导出 Excel").click()
+    assert dl.value.suggested_filename == f"财务报表-{year}.xlsx"
+    dl.value.save_as(ART / "year.xlsx")
+    wb = openpyxl.load_workbook(ART / "year.xlsx")
+    assert wb.sheetnames[:7] == ["总览", "每月各块花销", "预算用了几成", "类别", "家底", "每天生活花销", "附注"], wb.sheetnames
+    assert f"{date.today().month}月" in wb.sheetnames
+    assert wb["总览"]["A2"].value == "收入" and isinstance(wb["总览"]["B2"].value, (int, float)), wb["总览"]["B2"].value
+    month_sheet = wb[f"{date.today().month}月"]
+    assert month_sheet["A1"].value == "日期" and month_sheet.max_row > 1
+    # ChatGPT
+    p.get_by_role("button", name="导出给 ChatGPT").click()
+    with p.expect_download() as dl:
+        p.get_by_role("button", name="下载成文件").click()
+    text = Path(dl.value.path()).read_text(encoding="utf-8")
+    for want in (f"# {year} 年财务报表", "## 每月收支", "## 每月用了预算的几成", "## 家底", "不要推荐任何理财产品"):
+        assert want in text, want
+    p.locator(".sheet").get_by_role("button", name="取消").click()
+    # 月度报表也能导出 Excel
+    c.go("#/summary?mode=month")
+    with p.expect_download() as dl:
+        p.get_by_role("button", name="导出 Excel").click()
+    dl.value.save_as(ART / "month.xlsx")
+    wb = openpyxl.load_workbook(ART / "month.xlsx")
+    assert wb.sheetnames == ["总览", "家底", "预算", "类别", "每天生活花销", "明细"], wb.sheetnames
+    # AI 年度点评：第二年 1 月打开去年的，自动写一次、存下来
+    c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
+    p.clock.set_fixed_time(f"{year + 1}-01-05T12:00:00")
+    c.go(f"#/summary?mode=year&day={year}-12-31")
+    p.reload()
+    expect(p.locator(".rep-sec.letter .letter-text").first).to_be_visible(timeout=15000)
+    assert str(year) in (c.data().get("letters") or {}), list((c.data().get("letters") or {}).keys())
+    assert "一年结束了" in LAST_AI[0]["messages"][0]["content"]
+    p.clock.set_fixed_time(date.today().isoformat() + "T12:00:00")
+    c.go("#/")
+    p.reload()
 
 @step("最近记的搜索：全部时间里按名称、人名、金额、类别搜，显示合计")
 def _(c):
@@ -1992,7 +2051,7 @@ def _(c):
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     c.go("#/")
     p.reload()
-    p.locator(".recent-list .tx", has_text="返回测试").click()
+    c.recent("返回测试").first.click()  # 同一天记的多，最近 8 笔里不一定有它，用搜索找
     expect(p.locator(".page-head h1")).to_have_text("改一笔")
     expect(p.locator(".back-btn")).to_have_text("首页")
     p.screenshot(path=ART / "back-edit.png")

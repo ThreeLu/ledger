@@ -835,7 +835,15 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 .rep-head .rep-title { font-family: var(--serif); font-size: 24px; font-weight: 600; letter-spacing: 0.02em; line-height: 1.3; }
 .rep-conclusion { font-size: 15px; line-height: 1.6; margin: 10px 0 0; }
 .rep-head .advice { margin-top: 10px; }
-.rep-export { display: flex; gap: 8px; margin: 4px 0 8px; }
+.rep-export { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.rep-export button.wide { flex-basis: 100%; }
+/* 年度：预算格子（一行一块、一列一个月） */
+.rep-heat { display: grid; grid-template-columns: 44px repeat(12, 1fr); gap: 3px; align-items: center; margin: 6px 0; }
+.rep-heat-m { font-size: 10px; color: var(--muted); text-align: center; }
+.rep-heat-name { color: var(--muted); white-space: nowrap; overflow: hidden; }
+.rep-heat-cell { aspect-ratio: 1 / 1; border-radius: 4px; }
+.rep-heat-cell.off { background: var(--chip); opacity: .45; }
+.year-cal { margin-top: 2px; }
 /* 表格、明细只在存成 PDF 时印出来；网页上只看四个数和图 */
 @media screen { .rep-detail { display: none !important; } }
 .rep-head .rep-kpis { margin: 12px 0 0; }

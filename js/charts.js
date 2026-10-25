@@ -169,3 +169,74 @@ export function barsLine(months, { colorA = 'var(--sage)', colorB = 'var(--g-foo
   for (const [px, py] of pts) svg.append(s('circle', { cx: px, cy: py, r: 3, style: `fill:${lineColor};stroke:var(--card)`, 'stroke-width': 1.5 }));
   return svg;
 }
+
+// 堆叠柱：每一根是一个月，按块分颜色。cols = [{ label, parts: [{ v, color }] }]
+export function stackedBars(cols, { height = 160, title = '' } = {}) {
+  const top = 14;
+  const bottom = 22;
+  const max = Math.max(1, ...cols.map((c) => c.parts.reduce((a, p) => a + Math.max(0, p.v), 0)));
+  const y = (v) => ((height - top - bottom) * v) / max;
+  const slot = W / Math.max(1, cols.length);
+  const bw = Math.min(16, slot * 0.56);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart', role: 'img', 'aria-label': title });
+  const base = height - bottom;
+  svg.append(s('line', { x1: 0, x2: W, y1: base, y2: base, style: 'stroke:var(--line)', 'stroke-width': 1 }));
+  cols.forEach((c, i) => {
+    const x = slot * i + (slot - bw) / 2;
+    let at = base;
+    const parts = c.parts.filter((p) => p.v > 0);
+    parts.forEach((p, j) => {
+      const hgt = y(p.v);
+      at -= hgt;
+      // 每段之间留一道细缝；最上面一段圆角
+      svg.append(s('rect', { x, y: at, width: bw, height: Math.max(0.5, hgt - (j < parts.length - 1 ? 0.8 : 0)), rx: j === parts.length - 1 ? 2.5 : 0, style: `fill:${p.color}` }));
+    });
+    svg.append(s('text', { x: slot * i + slot / 2, y: height - 6, 'text-anchor': 'middle', class: 'chart-label', text: c.label }));
+  });
+  return svg;
+}
+
+// 一年的日历（像 GitHub 那样）：上半年、下半年各一排，一列是一周（周一在上），颜色越深那天花得越多。
+// 分五档，按这一年花过钱的日子分位数切。days = [{ day: 'YYYY-MM-DD', v, off }]（off：还没到 / 还没开始记账），today 那天描一圈
+export function yearCalendar(days, { today = '', title = '' } = {}) {
+  const left = 14;
+  const labelH = 13;
+  const gap = 2;
+  const halves = [days.filter((d) => d.day.slice(5, 7) <= '06'), days.filter((d) => d.day.slice(5, 7) > '06')].filter((x) => x.length);
+  const leadOf = (part) => (new Date(`${part[0].day}T12:00:00`).getDay() + 6) % 7;
+  const weeks = Math.max(...halves.map((part) => Math.ceil((leadOf(part) + part.length) / 7)));
+  const step = (W - left - 2) / weeks;
+  const size = step - gap;
+  const halfH = labelH + step * 7 + 8;
+  const legendH = size + 8;
+  const height = halfH * halves.length + legendH;
+  const vals = days.filter((d) => !d.off && d.v > 0).map((d) => d.v).sort((a, b) => a - b);
+  const q = (p) => vals[Math.min(vals.length - 1, Math.floor(p * vals.length))] ?? Infinity;
+  const cuts = [q(0.25), q(0.5), q(0.75)];
+  const level = (v) => (v <= 0 ? 0 : v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4);
+  const FILL = ['var(--chip)', 'color-mix(in srgb, var(--accent) 28%, var(--chip))', 'color-mix(in srgb, var(--accent) 50%, var(--chip))', 'color-mix(in srgb, var(--accent) 75%, var(--chip))', 'var(--accent)'];
+  const rx = Math.min(2.5, size / 4);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart year-cal', role: 'img', 'aria-label': title });
+  halves.forEach((part, hi) => {
+    const top = hi * halfH + labelH;
+    const lead = leadOf(part);
+    ['一', '三', '五', '日'].forEach((t, i) => svg.append(s('text', { x: 0, y: top + step * [0, 2, 4, 6][i] + size - 1, class: 'chart-label', text: t })));
+    part.forEach((d, i) => {
+      const k = lead + i;
+      const x = left + Math.floor(k / 7) * step;
+      const y = top + (k % 7) * step;
+      if (d.day.slice(8) === '01') svg.append(s('text', { x, y: top - 4, class: 'chart-label', text: `${Number(d.day.slice(5, 7))}月` }));
+      const cell = s('rect', { x, y, width: size, height: size, rx, style: `fill:${FILL[d.off ? 0 : level(d.v)]}${d.off ? ';opacity:.45' : ''}` });
+      cell.append(s('title', { text: `${Number(d.day.slice(5, 7))}/${Number(d.day.slice(8))} ¥${d.v}` }));
+      svg.append(cell);
+      if (d.day === today) svg.append(s('rect', { x: x - 1, y: y - 1, width: size + 2, height: size + 2, rx: rx + 1, fill: 'none', style: 'stroke:var(--text)', 'stroke-width': 1.2 }));
+    });
+  });
+  // 右下角：少 □□□□□ 多
+  const ly = halves.length * halfH;
+  const lx = W - 2 - 5 * (size + 3) - 12;
+  svg.append(s('text', { x: lx - 4, y: ly + size - 1, 'text-anchor': 'end', class: 'chart-label', text: '少' }));
+  FILL.forEach((f, i) => svg.append(s('rect', { x: lx + i * (size + 3), y: ly, width: size, height: size, rx, style: `fill:${f}` })));
+  svg.append(s('text', { x: lx + 5 * (size + 3) + 1, y: ly + size - 1, class: 'chart-label', text: '多' }));
+  return svg;
+}

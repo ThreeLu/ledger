@@ -4,7 +4,7 @@
 
 import {
   GROUPS, periodFor, shiftPeriod, periodStats, partial, livingBudget, totalAssets, receivables, savingsMap,
-  balance, cny, category, addDays, spendOf, txGroup, isLump, noneParts, ymd, ADJUST_CAT,
+  balance, cny, category, addDays, spendOf, txGroup, isLump, noneParts, ymd, ADJUST_CAT, daysBetween,
 } from './money.js';
 import { rangeStats, dailyLiving, topSpends, cumulative, wishMonth, advice } from './summary.js';
 
@@ -133,5 +133,97 @@ export function monthReport(data, day, rate, now = ymd(new Date())) {
     p, ongoing, asOf, part, st, prev, key, income, spend, startNW, endNW, accounts, purposes,
     budget, lb, curve: cumulative(data, p), cats, top: topSpends(data, p.start, asOf, 5), rs, calendar, trend, notes,
     advice: advice(data, p, st, prev),
+  };
+}
+
+// ---------- 年度报表（2026-10-25，按自然年：1 月 1 日到 12 月 31 日，开始记账那年从开始记账那天算） ----------
+
+// 一段日子里计划存多少：每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」，不满一个月按天数折算
+export function planBetween(data, from, to) {
+  const inc = Number(data.settings.expectedIncome) || 0;
+  const out = GROUPS.reduce((s, g) => s + (Number(data.budget?.[g.id]) || 0), 0);
+  const summer = data.settings.summerMonths || [];
+  let plan = 0;
+  for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) {
+    for (let m = 1; m <= 12; m++) {
+      const days = new Date(y, m, 0).getDate();
+      const ms = `${y}-${String(m).padStart(2, '0')}-01`;
+      const me = `${ms.slice(0, 8)}${String(days).padStart(2, '0')}`;
+      const a = ms > from ? ms : from;
+      const b = me < to ? me : to;
+      if (a > b) continue;
+      plan += ((daysBetween(a, b) + 1) / days) * ((summer.includes(m) ? 0 : inc) - out);
+    }
+  }
+  return r2(plan);
+}
+
+export function yearReport(data, year, rate, now = ymd(new Date())) {
+  const jan1 = `${year}-01-01`;
+  const dec31 = `${year}-12-31`;
+  const from = data.openingDate && data.openingDate > jan1 ? data.openingDate : jan1;
+  const ongoing = now >= jan1 && now < dec31;
+  const asOf = ongoing ? now : dec31;
+  const started = from <= asOf;
+  const st = rangeStats(data, from, asOf);
+  const before = addDays(from, -1);
+  const startNW = netWorthAt(data, before, rate);
+  const endNW = netWorthAt(data, asOf, rate);
+  const rateOf = (s) => (s.income > 0 ? (s.income - s.total) / s.income : null);
+  const key = { income: r2(st.income), total: r2(st.total), saved: r2(st.income - st.total), savingRate: rateOf(st), net: endNW.net, netChange: r2(endNW.net - startNW.net) };
+
+  // 每个自然月：收支、各块花销、各块用了预算的几成（预算按这个月记账的天数折算）、月底净资产、累计存下和计划
+  let cum = 0;
+  let cumPlan = 0;
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const m = i + 1;
+    const days = new Date(year, m, 0).getDate();
+    const ms = `${year}-${String(m).padStart(2, '0')}-01`;
+    const me = `${ms.slice(0, 8)}${String(days).padStart(2, '0')}`;
+    const a = ms > from ? ms : from;
+    const b = me < asOf ? me : asOf;
+    if (a > b) return { m, active: false };
+    const s = rangeStats(data, a, b);
+    const share = (daysBetween(a, b) + 1) / days;
+    const used = Object.fromEntries(GROUPS.filter((g) => Number(data.budget?.[g.id]) > 0)
+      .map((g) => [g.id, s.byGroup[g.id] / (data.budget[g.id] * share)]));
+    cum += s.income - s.total + s.fromSaved; // 用以前留好的钱花的不算没存够（和首页、月度一样）
+    cumPlan += planBetween(data, a, b);
+    return {
+      m, active: true, from: a, to: b, income: r2(s.income), total: r2(s.total), saved: r2(s.income - s.total), rate: rateOf(s),
+      byGroup: Object.fromEntries(Object.entries(s.byGroup).map(([k, v]) => [k, r2(v)])), used, net: netWorthAt(data, b, rate).net,
+      cum: r2(cum), cumPlan: r2(cumPlan),
+    };
+  });
+
+  const accounts = data.accounts.map((a) => {
+    const fx = a.currency === 'USD' ? rate : 1;
+    return { id: a.id, name: a.name, usd: a.currency === 'USD', start: r2(balance(data, a.id, before) * fx), end: r2(balance(data, a.id, asOf) * fx) };
+  }).filter((a) => a.start || a.end);
+  const pStart = purposesAt(data, before, rate);
+  const pEnd = purposesAt(data, asOf, rate);
+  const purposes = pEnd.map((x, i) => ({ name: x.name, start: pStart[i].v, end: x.v })).filter((x) => Math.abs(x.start) >= 0.005 || Math.abs(x.end) >= 0.005);
+
+  const cats = Object.entries(st.byCat).map(([id, c]) => ({ id, name: catName(data, id), v: r2(c.v), n: c.n, share: st.total ? c.v / st.total : 0 })).sort((a, b) => b.v - a.v);
+  const yearDays = daysBetween(jan1, dec31) + 1;
+  const calendar = dailyLiving(data, jan1, yearDays).map((x) => ({ ...x, v: r2(x.v), off: x.day < from || x.day > asOf }));
+  const inY = (d0) => d0 && d0 >= from && d0 <= asOf;
+  const subs = {};
+  for (const t of st.tx) if (spendOf(data, t) && txGroup(data, t) === 'sub') { const k = t.note || catName(data, t.category); subs[k] = r2((subs[k] || 0) + spendOf(data, t)); }
+  const notes = {
+    lumps: st.tx.filter((t) => isLump(data, t)).map((t) => ({ name: t.note || catName(data, t.category), v: cny(t), date: t.date })),
+    fromSaved: noneParts(data, st.tx),
+    taxRefund: r2(st.tx.filter((t) => t.type === 'income' && t.category === 'i-tax').reduce((a, t) => a + cny(t), 0)),
+    subs: Object.entries(subs).map(([name, v]) => ({ name, v })).sort((a, b) => b.v - a.v),
+    wishesBought: (data.wishes || []).filter((w) => w.status === 'bought' && inY(w.boughtAt)).map((w) => ({ name: w.name, v: Number(w.boughtPrice ?? w.price) || 0, date: w.boughtAt })),
+    milestones: Object.values(data.milestones?.reached || {}).filter((x) => inY(x.at)).sort((a, b) => a.at.localeCompare(b.at)),
+    days: new Set(data.tx.filter((t) => inY(t.date) && !t.auto && t.type !== 'adjust').map((t) => t.date)).size,
+    span: daysBetween(from, asOf) + 1,
+    owedEnd: endNW.toMe, iOweEnd: endNW.iOwe,
+  };
+  return {
+    year, from, to: dec31, asOf, ongoing, started, st, key, startNW, endNW, months, accounts, purposes, cats,
+    top: topSpends(data, from, asOf, 10), calendar, notes,
+    planAll: data.settings.expectedIncome ? planBetween(data, from, dec31) : 0,
   };
 }
