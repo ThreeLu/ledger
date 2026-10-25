@@ -1740,6 +1740,11 @@ def _(c):
     expect(p.locator(".charges .charge-row", has_text="编的年费")).to_contain_text("到期前想想还续不续")
     expect(p.locator(".health-tile", has_text="编的年费")).to_have_count(0)
     expect(p.locator(".todo-item", has_text="编的年费")).to_have_count(0)
+    # 只看 14 天内：20 天后的不出现
+    d["recurring"][-1]["yearly"] = (date.today() + timedelta(days=20)).strftime("%m-%d")
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
+    expect(p.locator(".charges .charge-row", has_text="编的年费")).to_have_count(0)
     d["recurring"] = [r for r in d["recurring"] if r["id"] != "r-yearly-test"]
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
     p.reload()

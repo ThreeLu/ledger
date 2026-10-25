@@ -344,6 +344,9 @@ export function duePostings(data, today) {
   return out;
 }
 
+// 首页「即将扣款」只看接下来 14 天（2026-10-25 用户定）
+export const CHARGE_DAYS = 14;
+
 // 接下来 days 天要扣的钱
 export function upcoming(data, today, days = 35) {
   const to = addDays(today, days);
@@ -1012,10 +1015,10 @@ export function health(data, today, rate = data.settings.usdRate) {
     action: expected && !p.summer && !part.isPartial && projected < target * 0.9 ? '这个月花得比计划多，下个月注意一下就好，不用补。' : null,
   });
 
-  // 5. 即将扣款（美元账户够不够付接下来的订阅）
+  // 5. 即将扣款（美元账户够不够付接下来 14 天的订阅）
   const usdAccs = data.accounts.filter((a) => a.currency === 'USD');
   for (const a of usdAccs) {
-    const ups = upcoming(data, today, 35).filter((u) => u.r.account === a.id && !u.r.remindOnly);
+    const ups = upcoming(data, today, CHARGE_DAYS).filter((u) => u.r.account === a.id && !u.r.remindOnly);
     let bal = balance(data, a.id);
     let short = null;
     for (const u of ups) {

@@ -2,7 +2,7 @@ import { GitHub, DEVICE, recentCommits } from './github.js';
 import { Store, newId, diff, apply as applyPatch } from './store.js';
 import {
   GROUPS, defaultData, periodFor, shiftPeriod, partial, account, category, isUsd, balance, totalAssets, cny,
-  periodStats, budgetTotal, livingBudget, duePostings, upcoming, health, headline, money, md, addDays, payday, newMilestones,
+  periodStats, budgetTotal, livingBudget, duePostings, upcoming, CHARGE_DAYS, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
@@ -539,7 +539,7 @@ const EXPLAIN = {
     `${x.action}`,
   ],
   charges: (x) => [
-    '接下来 35 天要从 Apple ID 自动扣的订阅，和账户里的美元比一比。',
+    '接下来 14 天要从 Apple ID 自动扣的订阅，和账户里的美元比一比。',
     '余额不够的话订阅会扣费失败、被停掉。礼品卡要提前买，所以提前提醒你。',
     `${x.text}。${x.action || '不用管它。'}`,
   ],
@@ -561,7 +561,7 @@ function openExplain(x, hl) {
 const HOME_HELP = [
   ['一句结论', ['一切正常时，在「这个月还能花」最上面一行。有事留意或要处理时，放在下面的「要做的事」里，直接告诉你做什么，点「为什么」看解释。']],
   ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里，一件一行：红色是要处理，琥珀色是留意一下，紫色是待办。点一行看为什么；已经弄好了点右边「做完了」，就不再提醒（点错了马上点「撤销」）。事多时先露 4 件，点「还有 N 件」看全部。']],
-  ['即将扣款', ['接下来一个多月要自动扣的订阅，一笔一行，左边是哪天。美元的最下面写 Apple ID 余额够不够；不够会写哪天前充多少。点「订阅」看这个月订阅一共多少钱。']],
+  ['即将扣款', ['接下来 14 天要自动扣的订阅，一笔一行，左边是哪天。美元的最下面写 Apple ID 余额够不够；不够会写哪天前充多少。点「订阅」看这个月订阅一共多少钱。']],
   ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条和周总结一样：紫色是钱用了多少，竖线是按日子到今天该花到哪（开始记账那个月从记账那天数起）。紫色没过竖线，或者只多出一点（一成以内），都算节奏正常；预算月头 3 天不算快慢；首页、健康指标、周总结、月总结都是这一条规矩。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
   ['健康指标', ['每一格一个小圆环：绿 = 很好，黄 = 留意一下，红 = 需要做点什么。', '圆环有多满：安全垫按 3 个月算满，应急钱按底线算满，花钱节奏是生活预算用了多少（小白点是按日子该用到哪），本月存钱是离目标多近。其他的只看颜色。', '每一格都能点开，看它是什么、为什么重要、你现在怎么样。']],
   ['记账', ['点底部中间的 ＋ 记一笔。卡之间倒钱（充校园卡、存钱卡转生活费卡）记「转账」，不算花销。']],
@@ -748,11 +748,12 @@ function todoCard(hl) {
 
 // 年费提醒（yearly-*）和美元够不够付（charges）只在「即将扣款」卡里出现；美元不够付时（warn / bad）还会进要做的事
 const inChargeCard = (x) => x.key.startsWith('yearly-') || (x.key === 'charges' && x.level === 'good');
-// 即将扣款（2026-10-14 重做，原来是健康指标里占一整行的一格）：接下来 35 天要扣的一笔一行，左边日子，右边金额；
+// 即将扣款（2026-10-14 重做，原来是健康指标里占一整行的一格）：接下来 14 天要扣的一笔一行，左边日子，右边金额；
 // 美元账户最下面一行：余额够不够付这几笔，不够就说哪天前充多少
-function chargePlan(d, t, days = 35) {
+function chargePlan(d, t, days = CHARGE_DAYS) {
   const rate = usdRate();
-  const list = upcoming(d, t, days).map((u) => ({ ...u, usd: isUsd(d, u.r.account), left: daysBetween(t, u.date) }));
+  const list = upcoming(d, t, days).map((u) => ({ ...u, usd: isUsd(d, u.r.account), left: daysBetween(t, u.date) }))
+    .filter((u) => u.left <= days); // 年费在 upcoming 里提前 40 天，这里也只看 14 天内
   const accs = [...new Set(list.filter((u) => u.usd && !u.r.remindOnly).map((u) => u.r.account))].map((id) => {
     let bal = balance(d, id);
     let short = null;
