@@ -116,7 +116,15 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   box-shadow: var(--shadow); cursor: pointer; min-height: 0;
 }
 /* 总结页的「‹ 上一周 ›」；没有下一个时占个位、不显示 */
-.period-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.period-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+/* 刊头：左边宋体大字，右边日期范围和一句在哪 */
+.mast { flex: 1; min-width: 0; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.mast-big { font-family: var(--serif); line-height: 1; white-space: nowrap; color: var(--text); }
+.mast-big b { font-size: 36px; font-weight: 600; letter-spacing: 0.02em; }
+.mast-big small { font-size: 16px; color: var(--muted); margin: 0 3px; }
+.mast-side { min-width: 0; text-align: right; padding-bottom: 2px; }
+.mast-range { font-size: 14px; font-weight: 500; }
+.mast-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .period-nav .icon-btn { font-size: 24px; flex: none; }
 .icon-btn.ghost { visibility: hidden; }
 
@@ -872,6 +880,7 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 /* 表格、明细只在存成 PDF 时印出来；网页上只看四个数和图 */
 @media screen { .rep-detail { display: none !important; } }
 .rep-head .rep-kpis { margin: 12px 0 0; }
+@media screen { .rep-head .rep-kpis { margin-top: 0; } } /* 网页上标题藏了，四个数就在卡片最上面 */
 .rep-detail .advice { margin: 10px 0; }
 .rep-export button { flex: 1 1 0; font-size: 14px; padding-left: 8px; padding-right: 8px; white-space: nowrap; }
 .rep-sec h3 { margin-bottom: 10px; }

@@ -531,6 +531,12 @@ def _(c):
     c.go("#/summary")
     expect(p.get_by_role("img", name="每天的生活花销")).to_be_visible()
     expect(p.locator(".summary-head")).to_contain_text("这周")
+    # 刊头：第几周宋体大字，右边日期范围和还剩几天；往前翻写「上周」
+    expect(p.locator(".period-nav .mast-big")).to_have_text(f"第{date.today().isocalendar()[1]}周")
+    expect(p.locator(".period-nav .mast-sub")).to_contain_text("这周")
+    p.get_by_role("link", name="上一个").click()
+    expect(p.locator(".period-nav .mast-sub")).to_have_text("上周")
+    c.go("#/summary")
     # 这周没有「下一周」：占位的那个不显示（2026-10-25 样式被误删过，变成一个白圆圈）
     expect(p.locator(".period-nav .ghost")).to_be_hidden()
     expect(p.get_by_role("img", name="每天的生活花销")).to_contain_text("预算 ¥")
@@ -561,6 +567,7 @@ def _(c):
         p.reload()  # 只换了 # 后面，要刷新才读到刚写的数据
         head = p.locator(".rep-head")
         expect(head.locator(".rep-title")).to_have_text(re.compile(r"^\d{4} 年 \d+ 月财务报表$"))
+        expect(head.locator(".rep-title")).to_be_hidden()  # 网页上刊头写了，标题只印在 PDF 里
         expect(p.locator(".rep-kpi")).to_have_count(4)
         expect(head.locator(".advice")).to_be_hidden()  # 网页上只有四个数和图，小字只在 PDF 里
         expect(p.locator(".rep-kpi").first.locator("b")).to_have_text(re.compile(r"^¥[\d,]+(\.\d\d)?$"))
@@ -618,6 +625,8 @@ def _(c):
         assert abs(sum(x["v"] for x in got["spend"]) - got["key"]["total"]) < 0.01, got["spend"]
         w = got["notes"]["wish"]
         assert abs(w["start"] + sum(x["v"] for x in w["rows"]) - w["end"]) < 0.01, w
+    expect(p.locator(".period-nav .mast-big")).to_contain_text("月")
+    expect(p.locator(".period-nav .mast-sub")).to_contain_text("这个预算月")
     p.screenshot(path=ART / "report.png", full_page=True)
     # 存成 PDF：打开打印；打印时只留报表
     p.evaluate("window.print = () => { window.__printed = true; }")
@@ -1209,7 +1218,11 @@ def _(c):
     # 年度报表：网页上四个数 + 图；表格只在 PDF 里；最下面三个导出
     year = date.today().year
     c.go("#/summary?mode=year")
+    expect(p.locator(".period-nav .mast-big")).to_have_text(str(date.today().year))
+    expect(p.locator(".period-nav .mast-sub")).to_contain_text("今年")
+    p.locator(".period-nav").screenshot(path=ART / "mast-year.png")
     expect(p.locator(".rep-title")).to_have_text(f"{year} 年财务报表")
+    expect(p.locator(".rep-title")).to_be_hidden()
     expect(p.locator(".rep-kpi")).to_have_count(4)
     for img in ("每月收入、支出和储蓄率", "存钱计划", "每一块每个月用了预算的多少", "钱花在哪了", "每个月花在哪", "这一年每天的生活花销"):
         expect(p.get_by_role("img", name=img)).to_be_visible()

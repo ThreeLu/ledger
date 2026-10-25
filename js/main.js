@@ -5,7 +5,7 @@ import {
   periodStats, budgetTotal, livingBudget, duePostings, upcoming, CHARGE_DAYS, health, headline, money, md, addDays, payday, newMilestones,
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
-  savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
+  savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, parseYmd, ADJUST_CAT, isLivingAccount,
   taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, yearlySubs, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine, plannedSoFar, onPace,
 } from './money.js';
 import { holidayLine } from './cal.js';
@@ -2699,6 +2699,30 @@ function flipButton() {
   icon('swap'), summaryFlipped ? '总结' : '钱都在哪');
 }
 
+// 总结页刊头的字：日期范围（同一个月的后半截不写月）+ 一句在哪（这周还剩几天 / 上周 / 3 周前）
+const mastRange = (a, b) => `${md(a)} – ${a.slice(0, 7) === b.slice(0, 7) ? `${Number(b.slice(8))}日` : md(b)}`;
+const mastLeft = (end, what) => { const n = daysBetween(today(), end); return n ? `${what} · 还剩 ${n} 天` : `${what} · 最后一天`; };
+// 第几周：ISO 周（周一开始，有 1 月 4 日的那周是第 1 周）
+function weekNo(day) {
+  const thu = addDays(day, 3 - (parseYmd(day).getDay() + 6) % 7);
+  return Math.floor(daysBetween(`${thu.slice(0, 4)}-01-01`, thu) / 7) + 1;
+}
+function weekMast(ws) {
+  const ago = daysBetween(ws.start, weekOf(today()).start) / 7;
+  return { pre: '第', big: String(weekNo(ws.start)), unit: '周', range: mastRange(ws.start, ws.end),
+    sub: ago ? (ago === 1 ? '上周' : `${ago} 周前`) : mastLeft(ws.end, '这周') };
+}
+function monthMast(d, p) {
+  const now = periodFor(d, today());
+  const ago = (Number(now.start.slice(0, 4)) * 12 + now.startMonth) - (Number(p.start.slice(0, 4)) * 12 + p.startMonth);
+  const where = ago ? (ago === 1 ? '上个预算月' : `${ago} 个月前`) : mastLeft(p.end, '这个预算月');
+  return { big: String(p.startMonth), unit: '月', range: mastRange(p.start, p.end), sub: p.summer ? `${where} · 暑假` : where };
+}
+function yearMast(year) {
+  const ago = Number(today().slice(0, 4)) - year;
+  return { big: String(year), range: '1月1日 – 12月31日', sub: ago ? (ago === 1 ? '去年' : `${ago} 年前`) : mastLeft(`${year}-12-31`, '今年') };
+}
+
 function summaryView(q) {
   if (summaryFlipped) return moneyView(true);
   const d = store.data;
@@ -2707,9 +2731,12 @@ function summaryView(q) {
   const link = (m, dd) => `#/summary?mode=${m}&day=${dd}`;
   const seg = h('div', { class: 'segmented' }, [['week', '周'], ['month', '月'], ['year', '年']].map(([k, t]) =>
     h('a', { class: `seg${mode === k ? ' on' : ''}`, href: link(k, today()) }, t)));
-  const navRow = (label, sub, prev, next) => h('div', { class: 'period-nav' },
+  // 刊头（2026-10-25 用户选的）：左边宋体大字（第 43 周 / 10 月 / 2026），右边日期范围和一句还剩几天 / 几周前
+  const navRow = (m, prev, next) => h('div', { class: 'period-nav' },
     h('a', { class: 'icon-btn', href: link(mode, prev), 'aria-label': '上一个' }, '‹'),
-    h('div', { class: 'grow center' }, h('b', {}, label), sub ? h('div', { class: 'muted small' }, sub) : null),
+    h('div', { class: 'mast' },
+      h('div', { class: 'mast-big' }, m.pre ? h('small', {}, m.pre) : null, h('b', {}, m.big), m.unit ? h('small', {}, m.unit) : null),
+      h('div', { class: 'mast-side' }, h('div', { class: 'mast-range' }, m.range), h('div', { class: 'mast-sub' }, m.sub))),
     next <= today() ? h('a', { class: 'icon-btn', href: link(mode, next), 'aria-label': '下一个' }, '›') : h('span', { class: 'icon-btn ghost' }));
   const head = header('总结', flipButton(), helpButton('总结怎么看', SUMMARY_HELP));
 
@@ -2722,7 +2749,7 @@ function summaryView(q) {
       return h('span', { class: 'muted small' }, `比上周${diff > 0 ? '多' : '少'} ${money(Math.abs(diff))}`);
     };
     return h('div', {}, head, seg,
-      navRow(ws.label, ws.end >= today() && ws.start <= today() ? '这周' : null, addDays(ws.start, -1), addDays(ws.end, 1)),
+      navRow(weekMast(ws), addDays(ws.start, -1), addDays(ws.end, 1)),
       weekHead(ws),
       h('div', { class: 'card' }, h('h3', {}, '每天的生活花销'),
         barChart(ws.days.map((x, i) => ({ label: `周${WEEKDAYS[i]}`, v: x.v, color: x.v > ws.perDay ? 'var(--amber)' : 'var(--accent)' })),
@@ -2804,7 +2831,7 @@ function monthReportView(d, day, head, seg, navRow) {
   const withPrev = Boolean(prev);
   const cmp = (now, before) => (withPrev ? [exact(before), repSigned(now - before)] : []);
   const cmpCols = withPrev ? ['上月', '变化'] : [];
-  const nav = navRow(p.label, r.ongoing ? '这个预算月' : null, addDays(p.start, -1), p.next);
+  const nav = navRow(monthMast(d, p), addDays(p.start, -1), p.next);
   const fileBase = `财务报表-${year}-${String(p.startMonth).padStart(2, '0')}`;
   const exportBtns = exportButtons({
     excel: () => downloadBlob(makeWorkbook(monthSheets(r)), `${fileBase}.xlsx`),
@@ -2814,7 +2841,7 @@ function monthReportView(d, day, head, seg, navRow) {
   // 表头 + 关键数字：网页上只有标题和四个数
   const kpi = (label, v, cls = '') => h('div', { class: `rep-kpi ${cls}` }, h('div', { class: 'muted small' }, label), h('b', {}, v));
   const top = h('div', { class: 'card rep-head' },
-    h('div', { class: 'rep-title' }, `${year} 年 ${p.startMonth} 月财务报表`),
+    repDetail(h('div', { class: 'rep-title' }, `${year} 年 ${p.startMonth} 月财务报表`)), // 网页上刊头已经写了，标题只在 PDF 里
     repDetail(h('div', { class: 'muted small' }, [p.label, r.ongoing ? `到 ${md(r.asOf)} 为止` : null, r.part.isPartial ? `从 ${md(r.part.from)}开始记账` : null].filter(Boolean).join(' · '))),
     empty ? h('p', { class: 'muted' }, '这个预算月还没有记录。') : [
       h('div', { class: 'rep-kpis' },
@@ -3108,7 +3135,7 @@ function exportButtons({ pdf = () => window.print(), excel, chatgpt }) {
 function yearReportView(d, year, head, seg, navRow) {
   const y = yearReport(d, year, usdRate(), today());
   const { key } = y;
-  const nav = navRow(`${year} 年`, y.ongoing ? '今年' : null, `${year - 1}-12-31`, `${year + 1}-01-01`);
+  const nav = navRow(yearMast(year), `${year - 1}-12-31`, `${year + 1}-01-01`);
   const endCol = y.ongoing ? '现在' : '年底';
   const startCol = y.from > `${year}-01-01` ? '开始记账' : '年初';
   const empty = !y.started || !y.st.tx.length;
@@ -3119,7 +3146,7 @@ function yearReportView(d, year, head, seg, navRow) {
     chatgpt: () => chatgptSheet({ ask: YEAR_ASK, text: () => yearText(y), file: `财务报表-${year}.md`, what: '这份年度报表' }),
   });
   const top = h('div', { class: 'card rep-head' },
-    h('div', { class: 'rep-title' }, `${year} 年财务报表`),
+    repDetail(h('div', { class: 'rep-title' }, `${year} 年财务报表`)), // 网页上刊头已经写了，标题只在 PDF 里
     repDetail(h('div', { class: 'muted small' }, [`${md(y.from)} – ${md(y.to)}`, y.ongoing ? `到 ${md(y.asOf)} 为止` : null, `记了 ${y.notes.days} 天账`].filter(Boolean).join(' · '))),
     empty ? h('p', { class: 'muted' }, '这一年还没有记录。') : [
       h('div', { class: 'rep-kpis' },
