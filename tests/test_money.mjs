@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 const m = await import(new URL('../js/money.js', import.meta.url));
 const sm = await import(new URL('../js/summary.js', import.meta.url));
 const rp = await import(new URL('../js/report.js', import.meta.url));
+const rc = await import(new URL('../js/receipt.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -441,6 +442,21 @@ test('月度报表：收支、预算、净资产对得上；按用途的合计 =
   assert.equal(r.calendar.max.day, '2026-10-04');
   assert.deepEqual(r.trend.map((x) => x.p.startMonth), [9, 10]); // 8 月什么都没记，不放进趋势
   assert.equal(r.cats[0].name, '午餐');
+});
+
+test('电动车充电费：新类别在交通里；老账本升级后有它；小票里认得「充电」，不把充电宝认成它', () => {
+  const d = book();
+  const c = d.categories.find((x) => x.id === 'c-ebike');
+  assert.deepEqual([c.name, c.group, c.sub], ['电动车充电费', 'daily', '交通']);
+  const old = book();
+  old.categories = old.categories.filter((x) => x.id !== 'c-ebike');
+  old.categoryVersion = 5;
+  m.migrate(old);
+  assert.ok(old.categories.some((x) => x.id === 'c-ebike'));
+  assert.equal(rc.guessCategory(d.categories, [], '电动车充电'), 'c-ebike');
+  assert.equal(rc.guessCategory(d.categories, [], '电车充电'), 'c-ebike');
+  assert.notEqual(rc.guessCategory(d.categories, [], '充电宝'), 'c-ebike');
+  assert.equal(rc.guessCategory(d.categories, [], '充电器'), 'c-gadget');
 });
 
 console.log(`\n${n} 项通过`);

@@ -32,7 +32,7 @@ export const EXPENSE_CATEGORIES = [
   C('c-storage', '收纳整理', 'daily', '家居用品'), C('c-bedding', '床品', 'daily', '家居用品'), C('c-dorm', '宿舍小物件', 'daily', '家居用品'),
   C('c-stationery', '文具', 'daily', '耗材'), C('c-print', '打印复印', 'daily', '耗材'), C('c-gadget', '电子耗材', 'daily', '耗材'),
   C('c-books', '书籍资料', 'daily', '学习'), C('c-exam', '考试报名', 'daily', '学习'), C('c-course', '课程', 'daily', '学习'),
-  C('c-bus', '公交地铁', 'daily', '交通'), C('c-taxi', '打车', 'daily', '交通'), C('c-bike', '共享单车', 'daily', '交通'), C('c-train', '火车飞机', 'daily', '交通'),
+  C('c-bus', '公交地铁', 'daily', '交通'), C('c-taxi', '打车', 'daily', '交通'), C('c-bike', '共享单车', 'daily', '交通'), C('c-ebike', '电动车充电费', 'daily', '交通'), C('c-train', '火车飞机', 'daily', '交通'),
   C('c-clothes', '衣服', 'daily', '穿着'), C('c-shoes', '鞋子', 'daily', '穿着'), C('c-accessory', '配饰', 'daily', '穿着'),
   C('c-hair', '理发', 'daily', '生活服务'), C('c-bath', '洗澡水费', 'daily', '生活服务'), C('c-laundry', '洗衣机', 'daily', '生活服务'), C('c-express', '快递', 'daily', '生活服务'),
   C('c-social', '聚餐请客', 'daily', '人情社交'), C('c-gift', '礼物', 'daily', '人情社交'), C('c-hongbao', '红包', 'daily', '人情社交'),
@@ -45,7 +45,7 @@ export const EXPENSE_CATEGORIES = [
 ];
 // 老版本的类别：以前记的账还显示原来的名字，但记新账时不再出现
 const RETIRED = { 'c-meal': '三餐', 'c-daily': '日用品', 'c-transport': '交通', 'c-study': '学习' };
-export const CATEGORY_VERSION = 5; // 3：加了「形象」组（护肤、化妆、香水和打理）；4：看病、买药单独成「医疗」组（从医疗备用金出）；5：加「专项」（学费、住宿费这类从专项里交的钱）
+export const CATEGORY_VERSION = 6; // 6：交通里加「电动车充电费」（2026-10-25）；3：加了「形象」组（护肤、化妆、香水和打理）；4：看病、买药单独成「医疗」组（从医疗备用金出）；5：加「专项」（学费、住宿费这类从专项里交的钱）
 
 // 第一次使用时的默认账本。这里的代码是公开的，所以只放通用的东西；
 // 具体的账户名、收入、固定扣费、规则说明都写在私有仓库的 finance.json 里，在网页上改。

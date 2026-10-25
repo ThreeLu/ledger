@@ -540,9 +540,8 @@ def _(c):
         p.reload()  # 只换了 # 后面，要刷新才读到刚写的数据
         head = p.locator(".rep-head")
         expect(head.locator(".rep-title")).to_have_text(re.compile(r"^\d{4} 年 \d+ 月财务报表$"))
-        expect(head).to_contain_text("收入 ¥")
-        expect(head.locator(".advice")).to_contain_text("下个月可以试试")
         expect(p.locator(".rep-kpi")).to_have_count(4)
+        expect(head.locator(".advice")).to_be_hidden()  # 网页上只有四个数和图，小字只在 PDF 里
         expect(p.locator(".rep-kpi").first.locator("b")).to_have_text(re.compile(r"^¥[\d,]+(\.\d\d)?$"))
         head.screenshot(path=str(ART / "month-head.png"))
     finally:
@@ -569,17 +568,16 @@ def _(c):
         p.locator(".donut .seg").first.dispatch_event("click")
         expect(p.locator(".legend-row.on")).to_have_count(1)
     p.get_by_role("link", name="月", exact=True).click()
-    # 月度报表：八个部分，每部分一张图 + 一张表
-    expect(p.locator(".rep-sec h3").first).to_have_text("一、关键数字")
+    # 月度报表：网页上只有四个关键数字和图；表格、小字都藏着，最下面是两个导出按钮
+    expect(p.locator(".rep-sec h3").first).to_have_text("收支")
     for img in ("收支瀑布图", "月初和月底的钱按用途分", "每一块预算用了多少", "花钱曲线", "每天的生活花销日历", "收入、支出和储蓄率"):
         expect(p.get_by_role("img", name=img)).to_be_visible()
-    for table in ("关键数字", "收支表", "按账户", "按用途", "预算执行", "花得最多的类别", "最近几个月"):
-        expect(p.get_by_role("table", name=table)).to_be_visible()
-    expect(p.get_by_role("table", name="按账户")).to_contain_text("净资产")
+    expect(p.locator(".rep-table").first).to_be_attached()
+    for el in p.locator(".rep-table").all():
+        expect(el).to_be_hidden()
+    assert p.evaluate("document.querySelector('.report').lastElementChild.classList.contains('rep-export')")
     expect(p.locator(".report")).not_to_contain_text("NaN")
     expect(p.locator(".report")).not_to_contain_text("undefined")
-    expect(p.get_by_role("table", name="收支表")).to_contain_text("支出合计")
-    expect(p.locator(".advice")).to_contain_text("下个月可以试试")
     # 对得上：按用途的合计 = 按账户的净资产（月初、现在都是）；心愿基金每一行进出加起来 = 月初到现在的变化
     got = p.evaluate("""() => Promise.all([import('./js/report.js'), import('./js/money.js')]).then(([r, m]) => {
       const d = JSON.parse(localStorage.getItem('ledger-cache') || 'null');
@@ -600,6 +598,12 @@ def _(c):
     p.emulate_media(media="print")
     expect(p.locator("nav#nav")).to_be_hidden()
     expect(p.locator(".rep-export")).to_be_hidden()
+    # PDF 里有完整的表格和明细
+    for table in ("关键数字", "收支表", "按账户", "按用途", "预算执行", "花得最多的类别", "最近几个月"):
+        expect(p.get_by_role("table", name=table)).to_be_visible()
+    expect(p.get_by_role("table", name="按账户")).to_contain_text("净资产")
+    expect(p.get_by_role("table", name="收支表")).to_contain_text("支出合计")
+    expect(p.locator(".rep-head .advice")).to_contain_text("下个月可以试试")
     p.screenshot(path=ART / "report-print.png", full_page=True)
     p.emulate_media(media="screen")
     # 导出给 ChatGPT：下载成文件，八个部分都在

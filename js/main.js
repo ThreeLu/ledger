@@ -2707,14 +2707,14 @@ function weekHead(ws) {
 
 const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。最上面是这周生活花了多少（心愿基金、专项这些不占预算的另写一行，不算在里面）：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线、或者只多出一成以内，就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
-  ['月度报表', ['「月」是一份财务报表，按预算月算（和发钱对齐）。这个月还没过完时，数字算到今天。',
-    '一、关键数字：收入、支出、存下（储蓄率 = 存下 ÷ 收入）、净资产（所有账户 + 别人欠你的 − 你欠别人的）。',
-    '二、收支表：瀑布图第一根是收入，每一块花销往下扣一段，最后一根是剩下的。表里和上月比。',
-    '三、资产表：月初和月底的家底，按账户分一次，按用途（和「钱都在哪」一样）再分一次，两边合计一样。',
-    '四、预算执行：每一块预算用了多少，竖线是预算到头的地方。花钱曲线：实线是累计花了多少，虚线是按计划到这天该花多少，实线在虚线下面就是花得比计划慢。',
-    '五、花销明细：花在哪几块、哪几类，日历上颜色越深那天花得越多，还有最大的几笔。',
-    '六、趋势：最近几个月的收入、支出和储蓄率。七、附注：一次性的钱、待收回、订阅、心愿基金这些。八、AI 点评：这个月过完后 AI 写几句。',
-    '「存成 PDF」：会打开打印界面。iPhone 上在打印预览里点右上角的分享按钮，选 Save to Files，就存成 PDF 了。「导出给 ChatGPT」：把报表复制好，拿去问。']],
+  ['月度报表', ['「月」是一份财务报表，按预算月算（和发钱对齐）。这个月还没过完时，算到今天。',
+    '最上面四个数：收入、支出、存下、净资产（所有账户 + 别人欠你的 − 你欠别人的）。',
+    '收支：第一根柱子是收入，每一块花销往下扣一段，最后一根是剩下的。',
+    '家底：月初和现在的钱按用途分成几段（和「钱都在哪」一样），下面是最近几个月的净资产。',
+    '预算：浅色是预算，深色是实际花的，竖线是预算到头的地方。花钱曲线：实线是累计花了多少，虚线是按计划到这天该花多少，实线在虚线下面就是花得比计划慢。',
+    '花在哪：圆环点一段看这一块花在哪几类。日历上颜色越深，那天花得越多。',
+    '趋势：最近几个月的收入、支出柱子，和储蓄率的线（右边的刻度）。',
+    '最下面「存成 PDF」：PDF 里有完整的表格和明细。会打开打印界面，iPhone 上在打印预览里点右上角的分享按钮，选 Save to Files。「导出给 ChatGPT」：把完整的报表复制好，拿去问。']],
   ['年总结', ['按自然年。最上面是这一年存下多少，下面是收入、花了、储蓄率；进度条是存下了计划的多少（计划 = 每个有收入的月「预计收入 − 预算」，暑假的月「− 预算」），这一年还没过完时，竖线是按日子到今天该存到哪。', '下面还有每月存下多少、钱花在哪、实现了几个心愿。每年 1 月初首页会提醒你看去年的。']],
   ['翻看', ['左右箭头看以前的。']],
   ['钱都在哪', ['右上角点「钱都在哪」，整页翻过来，看每一类钱有多少、存到哪了；再点「总结」翻回来。']],
@@ -2774,13 +2774,14 @@ function summaryView(q) {
 }
 
 // ---------- 月度财务报表（2026-10-25，替换原来的月总结） ----------
-// 计算在 report.js。每部分一张图 + 一张表；能存成 PDF（打印）、导出给 ChatGPT
+// 计算在 report.js。网页上只放四个关键数字和图（用户 2026-10-25 定的：小字、表格都不要）；
+// 表格、明细放在 .rep-detail 里，网页上藏着，存成 PDF（打印）时才印出来。最下面是「存成 PDF」「导出给 ChatGPT」
 
 const repSigned = (v) => (Math.abs(v) < 0.005 ? '—' : `${v > 0 ? '+' : '−'}${exact(Math.abs(v))}`);
 const repPct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 const PURPOSE_COLORS = { 家庭存款: 'var(--jar-k1)', 应急底线: 'var(--jar-k2)', 医疗备用金: 'var(--jar-k3)', 专项存款: 'var(--jar-k4)', 自由存款: 'var(--jar-w1)', 心愿基金: 'var(--jar-w2)', 生活费还剩: 'var(--jar-g)' };
 
-// 表格：cols = ['', '本月', …]；rows = [[…], …] 或 { cells, cls }（cls：group 小标题行、total 合计行）。第一列靠左，别的靠右
+// 表格（只在 PDF 里）：cols = ['', '本月', …]；rows = [[…], …] 或 { cells, cls }（cls：group 小标题行、total 合计行）。第一列靠左，别的靠右
 function repTable(cols, rows, label) {
   return h('div', { class: 'rep-table-wrap' }, h('table', { class: 'rep-table', 'aria-label': label },
     h('thead', {}, h('tr', {}, cols.map((c) => h('th', {}, c)))),
@@ -2789,7 +2790,9 @@ function repTable(cols, rows, label) {
       return h('tr', { class: cls || null }, cls === 'group' ? h('td', { colspan: cols.length }, cells[0]) : cells.map((c) => h('td', {}, c ?? '')));
     }))));
 }
-const repSection = (no, title, ...children) => h('section', { class: 'card rep-sec' }, h('h3', {}, `${no}、${title}`), ...children);
+const repDetail = (...children) => h('div', { class: 'rep-detail' }, ...children);
+const repSection = (title, ...children) => h('section', { class: 'card rep-sec' }, h('h3', {}, title), ...children);
+const repLegend = (items) => h('div', { class: 'legend' }, items.map(([name, color]) => h('span', {}, h('i', { style: `background:${color}` }), name)));
 
 function monthReportView(d, day, head, seg, navRow) {
   const r = monthReport(d, day, usdRate(), today());
@@ -2798,94 +2801,84 @@ function monthReportView(d, day, head, seg, navRow) {
   const year = Number(p.start.slice(0, 4));
   const endCol = r.ongoing ? '现在' : '月底';
   const empty = !r.st.tx.length;
-  const conclusion = empty ? '这个预算月还没有记录。'
-    : `收入 ${exact(key.income)}，花了 ${exact(key.total)}，${key.saved >= 0 ? '存下' : '多花了'} ${exact(Math.abs(key.saved))}。净资产${key.netChange >= 0 ? '多了' : '少了'} ${exact(Math.abs(key.netChange))}。`;
   const withPrev = Boolean(prev);
   const cmp = (now, before) => (withPrev ? [exact(before), repSigned(now - before)] : []);
   const cmpCols = withPrev ? ['上月', '变化'] : [];
+  const nav = navRow(p.label, r.ongoing ? '这个预算月' : null, addDays(p.start, -1), p.next);
+  const exportBtns = h('div', { class: 'rep-export' },
+    h('button', { class: 'secondary', onclick: () => window.print() }, '存成 PDF'),
+    h('button', { class: 'secondary', onclick: () => chatgptSheet({ ask: REPORT_ASK, text: () => reportText(r), file: `财务报表-${year}-${String(p.startMonth).padStart(2, '0')}.md`, what: '这份报表' }) }, '导出给 ChatGPT'));
 
-  // 〇、表头
+  // 表头 + 关键数字：网页上只有标题和四个数
+  const kpi = (label, v, cls = '') => h('div', { class: `rep-kpi ${cls}` }, h('div', { class: 'muted small' }, label), h('b', {}, v));
   const top = h('div', { class: 'card rep-head' },
     h('div', { class: 'rep-title' }, `${year} 年 ${p.startMonth} 月财务报表`),
-    h('div', { class: 'muted small' }, [p.label, r.ongoing ? `到 ${md(r.asOf)} 为止` : null, r.part.isPartial ? `从 ${md(r.part.from)}开始记账` : null].filter(Boolean).join(' · ')),
-    h('p', { class: 'rep-conclusion' }, conclusion),
-    empty ? null : h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), r.advice),
-    h('div', { class: 'rep-export' },
-      h('button', { class: 'secondary', onclick: () => window.print() }, '存成 PDF'),
-      h('button', { class: 'secondary', onclick: () => chatgptSheet({ ask: REPORT_ASK, text: () => reportText(r), file: `财务报表-${year}-${String(p.startMonth).padStart(2, '0')}.md`, what: '这份报表' }) }, '导出给 ChatGPT')));
-  if (empty) return h('div', { class: 'report' }, head, seg, navRow(p.label, r.ongoing ? '这个预算月' : null, addDays(p.start, -1), p.next), top);
+    repDetail(h('div', { class: 'muted small' }, [p.label, r.ongoing ? `到 ${md(r.asOf)} 为止` : null, r.part.isPartial ? `从 ${md(r.part.from)}开始记账` : null].filter(Boolean).join(' · '))),
+    empty ? h('p', { class: 'muted' }, '这个预算月还没有记录。') : [
+      h('div', { class: 'rep-kpis' },
+        kpi('收入', exact(key.income)),
+        kpi('支出', exact(key.total)),
+        kpi(key.saved >= 0 ? '存下' : '多花了', exact(Math.abs(key.saved)), key.saved < 0 ? 'warn' : ''),
+        kpi('净资产', exact(key.net))),
+      repDetail(
+        h('div', { class: 'advice' }, h('b', {}, '下个月可以试试：'), r.advice),
+        repTable(['', '本月', ...cmpCols], [
+          ['收入', exact(key.income), ...cmp(key.income, prev?.income)],
+          ['支出', exact(key.total), ...cmp(key.total, prev?.total)],
+          ['存下', repSigned(key.saved), ...(withPrev ? [repSigned(prev.saved), repSigned(key.saved - prev.saved)] : [])],
+          ['储蓄率', repPct(key.savingRate), ...(withPrev ? [repPct(prev.savingRate), key.savingRate != null && prev.savingRate != null ? `${simSigned(Math.round((key.savingRate - prev.savingRate) * 100), String)} 个点` : '—'] : [])],
+          ['净资产变化', repSigned(key.netChange), ...(withPrev ? [repSigned(prev.netChange), repSigned(key.netChange - prev.netChange)] : [])],
+        ], '关键数字'))]);
+  if (empty) return h('div', { class: 'report' }, head, seg, nav, top, exportBtns);
 
-  // 一、关键数字
-  const kpi = (label, v, sub, cls = '') => h('div', { class: `rep-kpi ${cls}` }, h('div', { class: 'muted small' }, label), h('b', {}, v), h('div', { class: 'muted small' }, sub));
-  const s1 = repSection('一', '关键数字',
-    h('div', { class: 'rep-kpis' },
-      kpi('收入', exact(key.income), prev ? `上月 ${exact(prev.income)}` : '上月没有记账'),
-      kpi('支出', exact(key.total), prev ? `上月 ${exact(prev.total)}` : '上月没有记账'),
-      kpi(key.saved >= 0 ? '存下' : '多花了', exact(Math.abs(key.saved)), `储蓄率 ${repPct(key.savingRate)}`, key.saved < 0 ? 'warn' : ''),
-      kpi('净资产', exact(key.net), `这个月 ${repSigned(key.netChange)}`)),
-    repTable(['', '本月', ...cmpCols], [
-      ['收入', exact(key.income), ...cmp(key.income, prev?.income)],
-      ['支出', exact(key.total), ...cmp(key.total, prev?.total)],
-      ['存下', repSigned(key.saved), ...(withPrev ? [repSigned(prev.saved), repSigned(key.saved - prev.saved)] : [])],
-      ['储蓄率', repPct(key.savingRate), ...(withPrev ? [repPct(prev.savingRate), key.savingRate != null && prev.savingRate != null ? `${simSigned(Math.round((key.savingRate - prev.savingRate) * 100), String)} 个点` : '—'] : [])],
-      ['净资产变化', repSigned(key.netChange), ...(withPrev ? [repSigned(prev.netChange), repSigned(key.netChange - prev.netChange)] : [])],
-    ], '关键数字'));
-
-  // 二、收支表
-  const spendBars = r.spend.filter((g) => g.v > 0);
-  const s2 = repSection('二', '收支表',
-    key.income || key.total ? waterfall([{ label: '收入', v: key.income, color: 'var(--sage)' }, ...spendBars.map((g) => ({ label: g.id === 'none' ? '不占' : g.name, v: g.v, color: g.color }))],
+  // 收支：瀑布图
+  const s2 = repSection('收支',
+    key.income || key.total ? waterfall([{ label: '收入', v: key.income, color: 'var(--sage)' }, ...r.spend.filter((g) => g.v > 0).map((g) => ({ label: g.id === 'none' ? '不占' : g.name, v: g.v, color: g.color }))],
       { endLabel: key.saved >= 0 ? '存下' : '多花', title: '收支瀑布图' }) : null,
-    h('p', { class: 'muted small' }, '第一根是收入，每一块花销往下扣一段，最后一根是剩下的。'),
-    repTable(['', '本月', ...cmpCols], [
+    repDetail(repTable(['', '本月', ...cmpCols], [
       { cells: ['收入'], cls: 'group' },
-      ...(r.income.length ? r.income.map((x) => [x.name, exact(x.v), ...cmp(x.v, x.prev)]) : [['还没有收入', '—', ...(withPrev ? ['', ''] : [])]]),
+      ...r.income.map((x) => [x.name, exact(x.v), ...cmp(x.v, x.prev)]),
       { cells: ['收入合计', exact(key.income), ...cmp(key.income, prev?.income)], cls: 'total' },
       { cells: ['支出'], cls: 'group' },
       ...r.spend.map((g) => [g.name, exact(g.v), ...cmp(g.v, g.prev)]),
       { cells: ['支出合计', exact(key.total), ...cmp(key.total, prev?.total)], cls: 'total' },
       { cells: [key.saved >= 0 ? '存下' : '多花了', exact(Math.abs(key.saved)), ...(withPrev ? [repSigned(prev.saved), repSigned(key.saved - prev.saved)] : [])], cls: 'total strong' },
-    ], '收支表'),
-    !key.income && r.part.isPartial ? h('p', { class: 'muted small' }, '开始记账前到的收入没有记，下个预算月起就完整了。') : null,
-    r.notes.lumps.length ? h('p', { class: 'muted small' }, `另有一次性的钱 ${exact(r.notes.lumps.reduce((a, x) => a + x.v, 0))}，不算收入，直接进存款（见附注）。`) : null);
+    ], '收支表')));
 
-  // 三、资产表
+  // 家底：月初 / 月底按用途的堆叠条 + 净资产折线
   const sumOf = (k) => r.purposes.reduce((a, x) => a + x[k], 0);
   const scale = Math.max(1, ...['start', 'end'].map((k) => r.purposes.reduce((a, x) => a + Math.max(0, x[k]), 0)));
   const stackRow = (label, k) => h('div', { class: 'rep-stack-row' }, h('span', { class: 'muted small' }, label),
     h('div', { class: 'rep-stack' }, r.purposes.filter((x) => x[k] > 0).map((x) => h('span', { style: `width:${(x[k] / scale) * 100}%;background:${PURPOSE_COLORS[x.name]}`, title: x.name }))),
-    h('span', { class: 'small' }, money(sumOf(k))));
+    h('span', { class: 'small' }, jarMoney(sumOf(k))));
   const nwHist = r.trend.filter((x) => x.net != null);
-  const accRows = r.accounts.map((a) => [`${a.name}${a.usd ? '（美元）' : ''}`, exact(a.start), exact(a.end), repSigned(a.end - a.start)]);
-  const s3 = repSection('三', '资产表',
+  const minus = (v) => (v < 0 ? `−${exact(-v)}` : exact(v));
+  const s3 = repSection('家底',
     h('div', { class: 'rep-stacks', role: 'img', 'aria-label': '月初和月底的钱按用途分' }, stackRow('月初', 'start'), stackRow(endCol, 'end')),
-    h('div', { class: 'legend' }, r.purposes.map((x) => h('span', {}, h('i', { style: `background:${PURPOSE_COLORS[x.name]}` }), x.name))),
-    nwHist.length >= 2 ? [h('div', { class: 'label-sm' }, '最近几个月的净资产'),
-      lineChart([{ values: nwHist.map((x) => x.net), color: 'var(--accent)' }],
-        { tight: true, height: 120, title: '净资产', xLabels: [[0, `${nwHist[0].p.startMonth}月`], [nwHist.length - 1, `${nwHist.at(-1).p.startMonth}月`]] })] : null,
-    h('div', { class: 'label-sm' }, '按账户'),
-    repTable(['账户', '月初', endCol, '变化'], [
-      ...accRows,
-      r.startNW.toMe || r.endNW.toMe ? ['别人欠我的', exact(r.startNW.toMe), exact(r.endNW.toMe), repSigned(r.endNW.toMe - r.startNW.toMe)] : null,
-      r.startNW.iOwe || r.endNW.iOwe ? ['我欠别人的', ...[r.startNW.iOwe, r.endNW.iOwe].map((v) => (v ? `−${exact(v)}` : exact(0))), repSigned(r.startNW.iOwe - r.endNW.iOwe)] : null,
-      { cells: ['净资产', exact(r.startNW.net), exact(r.endNW.net), repSigned(r.endNW.net - r.startNW.net)], cls: 'total strong' },
-    ], '按账户'),
-    h('div', { class: 'label-sm' }, '按用途'),
-    repTable(['用途', '月初', endCol, '变化'], [
-      ...r.purposes.map((x) => [x.name, x.start < 0 ? `−${exact(-x.start)}` : exact(x.start), x.end < 0 ? `−${exact(-x.end)}` : exact(x.end), repSigned(x.end - x.start)]),
-      { cells: ['合计', exact(sumOf('start')), exact(sumOf('end')), repSigned(sumOf('end') - sumOf('start'))], cls: 'total' },
-    ], '按用途'),
-    r.purposes.some((x) => x.start < 0 || x.end < 0) ? h('p', { class: 'muted small' }, '负数的意思：分给心愿基金、生活费的，比实际有的钱多。') : null,
-    h('p', { class: 'muted small' }, '美元都按今天的汇率折成人民币。按用途分的规则和「钱都在哪」一样。'));
+    repLegend(r.purposes.map((x) => [x.name, PURPOSE_COLORS[x.name]])),
+    nwHist.length >= 2 ? lineChart([{ values: nwHist.map((x) => x.net), color: 'var(--accent)' }],
+      { tight: true, height: 120, title: '净资产', xLabels: [[0, `${nwHist[0].p.startMonth}月`], [nwHist.length - 1, `${nwHist.at(-1).p.startMonth}月`]] }) : null,
+    repDetail(
+      repTable(['账户', '月初', endCol, '变化'], [
+        ...r.accounts.map((a) => [`${a.name}${a.usd ? '（美元）' : ''}`, exact(a.start), exact(a.end), repSigned(a.end - a.start)]),
+        r.startNW.toMe || r.endNW.toMe ? ['别人欠我的', exact(r.startNW.toMe), exact(r.endNW.toMe), repSigned(r.endNW.toMe - r.startNW.toMe)] : null,
+        r.startNW.iOwe || r.endNW.iOwe ? ['我欠别人的', minus(-r.startNW.iOwe), minus(-r.endNW.iOwe), repSigned(r.startNW.iOwe - r.endNW.iOwe)] : null,
+        { cells: ['净资产', exact(r.startNW.net), exact(r.endNW.net), repSigned(r.endNW.net - r.startNW.net)], cls: 'total strong' },
+      ], '按账户'),
+      repTable(['用途', '月初', endCol, '变化'], [
+        ...r.purposes.map((x) => [x.name, minus(x.start), minus(x.end), repSigned(x.end - x.start)]),
+        { cells: ['合计', exact(sumOf('start')), exact(sumOf('end')), repSigned(sumOf('end') - sumOf('start'))], cls: 'total' },
+      ], '按用途'),
+      h('p', { class: 'muted small' }, '美元按今天的汇率折成人民币。')));
 
-  // 四、预算执行
+  // 预算：子弹条 + 花钱曲线
   const bScale = Math.max(1, ...r.budget.map((x) => Math.max(x.budget, x.v)));
   const bSum = r.budget.reduce((a, x) => a + x.budget, 0);
   const vSum = r.budget.reduce((a, x) => a + x.v, 0);
   const diffText = (b, v) => (v > b ? `超 ${money(v - b)}` : `${r.ongoing ? '还剩' : '省'} ${money(b - v)}`);
   const upto = r.curve.filter((x) => x.day <= r.asOf);
   const n = r.curve.length - 1;
-  const s4 = repSection('四', '预算执行',
+  const s4 = repSection('预算',
     r.budget.length ? h('div', { class: 'rep-bullets', role: 'img', 'aria-label': '每一块预算用了多少' }, r.budget.map((x) => h('div', { class: 'rep-bullet' },
       h('span', { class: 'small' }, x.name),
       h('div', { class: 'rep-bullet-track' },
@@ -2893,31 +2886,25 @@ function monthReportView(d, day, head, seg, navRow) {
         h('span', { class: `rep-bullet-fill${x.v > x.budget ? ' over' : ''}`, style: `width:${(x.v / bScale) * 100}%;--c:${x.color}` }),
         h('span', { class: 'rep-bullet-mark', style: `left:${(x.budget / bScale) * 100}%` })),
       h('span', { class: `small ${x.v > x.budget ? 'warn-text' : 'muted'}` }, repPct(x.pct))))) : null,
-    r.budget.length ? h('p', { class: 'muted small' }, '浅色是预算，深色是实际花的，竖线是预算到头的地方。') : null,
-    repTable(['', '预算', '实际', '差额', '用了'], [
-      ...r.budget.map((x) => [x.name, money(x.budget), exact(x.v), h('span', { class: x.v > x.budget ? 'warn-text' : '' }, diffText(x.budget, x.v)), repPct(x.pct)]),
-      { cells: ['合计', money(bSum), exact(vSum), diffText(bSum, vSum), repPct(bSum ? vSum / bSum : 0)], cls: 'total' },
-    ], '预算执行'),
-    r.st.spent.none >= 1 ? h('p', { class: 'muted small' }, noneLine(noneParts(d, r.st.tx))) : null,
-    r.lb > 0 ? [h('div', { class: 'label-sm' }, '花钱曲线（生活花销）'),
-      lineChart([
-        { values: r.curve.map((x) => x.planned), color: 'var(--muted)', dashed: true },
-        { values: upto.map((x) => x.actual), color: 'var(--accent)' },
-      ], { height: 140, xLabels: [[0, md(p.start)], [Math.round(n / 2), md(r.curve[Math.round(n / 2)].day)], [n, md(p.end)]], title: '花钱曲线' }),
-      h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--accent)' }), '实际累计'), h('span', {}, h('i', { style: 'background:var(--muted)' }), '按计划'))] : null,
-    budgetAdvice(d, today(), usdRate()).items.length ? h('a', { class: 'link-card small', href: '#/budget' }, '预算有调整建议，去看看 →') : null);
+    r.lb > 0 ? [lineChart([
+      { values: r.curve.map((x) => x.planned), color: 'var(--muted)', dashed: true },
+      { values: upto.map((x) => x.actual), color: 'var(--accent)' },
+    ], { height: 140, xLabels: [[0, md(p.start)], [Math.round(n / 2), md(r.curve[Math.round(n / 2)].day)], [n, md(p.end)]], title: '花钱曲线' }),
+    repLegend([['生活花销累计', 'var(--accent)'], ['按计划', 'var(--muted)']])] : null,
+    repDetail(
+      repTable(['', '预算', '实际', '差额', '用了'], [
+        ...r.budget.map((x) => [x.name, money(x.budget), exact(x.v), diffText(x.budget, x.v), repPct(x.pct)]),
+        { cells: ['合计', money(bSum), exact(vSum), diffText(bSum, vSum), repPct(bSum ? vSum / bSum : 0)], cls: 'total' },
+      ], '预算执行'),
+      r.st.spent.none >= 1 ? h('p', { class: 'muted small' }, noneLine(noneParts(d, r.st.tx))) : null));
 
-  // 五、花销明细
+  // 花在哪：环形 + 每天的日历
   const groups = GROUPS.filter((g) => r.rs.byGroup[g.id]);
   const cal = r.calendar;
   const calMax = Math.max(1, ...cal.days.map((x) => x.v));
   const lead = (new Date(`${p.start}T12:00:00`).getDay() + 6) % 7; // 周一在最左
-  const s5 = repSection('五', '花销明细',
+  const s5 = repSection('花在哪',
     r.rs.total ? spendDonut(r.rs, groups, { sub: '这个月花销', title: '花在哪了' }) : null,
-    repTable(['类别', '金额', '占比', ...(withPrev ? ['比上月'] : [])],
-      r.cats.slice(0, 10).map((x) => [x.name, exact(x.v), repPct(x.share), ...(withPrev ? [repSigned(x.v - x.prev)] : [])]), '花得最多的类别'),
-    r.cats.length > 10 ? h('p', { class: 'muted small' }, `只列前 10 类，一共 ${r.cats.length} 类。`) : null,
-    h('div', { class: 'label-sm' }, '每天的生活花销'),
     h('div', { class: 'rep-cal', role: 'img', 'aria-label': '每天的生活花销日历' },
       [...WEEKDAYS].map((w) => h('span', { class: 'rep-cal-wd' }, w)),
       Array.from({ length: lead }, () => h('span', {})),
@@ -2925,24 +2912,27 @@ function monthReportView(d, day, head, seg, navRow) {
         class: `rep-cal-day${x.future || x.before ? ' off' : x.v / calMax > 0.55 ? ' dark' : ''}`,
         style: x.future || x.before ? '' : `--a:${Math.round(8 + (x.v / calMax) * 72)}%`,
         title: `${md(x.day)} ${exact(x.v)}`,
-      }, h('b', {}, String(Number(x.day.slice(8)))), x.v >= 0.5 && !x.future ? h('small', {}, jarMoney(x.v)) : null))),
-    h('p', { class: 'muted small' }, '颜色越深，那天花得越多（吃饭、日常、自由钱、形象）。'),
-    repTable(['', ''], [
-      ['平均每天', exact(cal.avg)],
-      cal.max && cal.max.v > 0 ? ['花得最多的一天', `${md(cal.max.day)} · ${exact(cal.max.v)}`] : null,
-      ['没花钱的日子', `${cal.zero} 天（共 ${cal.counted} 天）`],
-    ], '每天'),
-    r.top.length ? [h('div', { class: 'label-sm' }, '最大的几笔'), h('div', { class: 'tx-list' }, r.top.map((t) => txRow(t)))] : null);
+      }, String(Number(x.day.slice(8)))))),
+    repDetail(
+      repTable(['类别', '金额', '占比', ...(withPrev ? ['比上月'] : [])],
+        r.cats.slice(0, 10).map((x) => [x.name, exact(x.v), repPct(x.share), ...(withPrev ? [repSigned(x.v - x.prev)] : [])]), '花得最多的类别'),
+      repTable(['每天的生活花销', ''], [
+        ['平均每天', exact(cal.avg)],
+        cal.max && cal.max.v > 0 ? ['花得最多的一天', `${md(cal.max.day)} · ${exact(cal.max.v)}`] : null,
+        ['没花钱的日子', `${cal.zero} 天（共 ${cal.counted} 天）`],
+      ], '每天'),
+      r.top.length ? repTable(['最大的几笔', ''], r.top.map((t) => [`${md(t.date)} ${txTitle(t)}${t.note ? `（${t.note}）` : ''}`, exact(cny(t))]), '最大的几笔') : null));
 
-  // 六、趋势
-  const s6 = repSection('六', '趋势',
+  // 趋势：收入、支出柱子 + 储蓄率的线
+  const s6 = repSection('趋势',
     barsLine(r.trend.map((x) => ({ label: `${x.p.startMonth}月`, a: x.income, b: x.total, rate: x.rate })), { title: '收入、支出和储蓄率' }),
-    h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--sage)' }), '收入'), h('span', {}, h('i', { style: 'background:var(--g-food)' }), '支出'),
-      h('span', {}, h('i', { style: 'background:var(--accent)' }), '储蓄率（右边的刻度）')),
-    r.trend.length < 2 ? h('p', { class: 'muted small' }, '记满几个月，这里就能看出趋势。') : null,
-    repTable(['', '收入', '支出', '存下', '储蓄率'], r.trend.map((x) => [`${x.p.startMonth}月`, money(x.income), money(x.total), money(x.saved), repPct(x.rate)]), '最近几个月'));
+    repLegend([['收入', 'var(--sage)'], ['支出', 'var(--g-food)'], ['储蓄率', 'var(--accent)']]),
+    repDetail(repTable(['', '收入', '支出', '存下', '储蓄率'], r.trend.map((x) => [`${x.p.startMonth}月`, money(x.income), money(x.total), money(x.saved), repPct(x.rate)]), '最近几个月')));
 
-  // 七、附注：有才写
+  // AI 点评（这个月过完才有）
+  const letter = letterCard(p);
+
+  // 附注：只在 PDF 里，有才写
   const nt = r.notes;
   const w = nt.wish;
   const noteRows = [
@@ -2956,16 +2946,10 @@ function monthReportView(d, day, head, seg, navRow) {
     nt.wishesBought.length ? ['实现的心愿', exact(nt.wishesBought.reduce((a, x) => a + x.v, 0)), nt.wishesBought.map((x) => x.name).join('、')] : null,
     nt.milestones.length ? ['里程碑', '', nt.milestones.join('、')] : null,
   ].filter(Boolean);
-  const s7 = noteRows.length ? repSection('七', '附注', repTable(['项目', '金额'],
+  const notes = noteRows.length ? h('section', { class: 'card rep-sec rep-detail' }, h('h3', {}, '附注'), repTable(['项目', '金额'],
     noteRows.map(([name, v, why]) => [h('span', {}, name, why ? h('span', { class: 'muted small block' }, why) : null), v]), '附注')) : null;
 
-  // 八、AI 点评
-  const letter = letterCard(p);
-  const s8 = letter || h('section', { class: 'card rep-sec' }, h('h3', {}, '八、AI 点评'), h('p', { class: 'muted small' }, '这个月过完以后，AI 会看着这份报表写几句。'));
-
-  return h('div', { class: 'report' }, head, seg,
-    navRow(p.label, r.ongoing ? '这个预算月' : null, addDays(p.start, -1), p.next),
-    top, s1, s2, s3, s4, s5, s6, s7, s8);
+  return h('div', { class: 'report' }, head, seg, nav, top, s2, s3, s4, s5, s6, letter, notes, exportBtns);
 }
 
 const REPORT_ASK = `我是一个大学生，在认真学着记账、稳定存钱。下面是我一个月的财务报表：收支、家底（按账户和按用途）、预算执行、花销明细、最近几个月的趋势，还有附注。
@@ -3088,7 +3072,7 @@ function letterCard(p) {
   const latest = shiftPeriod(d, p, 1).start === periodFor(d, today()).start;
   if (!letter && latest && !letterState.busy[p.start] && !letterState.error[p.start]) setTimeout(run);
   return h('section', { class: 'card letter rep-sec' },
-    h('h3', {}, '八、AI 点评'),
+    h('h3', {}, 'AI 点评'),
     letter ? [h('p', { class: 'letter-text' }, letter.text), h('button', { class: 'link small', onclick: () => { delete d.letters[p.start]; run(); render(); } }, '再写一封')]
       : letterState.busy[p.start] || (latest && !letterState.error[p.start]) ? h('p', { class: 'muted small' }, 'AI 正在写……')
         : [letterState.error[p.start] ? h('p', { class: 'small warn-text' }, letterState.error[p.start]) : null,
