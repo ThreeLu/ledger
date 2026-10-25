@@ -1432,7 +1432,7 @@ def _(c):
     c.go("#/summary?mode=ahead")
     p.reload()
     advice = p.locator(".rep-sec", has_text="建议")
-    expect(advice.locator(".advice-row.tone-warn").first).to_contain_text("可能")
+    expect(advice.locator(".advice-row.tone-warn").first).to_contain_text("可能", timeout=20000)  # 后台线程算，慢的机器要几秒
     expect(advice).to_contain_text("少花一半也到不了")
     p.wait_for_timeout(400)
     p.screenshot(path=ART / "ahead-advice.png", full_page=True)
@@ -1440,7 +1440,7 @@ def _(c):
     expect(how).to_contain_text("c* = min")
     c.go("#/")
     todo = p.locator(".todo-item", has_text="预测有建议")
-    expect(todo).to_contain_text("还有")  # 来不及乙、碰到底线……几条
+    expect(todo).to_contain_text("还有", timeout=20000)  # 来不及乙、碰到底线……几条
     todo.get_by_role("button", name="做完了").click()
     expect(todo).to_have_count(0)
     assert "goal-g-hard" in c.data()["todoDone"]["forecast"], c.data()["todoDone"]

@@ -2810,26 +2810,36 @@ function forecasts() {
   return fcMemo.v;
 }
 const aheadForecast = () => { const v = forecasts(); return (v.ahead ||= simulateAhead(store.data, today(), { fc: v.fc, score: v.score, rate: usdRate() })); };
-// 建议（第二批）：要多跑几次模拟，首页不在画页面时算——先画，空下来再算，有建议才重画一次
-const forecastAdvice = () => { const v = forecasts(); return (v.advice ||= adviceItems(store.data, today(), aheadForecast(), { fc: v.fc, score: v.score, rate: usdRate() })); };
-let advicePending = false;
+// 建议（第二批）：要跑几十次模拟，放在后台线程（js/advice-worker.js）算，页面不卡；算好了再画一次
+// v.advice：undefined = 还没算，算好是 { items, unc }。正在打字、开着弹出框时不重画（下次画页面时就会出现）
+let adviceWorker = null;
 function adviceLater() {
   const v = forecasts();
   if (v.advice) return v.advice;
-  if (!advicePending) {
-    advicePending = true;
-    setTimeout(() => {
-      advicePending = false;
-      // 正在打字、开着弹出框时不重画（下次画页面时就会出现）
+  if (!v.adviceAsked) {
+    v.adviceAsked = true;
+    const key = fcMemo.key;
+    const done = (res) => {
+      if (res.key !== fcMemo.key) return; // 账又变了，作废（新的那次会再算）
+      fcMemo.v.advice = { items: res.items || [], unc: res.unc || null };
       const busy = document.querySelector('.sheet-overlay') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
-      if (forecastAdvice().length && !busy && /^#\/?$/.test(window.location.hash || '#/')) render();
-    }, 300);
+      const here = /^#\/?$/.test(window.location.hash || '#/') ? fcMemo.v.advice.items.length : /mode=ahead/.test(window.location.hash);
+      if (here && !busy) render();
+    };
+    const msg = { key, data: store.data, today: today(), opts: { fc: v.fc, score: v.score, rate: usdRate() }, unc: true };
+    try {
+      adviceWorker ||= new Worker(new URL('./advice-worker.js', import.meta.url), { type: 'module' });
+      adviceWorker.onmessage = (e) => done(e.data);
+      adviceWorker.postMessage(msg);
+    } catch {
+      setTimeout(() => done({ key, items: adviceItems(msg.data, msg.today, aheadForecast(), msg.opts), unc: uncertaintySources(msg.data, msg.today, msg.opts) }), 300);
+    }
   }
-  return [];
+  return null;
 }
 // 首页「要做的事」里一行：有建议、这个预算月没点过「知道了」（换了建议会再出现）
 function adviceTodo() {
-  const items = adviceLater();
+  const items = adviceLater()?.items || [];
   if (!items.length) return null;
   const p = periodFor(store.data, today());
   const sig = `${p.start}|${items.map((x) => x.key).join(',')}`;
@@ -2928,14 +2938,16 @@ function aheadView(d, head, seg) {
     })) : null;
 
   // 建议（只在有用时）+ 一年后的不确定从哪来
-  const advice = forecastAdvice();
-  const unc = end.q[4] - end.q[0] >= 1000 ? (v.unc ??= uncertaintySources(d, t, { fc: v.fc, score: v.score, rate: usdRate() })) : null;
+  const ready = adviceLater();
+  const advice = ready?.items || [];
+  const unc = ready && end.q[4] - end.q[0] >= 1000 ? ready.unc : null;
   const uncLine = unc && Math.max(unc.income, unc.spend) >= 0.5
     ? `一年后存款为什么有这么宽的范围：大约 ${pct(unc.income)} 来自收入到不到账${unc.irregular.length ? `（主要是不定时的${unc.irregular.map((x) => `「${x}」`).join('、')}）` : ''}，${pct(unc.spend)} 来自每月花多少。` : null;
   const adviceCard = advice.length || uncLine ? repSection(advice.length ? '建议' : '分析',
     advice.map((x) => h(x.href ? 'a' : 'div', { class: `advice-row tone-${x.tone}`, href: x.href }, h('span', { class: 'advice-dot' }), h('span', { class: 'grow' }, x.text))),
     uncLine ? h('p', { class: 'muted small advice-note' }, uncLine) : null) : null;
-  return h('div', { class: 'report ahead' }, head, seg, mast, top, adviceCard, chart, bigDays, goalCard, howCard(v, s));
+  const waiting = ready ? null : h('p', { class: 'muted small advice-wait' }, '正在算有没有建议……');
+  return h('div', { class: 'report ahead' }, head, seg, mast, top, adviceCard || waiting, chart, bigDays, goalCard, howCard(v, s));
 }
 
 // 怎么算的（用户选的：写出方法名和公式，带上他自己的参数；只说明，不教）

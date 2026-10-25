@@ -219,13 +219,13 @@ export function incomeModels(data, today) {
 // 建议用的几个开关（第二批）：cut = 从下个月起生活预算每月调低多少；spendCut = 实际花销也一起少这么多
 // （只调预算、花的不变：本来就花不到预算才有用——省下的不进心愿基金了，进存款；花得比新预算多，多的还是从存款出）；
 // fixIncome = 收入不抽、按「金额 × 可能」算；fixSpend = 生活花销不抽、按后验均值算（方差分解用）
-export function simulateAhead(data, today, { fc = null, score = null, paths = PATHS, months = 12, rate = data.settings.usdRate, cut = 0, spendCut = false, fixIncome = false, fixSpend = false } = {}) {
+// 准备（和 cut 这些开关无关的都在这里算一次）：建议要跑几十次模拟，共用一份（opts.prep）
+export function prepareAhead(data, today, { fc = null, score = null, months = 12, rate = data.settings.usdRate } = {}) {
   const map = savingsMap(data, today, rate);
   const p0 = periodFor(data, today);
   const part0 = partial(data, p0);
   const st0 = periodStats(data, p0);
   const LB = livingBudget(data);
-  const LBk = Math.max(0, LB - cut); // 下个月起的生活预算
   const subB = Number(data.budget?.sub) || 0;
   const subLeft = Math.max(0, subB * part0.factor - st0.spent.sub);
   const budget0 = LB * part0.factor;
@@ -244,10 +244,20 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
   const goalIdx = Object.fromEntries(goals.map((g, i) => [g.id, i]));
   // 每个专项要在哪个月底前留够：日子所在那个月的前一个月底
   const dueK = goals.map((g) => (g.by ? periods.findIndex((p) => g.by <= p.end) : -1));
-  const month = monthForecast(data, today, { fc, score, paths });
+  const month = monthForecast(data, today, { fc, score });
   const xs = data.openingDate ? dailyLiving(data, data.openingDate, addDays(today, -1)).map((x) => x.v) : [];
   const prior = g0(priorMean(data, today));
   const wish0 = wishFunds(data, today).small;
+  const curSpent = st0.living;
+  const postMean = (PRIOR_DAYS * prior.mean + xs.reduce((a, x) => a + x, 0)) / (PRIOR_DAYS + xs.length);
+  return { today, map, p0, part0, st0, LB, subB, subLeft, budget0, incomes, fallbackIncome, goals, periods, events, evAt, resAt, base, goalIdx, dueK,
+    month, xs, prior, wish0, curSpent, postMean, months, family0: Number(data.family?.sealed) || 0, budgetAll: budgetTotal(data) };
+}
+
+export function simulateAhead(data, today, { fc = null, score = null, paths = PATHS, months = 12, rate = data.settings.usdRate, cut = 0, spendCut = false, fixIncome = false, fixSpend = false, prep = null } = {}) {
+  const P0 = prep || prepareAhead(data, today, { fc, score, months, rate });
+  const { map, p0, part0, st0, LB, subB, subLeft, budget0, incomes, fallbackIncome, goals, periods, evAt, resAt, base, goalIdx, dueK, month, xs, prior, wish0, curSpent, postMean } = P0;
+  const LBk = Math.max(0, LB - cut); // 下个月起的生活预算
   const R = rng(`ahead|${today}`);
   const M = Math.min(months, periods.length);
   const totals = Array.from({ length: M }, () => new Float64Array(paths));
@@ -257,14 +267,12 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
   const atK = goals.map(() => new Int16Array(paths).fill(-1));
   const onTime = goals.map(() => 0);
   // 这个月的生活花销：从 monthForecast 的分布（同样的混合）里抽
-  const curSpent = periodStats(data, p0).living;
-  const postMean = (PRIOR_DAYS * prior.mean + xs.reduce((a, x) => a + x, 0)) / (PRIOR_DAYS + xs.length);
   for (let k = 0; k < paths; k++) {
     const P = drawP(R, xs, prior);
     const ps = incomes.map((x) => R.beta(x.a, x.b));
     let total = map.total;
     let wish = wish0;
-    let family = Number(data.family?.sealed) || 0;
+    let family = P0.family0;
     let below = false;
     const reached = goals.map(() => -1);
     periods.forEach((p, i) => {
@@ -325,7 +333,7 @@ export function simulateAhead(data, today, { fc = null, score = null, paths = PA
       pReach: ks.filter(Number.isFinite).length / paths, p10: at(0.1), p50: at(0.5), p90: at(0.9) };
   });
   return { now: map.total, fan, pBelow: belowAny / paths, goals: goalOut, month, incomes, prior: { mean: r2(prior.mean), cv: PRIOR_CV, alpha: PRIOR_DAYS },
-    days: xs.length, paths, budget: budgetTotal(data), living: LB, endVar: variance(totals[M - 1]) };
+    days: xs.length, paths, budget: P0.budgetAll, living: LB, endVar: variance(totals[M - 1]) };
 }
 const variance = (arr) => { const n = arr.length; const m = arr.reduce((a, x) => a + x, 0) / n; return arr.reduce((a, x) => a + (x - m) ** 2, 0) / n; };
 
@@ -340,7 +348,8 @@ const roundUp = (n, step) => Math.ceil(n / step) * step;
 // 敏感性分析：生活预算每月最少调低多少（10 块一档；spend = 花的也一起少这么多），ok(模拟结果) 就满足。同一个种子（共同随机数），结果随 cut 单调。
 // 调低一半还不行返回 null；不用调返回 { cut: 0 }
 export function cutNeeded(data, today, opts, ok, { spend = false } = {}) {
-  const run = (c) => simulateAhead(data, today, { ...opts, paths: ADVICE_PATHS, cut: c, spendCut: spend });
+  const prep = opts.prep || prepareAhead(data, today, opts);
+  const run = (c) => simulateAhead(data, today, { ...opts, prep, paths: ADVICE_PATHS, cut: c, spendCut: spend });
   const s0 = run(0);
   if (ok(s0)) return { cut: 0, sim: s0 };
   let lo = 0;
@@ -393,7 +402,8 @@ export function budgetCredible(data, today, { draws = 2000 } = {}) {
 
 // 方差分解：一年后存款的方差里，有多少是收入到不到账带来的、多少是每月花多少带来的（把一样固定成平均，看方差少了多少）
 export function uncertaintySources(data, today, opts = {}) {
-  const run = (o) => simulateAhead(data, today, { ...opts, paths: ADVICE_PATHS, ...o });
+  const prep = opts.prep || prepareAhead(data, today, opts);
+  const run = (o) => simulateAhead(data, today, { ...opts, prep, paths: ADVICE_PATHS, ...o });
   const base = run({});
   if (base.endVar < 1e4) return null; // 标准差不到 100，没什么好分的
   let inc = Math.max(0, 1 - run({ fixIncome: true }).endVar / base.endVar);
@@ -405,6 +415,7 @@ export function uncertaintySources(data, today, opts = {}) {
 // 建议：sim 是页面上那次模拟（4000 条）。没有要说的就是空的
 export function adviceItems(data, today, sim, opts = {}) {
   const items = [];
+  opts = { ...opts, prep: opts.prep || prepareAhead(data, today, opts) }; // eslint-disable-line no-param-reassign
   // 先看只调预算行不行（本来就花不到预算），不行再看「少花 + 预算一起调低」
   const lever = (ok) => {
     const r = cutNeeded(data, today, opts, ok);
