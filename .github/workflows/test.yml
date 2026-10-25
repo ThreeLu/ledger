@@ -18,6 +18,7 @@ jobs:
       - run: pip install playwright openpyxl
       - run: python -m playwright install --with-deps chromium
       - run: node tests/test_money.mjs
+      - run: node tests/test_sim.mjs
       - run: python tests/test_app.py
       - if: failure()
         uses: actions/upload-artifact@v4

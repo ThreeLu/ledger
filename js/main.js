@@ -17,6 +17,8 @@ import { weekOf, weekSummary, monthSummary, yearSummary, wishMonth } from './sum
 import { barChart, donut, lineChart } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx } from './xlsx.js';
+import { START_CASH, HOLD, holdName, LOOK, lookName, zoned, bjDate, marketState, marketOf, tPlus0, lot, fees, currentGame, cash, positions, checkOrder, maxBuy, worth, worthSeries, lookbackDue, reviewDue } from './sim.js';
+import { fetchQuotes, fetchDaily, searchStocks } from './quotes.js';
 import { icon } from './icons.js';
 import { solarTerm, greeting } from './solar.js';
 import { wordFor } from './words.js';
@@ -231,6 +233,10 @@ const routes = [
   [/^\/receipt$/, (_, q) => receiptView(q)],
   [/^\/siri$/, () => siriView()],
   [/^\/bills$/, () => billsView()],
+  [/^\/sim$/, () => simView()],
+  [/^\/sim\/s\/([^/]+)$/, (sym) => simStockView(sym)],
+  [/^\/sim\/reviews$/, () => simReviewsView()],
+  [/^\/sim\/trades$/, () => simTradesView()],
   [/^\/accounts$/, () => accountsView()],
   [/^\/account\/([^/]+)$/, (id) => accountView(id)],
   [/^\/more$/, () => moreView()],
@@ -254,7 +260,7 @@ const routes = [
 ];
 const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
-  '/list': [/^\/list/],
+  '/sim': [/^\/sim/],
   '/summary': [/^\/summary/],
   '/more': [/^\/more/, /^\/lost/, /^\/receipt/, /^\/siri/, /^\/bills/, /^\/accounts?/, /^\/budget/, /^\/rules/, /^\/quick/, /^\/settings/, /^\/claims?/, /^\/people/, /^\/person/, /^\/reconcile/, /^\/wishes/, /^\/tax/, /^\/subs/, /^\/goals/, /^\/money/],
 };
@@ -1371,6 +1377,537 @@ function recentCard() {
   } }, icon('search'));
   draw();
   return [h('div', { class: 'section-title recent-head' }, h('span', {}, '最近记的'), btn), box, summary, list];
+}
+
+// ---------- 模拟交易（2026-10-24） ----------
+// 假的 1 万块，按真的规则买卖 A 股、ETF、美股。每一笔写为什么，下单前 AI 问一两句，卖出一周 / 买入一个月后回头看，每月复盘一次。
+// 不是钱：不进总资产、预算、任何统计。数据是 finance.json 里的 simGames / simTrades / simWatch / simReviews
+
+const SIM_HELP = [
+  ['这是什么', ['用假的 1 万块练习买卖股票。规则按真的来，将来真进场时手感一样。', '每一笔都写下为什么。这些记录攒着，AI 慢慢就知道你是怎么想的。']],
+  ['规则', ['A 股：工作日 9:30–11:30、13:00–15:00 能买卖。100 股一手（科创板最少 200 股）。今天买的明天才能卖；跨境、黄金、债券 ETF 当天能卖。',
+    '美股：北京时间晚上 21:30 到第二天 4:00 能买卖（冬天晚一小时）。1 股起，当天能卖。钱按当天汇率从这 1 万里换。',
+    '买按「卖一」价成交，卖按「买一」价成交。涨停时没人卖、买不到；跌停时没人买、卖不出去。',
+    '手续费：A 股每笔最低 5 元，股票卖出另收千分之 0.5 印花税；美股每笔大约 2 美元。']],
+  ['颜色', ['红色是涨，绿色是跌，和国内的炒股软件一样。']],
+  ['买卖的时候', ['写一句为什么，选打算拿多久。点「下一步」后 AI 会问一两句，可以答，也可以不答。']],
+  ['回头看', ['卖出一周后、买入一个月后，会问一句当时想对了没有。']],
+  ['复盘', ['每个月初 AI 自动写上个月的复盘；想复盘的时候也可以点「现在复盘」。']],
+  ['导出', ['「导出给 ChatGPT」把全部记录和一段问题复制好，打开 ChatGPT 粘贴就行。']],
+  ['重开一局', ['在最下面。现在这局收起来，记录都留着，导出时一起带上。']],
+];
+
+const simOf = (d) => ({ games: d.simGames, trades: d.simTrades, watch: d.simWatch, reviews: d.simReviews });
+const simQ = {}; // 行情 { sym: … }，只在内存
+const simMeta = {}; // 搜到过的股票 { sym: { sym, k, code, name, kind, mkt } }
+const simDaily = {}; // 每天的价格 { 'k|天数|复权': { at, rows } }
+const simBusy = new Set();
+let simRange = 66; // 走势看多久（交易日）
+const SIM_FRESH = 15000;
+
+const upDown = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : '');
+const simSigned = (n, fmt) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`;
+const pctText = (x) => simSigned(x * 100, (v) => `${v.toFixed(2)}%`);
+const curSign = (sym) => (marketOf(sym) === 'US' ? '$' : '¥');
+const px = (sym, n) => `${curSign(sym)}${Number(n).toLocaleString('zh-CN', { minimumFractionDigits: n < 10 ? 3 : 2, maximumFractionDigits: n < 10 ? 3 : 2 })}`;
+const mktName = (s) => (marketOf(s.sym) === 'US' ? '美股' : /ETF|LOF/.test(s.kind || '') ? 'ETF' : 'A 股');
+// 买卖的时间一律按北京时间写（美股也是，看的人在国内）
+const timeText = (iso) => {
+  const z = zoned(new Date(iso), 'Asia/Shanghai');
+  return `${Number(z.date.slice(5, 7))}/${Number(z.date.slice(8))} ${String(Math.floor(z.min / 60)).padStart(2, '0')}:${String(z.min % 60).padStart(2, '0')}`;
+};
+
+function simLoad(key, fn) {
+  if (simBusy.has(key)) return;
+  simBusy.add(key);
+  fn().then(() => { if (currentPath().startsWith('/sim')) render(); }, () => {}).finally(() => simBusy.delete(key));
+}
+// 要用的行情：没有或超过 15 秒就去拉，拉回来重画
+function needQuotes(syms, force = false) {
+  const stale = [...new Set(syms)].filter((s) => force || !simQ[s] || Date.now() - simQ[s].at > SIM_FRESH);
+  if (stale.length) simLoad(`q:${stale.join(',')}`, async () => Object.assign(simQ, await fetchQuotes(stale)));
+}
+function needDaily(k, opts) {
+  const key = `${k}|${opts.days}|${opts.from || ''}|${opts.adjust ?? 'qfq'}`;
+  const c = simDaily[key];
+  if (!c || Date.now() - c.at > 600000) simLoad(key, async () => { simDaily[key] = { at: Date.now(), rows: await fetchDaily(k, opts) }; });
+  return c?.rows || null;
+}
+// 开盘时每 15 秒刷新一次价格
+setInterval(() => {
+  if (!currentPath().startsWith('/sim') || document.hidden || !store?.data) return;
+  if (marketState('A').open || marketState('US').open) render();
+}, SIM_FRESH);
+
+// 一只股票的资料：搜到过的、买过的、看着的；都没有就按代码搜一次
+function simInfo(sym) {
+  const d = store.data;
+  const from = simMeta[sym] || d.simTrades.find((t) => t.sym === sym) || d.simWatch.find((w) => w.sym === sym);
+  if (from) return { sym, k: from.k, code: from.code || sym.replace(/^(sh|sz|bj|us)/, ''), name: simQ[sym]?.name || from.name, kind: from.kind, mkt: marketOf(sym) };
+  simLoad(`m:${sym}`, async () => {
+    const list = (await searchStocks(sym.replace(/^(sh|sz|bj|us)/, ''))) || [];
+    for (const x of list) simMeta[x.sym] = x;
+    if (!simMeta[sym]) simMeta[sym] = { sym, k: sym, code: sym.slice(2), name: sym, kind: '', mkt: marketOf(sym), missing: true };
+  });
+  return null;
+}
+
+function simView() {
+  const d = store.data;
+  const sim = simOf(d);
+  const g = currentGame(sim);
+  const help = helpButton('模拟怎么用', SIM_HELP);
+  if (!g) {
+    return h('div', {}, header('模拟', help),
+      h('div', { class: 'card sim-intro' },
+        h('h3', {}, '用假的 1 万块练习'),
+        h('p', {}, '按真的规则买卖 A 股、ETF、美股。每一笔写下为什么，AI 慢慢认识你的想法。'),
+        h('p', { class: 'muted small' }, '这不是钱，不进账本的任何计算。'),
+        h('button', { onclick: () => save('模拟：开始', (data) => { data.simGames.push({ id: newId('g'), start: bjDate(), cash: START_CASH }); }).then(render) }, '开始')),
+      oldGames(sim));
+  }
+  const rate = usdRate();
+  const look = lookbackDue(sim, bjDate());
+  needQuotes([...positions(sim, g.id).map((p) => p.sym), ...d.simWatch.map((w) => w.sym), look?.sym].filter(Boolean));
+  const w = worth(sim, g.id, simQ, rate);
+  const due = reviewDue(sim, bjDate());
+  if (due && !simBusy.has(`review:${due}`) && !simReviewFailed.has(due)) simReview(due);
+  const recentReview = [...d.simReviews].sort((a, b) => b.at.localeCompare(a.at))[0];
+  const showReview = recentReview && (Date.now() - new Date(recentReview.at)) < 10 * 86400000;
+  const trades = d.simTrades.filter((t) => t.game === g.id).sort((a, b) => b.at.localeCompare(a.at));
+  return h('div', {},
+    header('模拟', help),
+    h('div', { class: 'chips sim-markets' }, ['A', 'US'].map((m) => {
+      const st = marketState(m);
+      return h('span', { class: `tag${st.open ? ' on' : ''}` }, st.text);
+    })),
+    worthCard(sim, g, w, rate),
+    look ? lookbackCard(look) : null,
+    due && simBusy.has(`review:${due}`) ? h('div', { class: 'card' }, h('p', { class: 'muted' }, `AI 在写 ${Number(due.slice(5))} 月的复盘…`)) : null,
+    showReview ? simReviewCard(recentReview, true) : null,
+    h('div', { class: 'section-title' }, '持有'),
+    w.pos.length ? h('div', { class: 'group' }, w.pos.map((p) => h('a', { class: 'cell sim-row', href: `#/sim/s/${p.sym}` },
+      h('span', { class: 'grow' }, p.name, h('span', { class: 'muted small block' }, `${p.qty} 股 · 成本 ${px(p.sym, p.avg)}`)),
+      h('span', { class: 'sim-right' }, exact(p.value), h('span', { class: `small block ${upDown(p.gain)}` }, pctText(p.pct))))))
+      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有买。搜一只看看。')),
+    h('button', { class: 'secondary sim-search-btn', onclick: searchSheet }, icon('search'), ' 搜一只'),
+    d.simWatch.length ? [h('div', { class: 'section-title' }, '看着的'),
+      h('div', { class: 'group' }, d.simWatch.map((x) => {
+        const q = simQ[x.sym];
+        return h('a', { class: 'cell sim-row', href: `#/sim/s/${x.sym}` },
+          h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, [`${md(x.at)}关注时 ${px(x.sym, x.price)}`, x.reason].filter(Boolean).join(' · '))),
+          q ? h('span', { class: 'sim-right' }, px(x.sym, q.price), h('span', { class: `small block ${upDown(q.pct)}` }, `今天 ${pctText(q.pct / 100)}`)) : null);
+      }))] : null,
+    trades.length ? [h('div', { class: 'section-title' }, '最近的买卖'),
+      h('div', { class: 'group' }, trades.slice(0, 6).map(tradeRow)),
+      trades.length > 6 ? h('p', { class: 'center' }, h('a', { href: '#/sim/trades' }, `全部 ${trades.length} 笔`)) : null] : null,
+    h('div', { class: 'group sim-tools' },
+      cell({ onclick: () => simReview(null), ic: 'sparkle', title: '现在复盘', sub: recentReview ? `上次 ${md(recentReview.at.slice(0, 10))}` : 'AI 看看你最近的买卖' }),
+      d.simReviews.length ? cell({ href: '#/sim/reviews', ic: 'book', color: 'var(--sage)', title: '以前的复盘', meta: `${d.simReviews.length} 篇` }) : null,
+      cell({ onclick: exportSheet, ic: 'receipt', color: 'var(--blue)', title: '导出给 ChatGPT', sub: '全部记录 + 一段问题，复制好去粘贴' })),
+    oldGames(sim),
+    h('p', { class: 'center small' }, h('button', { class: 'link', onclick: () => restartGame(g, w) }, '重开一局')));
+}
+
+function worthCard(sim, g, w, rate) {
+  const gain = w.total - w.start;
+  const syms = [...new Set(store.data.simTrades.filter((t) => t.game === g.id).map((t) => t.k))];
+  const closes = {};
+  let ready = true;
+  for (const k of syms) {
+    const rows = needDaily(k, { days: 400, from: g.start, adjust: '' });
+    if (!rows) ready = false;
+    closes[k.replace(/\..*$/, '')] = rows || [];
+  }
+  const live = Object.fromEntries(Object.entries(simQ).map(([s, q]) => [s, q.price]));
+  const series = ready ? worthSeries(sim, g.id, closes, rate, bjDate(), live) : [];
+  return h('div', { class: 'card sim-worth' },
+    h('div', { class: 'muted small' }, '一共'),
+    bigMoney(w.total),
+    h('div', { class: `sim-gain ${upDown(gain)}` }, `${simSigned(gain, exact)} · ${pctText(w.pct)}`),
+    h('div', { class: 'muted small' }, `现金 ${exact(w.cash)} · 持有 ${exact(w.hold)}`),
+    series.length >= 2 ? lineChart([{ values: series.map((x) => x[1]), color: 'var(--accent)' }, { values: series.map(() => w.start), color: 'var(--muted)', dashed: true }],
+      { tight: true, height: 120, title: '每天一共值多少', fmt: (v) => String(Math.round(v)), xLabels: [[0, md(series[0][0])], [series.length - 1, '今天']] }) : null,
+    h('div', { class: 'muted small' }, `从 ${md(g.start)}开始 · 起始 ${exact(w.start)}`));
+}
+
+function tradeRow(t) {
+  return h('button', { type: 'button', class: 'cell sim-row', onclick: () => tradeSheet(t) },
+    h('span', { class: `sim-side ${t.side}` }, t.side === 'buy' ? '买' : '卖'),
+    h('span', { class: 'grow' }, `${t.name} ${t.qty} 股`, h('span', { class: 'muted small block' }, [timeText(t.at), px(t.sym, t.price), t.reason].filter(Boolean).join(' · '))),
+    h('span', { class: 'sim-right' }, exact(t.cny)));
+}
+
+function tradeSheet(t) {
+  const row = (k, v) => (v ? h('div', { class: 'sim-kv' }, h('span', { class: 'muted' }, k), h('span', {}, v)) : null);
+  openSheet({
+    title: `${t.side === 'buy' ? '买' : '卖'} ${t.name}`,
+    body: h('div', {},
+      row('时间', timeText(t.at)),
+      row('数量', `${t.qty} 股`),
+      row('成交价', px(t.sym, t.price)),
+      row('手续费', `${curSign(t.sym)}${t.fee}`),
+      row(t.side === 'buy' ? '一共花了' : '一共拿回', `${exact(t.cny)}${marketOf(t.sym) === 'US' ? `（1 美元按 ¥${t.rate.toFixed(2)}）` : ''}`),
+      row('为什么', t.reason),
+      row('打算拿多久', holdName(t.hold)),
+      (t.ask || []).map((x) => h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `AI：${x.q}`), h('div', {}, x.a || '（没答）'))),
+      t.look && !t.look.skip ? h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `回头看 · ${md(t.look.at.slice(0, 10))}`), h('div', {}, [lookName(t.look.verdict), t.look.text].filter(Boolean).join('：'))) : null,
+      h('p', {}, h('a', { href: `#/sim/s/${t.sym}`, onclick: () => document.querySelector('.sheet-overlay')?.remove() }, `看看 ${t.name} →`))),
+    confirmText: '好', cancelText: null, onConfirm: () => {},
+  });
+}
+
+function oldGames(sim) {
+  const ended = sim.games.filter((g) => g.end);
+  if (!ended.length) return null;
+  return [h('div', { class: 'section-title' }, '以前的几局'),
+    h('div', { class: 'group' }, ended.map((g) => h('div', { class: 'cell' },
+      h('span', { class: 'grow' }, `${md(g.start)} – ${md(g.end)}`, h('span', { class: 'muted small block' }, `${sim.trades.filter((t) => t.game === g.id).length} 笔买卖`)),
+      h('span', { class: `sim-right ${upDown(g.endValue - g.cash)}` }, `${exact(g.cash)} → ${exact(g.endValue)}`))))];
+}
+
+function restartGame(g, w) {
+  if (!confirm('重开一局？现在这局收起来，记录都留着，重新从 1 万开始。')) return;
+  save('模拟：重开一局', (data) => {
+    const x = data.simGames.find((y) => y.id === g.id);
+    Object.assign(x, { end: bjDate(), endValue: w.total });
+    data.simGames.push({ id: newId('g'), start: bjDate(), cash: START_CASH });
+  }).then(render);
+}
+
+// 搜一只：拼音、中文、代码都行
+function searchSheet() {
+  const list = h('div', { class: 'group sim-results' });
+  let timer = null;
+  let n = 0;
+  const run = async (q) => {
+    const my = ++n;
+    if (!q.trim()) { list.replaceChildren(); return; }
+    const res = await searchStocks(q.trim());
+    if (my !== n) return;
+    if (!res) { list.replaceChildren(h('p', { class: 'muted cell' }, '搜不了，看看网络')); return; }
+    for (const x of res) simMeta[x.sym] = x;
+    list.replaceChildren(...(res.length ? res.slice(0, 12).map((x) => h('a', { class: 'cell', href: `#/sim/s/${x.sym}`, onclick: () => close() },
+      h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, `${x.code} · ${mktName(x)}`)))) : [h('p', { class: 'muted cell' }, '没有找到（港股不支持）')]));
+  };
+  const input = h('input', { type: 'search', placeholder: '茅台、maotai、600519、苹果、AAPL', 'aria-label': '搜股票', oninput: (e) => { clearTimeout(timer); timer = setTimeout(() => run(e.target.value), 300); } });
+  const close = openSheet({ title: '搜一只', body: h('div', {}, input, list), confirmText: '关闭', cancelText: null, onConfirm: () => {} });
+  input.focus();
+}
+
+function simStockView(sym) {
+  const d = store.data;
+  const sim = simOf(d);
+  const g = currentGame(sim);
+  if (!g) return h('div', {}, header('模拟'), h('div', { class: 'card' }, h('p', {}, '还没开始模拟。'), h('a', { href: '#/sim', class: 'button' }, '去开始')));
+  needQuotes([sym]);
+  const s = simInfo(sym);
+  const q = simQ[sym];
+  if (!s) return h('div', {}, header('…'), h('p', { class: 'muted center' }, '正在读…'));
+  if (s.missing && !q) return h('div', {}, header('没有找到'), h('div', { class: 'card' }, h('p', {}, '没有这只股票。'), h('a', { href: '#/sim', class: 'button' }, '回到模拟')));
+  const st = marketState(s.mkt, new Date(), q?.date);
+  const pos = positions(sim, g.id).find((p) => p.sym === sym);
+  const watching = d.simWatch.find((w) => w.sym === sym);
+  const rows = needDaily(s.k, { days: simRange });
+  const mine = d.simTrades.filter((t) => t.sym === sym).sort((a, b) => b.at.localeCompare(a.at));
+  const l = lot(sym);
+  const rules = [st.text, tPlus0(s) ? '当天买当天能卖' : '今天买的明天才能卖', l.min === l.step ? `${l.min} ${l.unit}起` : `最少 ${l.min} 股`];
+  return h('div', {},
+    headerSub(s.name, `${s.code} · ${mktName(s)}`),
+    h('div', { class: 'card sim-quote' },
+      q ? [h('div', { class: 'sim-price' }, px(sym, q.price)),
+        h('div', { class: `sim-gain ${upDown(q.change)}` }, `今天 ${simSigned(q.change, (v) => v.toFixed(v < 10 ? 3 : 2))} · ${pctText(q.pct / 100)}`),
+        h('div', { class: 'muted small' }, `卖一 ${px(sym, q.ask)} · 买一 ${px(sym, q.bid)}${s.mkt === 'US' ? ` · 1 美元 ≈ ¥${usdRate().toFixed(2)}` : ''}`)]
+        : h('p', { class: 'muted' }, '正在读价格…'),
+      h('div', { class: 'segmented sim-range' }, [[22, '1 个月'], [66, '3 个月'], [250, '1 年']].map(([n, t]) =>
+        h('button', { class: `seg${simRange === n ? ' on' : ''}`, onclick: () => { simRange = n; render(); } }, t))),
+      rows && rows.length >= 2 ? lineChart([{ values: rows.map((r) => r[1]), color: 'var(--accent)' }],
+        { tight: true, height: 140, title: '走势', fmt: (v) => v.toFixed(v >= 1000 ? 0 : v >= 100 ? 1 : v >= 10 ? 2 : 3), xLabels: [[0, md(rows[0][0])], [rows.length - 1, md(rows.at(-1)[0])]] }) : h('p', { class: 'muted small' }, rows ? '没有走势' : '正在读走势…'),
+      h('div', { class: 'muted small' }, rules.join(' · '))),
+    pos ? h('div', { class: 'card' },
+      h('h3', {}, '我持有'),
+      h('div', { class: 'sim-kv' }, h('span', { class: 'muted' }, '数量'), h('span', {}, `${pos.qty} 股${pos.sellable < pos.qty ? `（今天能卖 ${pos.sellable}）` : ''}`)),
+      h('div', { class: 'sim-kv' }, h('span', { class: 'muted' }, '平均成本'), h('span', {}, px(sym, pos.avg))),
+      q ? (() => { const fx = s.mkt === 'US' ? usdRate() : 1; const v = pos.qty * q.price * fx; return h('div', { class: 'sim-kv' }, h('span', { class: 'muted' }, '现在值'), h('span', { class: upDown(v - pos.cost) }, `${exact(v)}（${simSigned(v - pos.cost, exact)}）`)); })() : null)
+      : null,
+    h('div', { class: 'actions sim-actions' },
+      h('button', { class: 'sim-buy', onclick: () => orderSheet(s, 'buy') }, '买'),
+      pos ? h('button', { class: 'sim-sell', onclick: () => orderSheet(s, 'sell') }, '卖') : null,
+      watching ? h('button', { class: 'secondary', onclick: () => saveUndoable(`模拟：不看 ${s.name}`, (data) => { data.simWatch = data.simWatch.filter((x) => x.sym !== sym); }, '不看了').then(render) }, '不看了')
+        : h('button', { class: 'secondary', onclick: () => watchSheet(s) }, '加到看着的')),
+    watching?.reason ? h('p', { class: 'muted small' }, `关注的原因：${watching.reason}`) : null,
+    mine.length ? [h('div', { class: 'section-title' }, '我的买卖'), h('div', { class: 'group' }, mine.map(tradeRow))] : null);
+}
+
+function watchSheet(s) {
+  const reason = h('textarea', { rows: 2, placeholder: '比如：天天听人说 / 想看看它怎么动', 'aria-label': '为什么关注' });
+  openSheet({
+    title: `看着 ${s.name}`,
+    body: h('div', {}, h('label', {}, '为什么关注（可以不写）', reason)),
+    confirmText: '加上',
+    onConfirm: async () => {
+      await save(`模拟：看着 ${s.name}`, (data) => {
+        data.simWatch.push({ id: newId('w'), sym: s.sym, k: s.k, code: s.code, name: s.name, kind: s.kind, reason: reason.value.trim(), at: bjDate(), price: simQ[s.sym]?.price || 0 });
+      });
+      render();
+    },
+  });
+}
+
+// 买 / 卖：① 数量 + 为什么 + 打算拿多久 → ② AI 问一两句 → ③ 按那一刻的价格成交
+function orderSheet(s, side) {
+  const d = store.data;
+  const g = currentGame(simOf(d));
+  const verb = side === 'buy' ? '买' : '卖';
+  const q0 = simQ[s.sym];
+  const pos = positions(simOf(d), g.id).find((p) => p.sym === s.sym);
+  const l = lot(s.sym);
+  const most = side === 'buy' ? maxBuy(simOf(d), g.id, s, q0?.ask, usdRate()) : pos?.qty || 0;
+  const qty = h('input', { inputmode: 'numeric', placeholder: l.min === l.step ? `${l.min} 的倍数` : `最少 ${l.min}`, value: side === 'sell' ? String(most || '') : '', oninput: () => est() });
+  const estLine = h('div', { class: 'muted small' });
+  const err = h('div', { class: 'hint error' });
+  const est = () => {
+    const n = Number(qty.value);
+    const p = side === 'buy' ? q0?.ask : q0?.bid;
+    if (!n || !p) { estLine.textContent = side === 'buy' ? `现金 ${exact(cash(simOf(d), g.id))}` : ''; return; }
+    const fee = fees(s, side, n, p);
+    const fx = s.mkt === 'US' ? usdRate() : 1;
+    const total = (side === 'buy' ? n * p + fee : n * p - fee) * fx;
+    estLine.textContent = `约 ${exact(total)}（手续费 ${curSign(s.sym)}${fee}）${side === 'buy' ? ` · 现金 ${exact(cash(simOf(d), g.id))}` : ''}`;
+  };
+  let hold = '';
+  const holdChips = h('div', { class: 'chips' }, HOLD.map(([k, t]) => h('button', { type: 'button', class: 'chip', onclick: (e) => {
+    hold = k; for (const c of holdChips.children) c.classList.toggle('on', c === e.currentTarget);
+  } }, t)));
+  const reason = h('textarea', { rows: 3, 'aria-label': `为什么${verb}`, placeholder: side === 'buy' ? '一句话就行：一直在涨、听说不错、想试试……' : '一句话就行：涨够了、跌怕了、想换一只……' });
+  const quick = h('div', { class: 'chips' },
+    side === 'buy' ? [h('button', { type: 'button', class: 'chip', onclick: () => { qty.value = String(l.min); est(); } }, `${l.min} 股`),
+      most ? h('button', { type: 'button', class: 'chip', onclick: () => { qty.value = String(most); est(); } }, `最多 ${most} 股`) : null]
+      : [h('button', { type: 'button', class: 'chip', onclick: () => { qty.value = String(most); est(); } }, `全部 ${most} 股`)]);
+  const step1 = h('div', {},
+    h('p', { class: 'small' }, q0 ? `${side === 'buy' ? '卖一' : '买一'} ${px(s.sym, side === 'buy' ? q0.ask : q0.bid)}，成交价以点确认那一刻为准` : '还没读到价格'),
+    h('label', {}, `${verb}多少股`, qty), quick, estLine,
+    side === 'sell' && pos && pos.sellable < pos.qty ? h('p', { class: 'small soon' }, `今天买的 ${pos.qty - pos.sellable} 股明天才能卖`) : null,
+    h('label', {}, `为什么${verb}`, reason),
+    side === 'buy' ? [h('div', { class: 'small strong' }, '打算拿多久'), holdChips] : null,
+    err);
+  est();
+  const body = h('div', {}, step1);
+  let step = 1;
+  let asks = [];
+  const order = () => ({ qty: Number(qty.value), reason: reason.value.trim(), hold: side === 'buy' ? hold : undefined });
+  const close = openSheet({
+    title: `${verb} ${s.name}`, body, confirmText: '下一步',
+    onConfirm: async () => {
+      err.textContent = '';
+      const o = order();
+      if (step === 1) {
+        const q = simQ[s.sym];
+        const chk = q ? checkOrder(simOf(store.data), g.id, s, side, o.qty, q, usdRate()) : { error: '还没读到价格' };
+        if (chk.error) { err.textContent = chk.error; return false; }
+        if (!o.reason) { err.textContent = `写一句为什么${verb}`; return false; }
+        if (side === 'buy' && !hold) { err.textContent = '选一下打算拿多久'; return false; }
+        step = 2;
+        const btn = document.querySelector('.sheet .actions button');
+        btn.textContent = `确认${verb}`;
+        btn.disabled = true;
+        const wait = h('p', { class: 'muted' }, 'AI 在看你写的…');
+        body.replaceChildren(wait);
+        try {
+          const qs = await simAsk(s, side, o, q);
+          asks = qs.map((x) => ({ q: x, box: h('textarea', { rows: 2, 'aria-label': x, placeholder: '想答就答，不答也行' }) }));
+          body.replaceChildren(h('p', { class: 'small' }, '先想一想：'), ...asks.map((x) => h('label', {}, x.q, x.box)), err);
+        } catch {
+          body.replaceChildren(h('p', { class: 'muted small' }, '这次 AI 没问（没连上）。'), err);
+        }
+        btn.disabled = false;
+        return false;
+      }
+      // 第 3 步：按这一刻的价格成交
+      let q;
+      try { q = (await fetchQuotes([s.sym]))[s.sym]; } catch { /* 没网 */ }
+      if (!q) { err.textContent = '读不到最新价格，看看网络'; return false; }
+      simQ[s.sym] = q;
+      const chk = checkOrder(simOf(store.data), g.id, s, side, o.qty, q, usdRate());
+      if (chk.error) { err.textContent = chk.error; return false; }
+      const now = new Date();
+      await save(`模拟：${verb} ${s.name} ${o.qty} 股`, (data) => {
+        data.simTrades.push({ id: newId('m'), game: g.id, at: now.toISOString(), date: bjDate(now), sym: s.sym, k: s.k, code: s.code, name: s.name, kind: s.kind || '',
+          side, qty: o.qty, price: chk.price, fee: chk.fee, rate: chk.rate, cny: chk.cny, reason: o.reason, ...(o.hold ? { hold: o.hold } : {}),
+          ask: asks.map((x) => ({ q: x.q, a: x.box.value.trim() })) });
+      });
+      toast(`${verb}了 ${o.qty} 股 ${s.name}，成交价 ${px(s.sym, chk.price)}`);
+      render();
+      return true;
+    },
+  });
+  return close;
+}
+
+// 下单前 AI 问一两句：只问，不评价、不建议
+async function simAsk(s, side, o, q) {
+  const d = store.data;
+  const sim = simOf(d);
+  const g = currentGame(sim);
+  const w = worth(sim, g.id, simQ, usdRate());
+  const before = d.simTrades.filter((t) => t.sym === s.sym).map((t) => `${t.date} ${t.side === 'buy' ? '买' : '卖'} ${t.qty} 股 @${t.price}，理由：${t.reason}`);
+  const others = d.simTrades.filter((t) => t.sym !== s.sym).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5).map((t) => `${t.date} ${t.side === 'buy' ? '买' : '卖'} ${t.name}，理由：${t.reason}`);
+  const system = `你在陪一个刚开始学股票的大学生做模拟交易（假钱，起始 1 万元人民币，规则按真的）。他完全不懂股票，想一点一点积累认识，也想留下记录让 AI 了解他的逻辑。
+他准备${side === 'buy' ? '买' : '卖'}一只股票，写了理由。请你提 1～2 个短问题，帮他把自己的想法想清楚：比如打算拿多久、跌了或涨了怎么办、这次和他以前的买卖是不是一个思路。
+不评价对错，不建议买不买，不讲课。用大白话，每个问题 40 字以内，语气温和。
+只回 JSON：{"questions": ["…"]}`;
+  const user = [`股票：${s.name}（${s.code}，${mktName(s)}）`, `现价 ${q.price}，今天 ${q.pct}%`, `${side === 'buy' ? '买' : '卖'} ${o.qty} 股`,
+    `他的理由：${o.reason}`, o.hold ? `打算拿：${holdName(o.hold)}` : null,
+    `现在：一共 ${w.total} 元，现金 ${w.cash} 元，持有 ${w.pos.map((p) => `${p.name} ${p.qty} 股`).join('、') || '无'}`,
+    before.length ? `这只以前的买卖：\n${before.join('\n')}` : '以前没买卖过这只',
+    others.length ? `最近别的买卖：\n${others.join('\n')}` : null].filter(Boolean).join('\n');
+  const out = await askJson(await aiConfig(), system, user, { maxTokens: 2000, timeout: 30000 });
+  return (out.questions || []).filter((x) => typeof x === 'string' && x.trim()).slice(0, 2);
+}
+
+// 回头看：一次问一笔
+function lookbackCard(t) {
+  const q = simQ[t.sym];
+  let verdict = '';
+  const text = h('textarea', { rows: 2, 'aria-label': '回头看想说的', placeholder: '可以写一句：现在怎么想', hidden: true });
+  const saveBtn = h('button', { disabled: true, onclick: () => save(`模拟：回头看 ${t.name}`, (data) => {
+    data.simTrades.find((x) => x.id === t.id).look = { at: new Date().toISOString(), verdict, text: text.value.trim(), price: q?.price || null };
+  }).then(() => { toast('记下了'); render(); }) }, '记下');
+  const chips = h('div', { class: 'chips' }, LOOK.map(([k, label]) => h('button', { type: 'button', class: 'chip', onclick: (e) => {
+    verdict = k; text.hidden = false; saveBtn.disabled = false;
+    for (const c of chips.children) c.classList.toggle('on', c === e.currentTarget);
+  } }, label)));
+  const days = Math.round((new Date(bjDate()) - new Date(t.date)) / 86400000);
+  const change = q ? (q.price - t.price) / t.price : null;
+  return h('div', { class: 'card sim-look' },
+    h('h3', {}, '回头看'),
+    h('p', {}, `${days >= 28 ? '一个多月' : `${days} 天`}前${t.side === 'buy' ? '买' : '卖'}了 ${t.name}，当时你说：「${t.reason}」`),
+    q ? h('p', { class: 'small' }, `那时 ${px(t.sym, t.price)}，现在 ${px(t.sym, q.price)}（`, h('span', { class: upDown(change) }, pctText(change)), '）') : null,
+    h('p', { class: 'small strong' }, '现在看，当时想对了吗？'),
+    chips, text,
+    h('div', { class: 'actions' }, saveBtn,
+      h('button', { class: 'link', onclick: () => save(`模拟：回头看 ${t.name}（跳过）`, (data) => { data.simTrades.find((x) => x.id === t.id).look = { at: new Date().toISOString(), skip: true }; }).then(render) }, '跳过')));
+}
+
+// 全部记录写成文字：复盘、导出都用它。from：只要这一天以后的买卖（复盘用）
+function simRecordText({ from = '', to = '', reviews = false } = {}) {
+  const d = store.data;
+  const sim = simOf(d);
+  const rate = usdRate();
+  const lines = [];
+  const g = currentGame(sim);
+  if (g) {
+    const w = worth(sim, g.id, simQ, rate);
+    lines.push(`## 现在这一局（${g.start} 开始，起始 ${g.cash} 元）`, `一共 ${w.total} 元（${pctText(w.pct)}），现金 ${w.cash} 元`);
+    for (const p of w.pos) lines.push(`- 持有 ${p.name}（${p.sym.replace(/^(sh|sz|bj|us)/, '')}，${mktName(p)}）${p.qty} 股，成本 ${p.cost} 元，现在 ${p.value} 元（${pctText(p.pct)}）`);
+  }
+  for (const old of sim.games.filter((x) => x.end)) lines.push(`以前一局：${old.start} 到 ${old.end}，${old.cash} 元 → ${old.endValue} 元`);
+  const trades = d.simTrades.filter((t) => (!from || t.date >= from) && (!to || t.date <= to)).sort((a, b) => a.at.localeCompare(b.at));
+  lines.push('', `## 买卖记录（${trades.length} 笔）`);
+  for (const t of trades) {
+    lines.push(`- ${timeText(t.at)}（${t.date.slice(0, 4)}）${t.side === 'buy' ? '买' : '卖'} ${t.name}（${t.code || t.sym}，${mktName(t)}）${t.qty} 股 @ ${curSign(t.sym)}${t.price}，手续费 ${t.fee}，合 ${t.cny} 元`);
+    lines.push(`  理由：${t.reason}${t.hold ? `；打算拿 ${holdName(t.hold)}` : ''}`);
+    for (const x of t.ask || []) lines.push(`  AI 问：${x.q} 我答：${x.a || '（没答）'}`);
+    if (t.look && !t.look.skip) lines.push(`  回头看（${t.look.at.slice(0, 10)}）：${lookName(t.look.verdict)}${t.look.text ? `，${t.look.text}` : ''}${t.look.price ? `；那时价格 ${t.look.price}` : ''}`);
+  }
+  if (d.simWatch.length) {
+    lines.push('', '## 在观察的（没买）');
+    for (const x of d.simWatch) lines.push(`- ${x.name}（${x.code || x.sym}，${mktName(x)}）${x.at} 开始关注，那时 ${x.price}，现在 ${simQ[x.sym]?.price ?? '?'}${x.reason ? `；原因：${x.reason}` : ''}`);
+  }
+  if (reviews && d.simReviews.length) {
+    lines.push('', '## 以前的复盘');
+    for (const r of [...d.simReviews].sort((a, b) => a.at.localeCompare(b.at))) lines.push(`### ${reviewTitle(r)}`, r.text);
+  }
+  return lines.join('\n');
+}
+
+const simReviewFailed = new Set();
+const reviewTitle = (r) => (r.month ? `${Number(r.month.slice(0, 4))} 年 ${Number(r.month.slice(5))} 月的复盘` : `${r.at.slice(0, 10)} 的复盘`);
+// 复盘：month 有值 = 那个月；null = 从上次复盘到现在（没有就是全部）
+async function simReview(month) {
+  const key = `review:${month || 'now'}`;
+  if (simBusy.has(key)) return;
+  const d = store.data;
+  let from = '';
+  let to = '';
+  if (month) { from = `${month}-01`; to = `${month}-31`; } else {
+    const last = [...d.simReviews].sort((a, b) => b.at.localeCompare(a.at))[0];
+    from = last ? last.at.slice(0, 10) : '';
+  }
+  if (!month && !d.simTrades.some((t) => !from || t.date >= from)) { toast(from ? '上次复盘以后还没有买卖' : '还没有买卖，先买一只'); return; }
+  simBusy.add(key);
+  const wait = month ? null : h('div', { class: 'busy' }, h('div', { class: 'busy-box' }, 'AI 在复盘…'));
+  wait && document.body.append(wait);
+  try {
+    const system = `你在帮一个刚开始学股票的大学生复盘他的模拟交易（假钱，规则按真的）。他完全不懂股票，想一点一点积累认识。
+根据下面的记录，用大白话写一段复盘：这段时间做了什么（几笔、买了哪些类型）；他的理由大多是哪一类；说的打算（拿多久）和实际做的一不一致；有没有反复出现的习惯（比如涨了才买、跌一点就卖、很分散或很集中、频繁买卖）；结果怎样（赚亏只当事实说）。最后留一两个值得他自己想的问题。
+不讲课，不推荐具体股票，不说该买该卖。语气温柔、安静、不评判，不用「你值得」「加油」这类话。250～450 字，可以分几段。
+只回 JSON：{"text": "…"}`;
+    const user = `${month ? `复盘 ${month}` : `复盘${from ? ` ${from} 以后` : '全部'}`}\n\n${simRecordText({ from, to })}`;
+    const out = await askJson(await aiConfig(), system, user, { maxTokens: 6000, timeout: 120000 });
+    if (!out.text) throw new Error('AI 没写出来');
+    const r = { id: newId('r'), at: new Date().toISOString(), month: month || null, from, text: String(out.text) };
+    await save(`模拟：${reviewTitle(r)}`, (data) => { data.simReviews.push(r); });
+    if (!month) go('#/sim/reviews');
+  } catch (e) {
+    if (month) simReviewFailed.add(month);
+    else toast(e.message, 'error');
+  } finally {
+    simBusy.delete(key);
+    wait?.remove();
+    if (month && currentPath().startsWith('/sim')) render();
+  }
+}
+
+function simReviewCard(r, short = false) {
+  return h('div', { class: 'card sim-review' },
+    h('h3', {}, reviewTitle(r)),
+    String(r.text).split(/\n+/).filter(Boolean).map((p) => h('p', {}, p)),
+    short ? h('p', { class: 'small' }, h('a', { href: '#/sim/reviews' }, '以前的复盘 →')) : null);
+}
+
+function simReviewsView() {
+  const list = [...store.data.simReviews].sort((a, b) => b.at.localeCompare(a.at));
+  return h('div', {}, header('复盘'),
+    list.length ? list.map((r) => simReviewCard(r)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有复盘。')));
+}
+
+function simTradesView() {
+  const list = [...store.data.simTrades].sort((a, b) => b.at.localeCompare(a.at));
+  return h('div', {}, header('全部买卖'),
+    list.length ? h('div', { class: 'group' }, list.map(tradeRow)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有买卖。')));
+}
+
+const SIM_ASK = `我在用假钱做股票模拟交易（起始 1 万元人民币，规则按真的：A 股 T+1、100 股一手、有手续费；美股按汇率换算）。我完全不懂股票，想通过模拟一点一点积累认识，将来资产稳定了再用真钱投资。
+下面是我全部的记录：每一笔买卖、当时写的理由、打算拿多久、AI 当时问我的问题和我的回答、事后回头看的结论，还有我在观察的股票和以前的复盘。
+
+请你：
+1. 看看我买卖背后的逻辑是什么，有没有一贯的风格；
+2. 指出我反复出现的习惯，好的和不好的都说；
+3. 用大白话解释记录里我可能没弄懂的地方；
+4. 问我几个问题，帮我想清楚下一步。
+不要直接推荐买哪只股票。`;
+
+function exportSheet() {
+  const ask = h('textarea', { rows: 8, value: SIM_ASK, 'aria-label': '想问 ChatGPT 的' });
+  const full = () => `${ask.value.trim()}\n\n---\n\n${simRecordText({ reviews: true })}`;
+  openSheet({
+    title: '导出给 ChatGPT',
+    body: h('div', {},
+      h('label', {}, '想问的（可以改）', ask),
+      h('p', { class: 'muted small' }, '点「复制，去 ChatGPT」会把这段话和全部记录一起复制，打开 ChatGPT 后长按粘贴。'),
+      h('p', {}, h('button', { class: 'link', onclick: () => {
+        const a = h('a', { href: URL.createObjectURL(new Blob([full()], { type: 'text/markdown' })), download: `模拟交易-${today()}.md` });
+        a.click();
+      } }, '下载成文件'))),
+    confirmText: '复制，去 ChatGPT',
+    onConfirm: async () => {
+      try { await navigator.clipboard.writeText(full()); } catch { toast('复制不了，用「下载成文件」', 'error'); return false; }
+      window.open('https://chatgpt.com/', '_blank', 'noopener');
+      toast('复制好了，到 ChatGPT 粘贴');
+      return true;
+    },
+  });
 }
 
 // ---------- 账户 ----------

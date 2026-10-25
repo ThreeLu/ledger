@@ -137,6 +137,12 @@ export function migrate(data) {
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
   data.todoDone ||= {}; // 要做的事点了「做完了」：{ 指标 key: '预算月开始日|轻重', token: 令牌到期日 }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
+  // 模拟交易（不是钱，不进任何计算）：simGames [{ id, start, cash, end?, endValue? }]、simTrades [{ id, game, at, date, sym, k, code, name, kind, side, qty, price, fee, rate, cny, reason, hold?, ask: [{ q, a }], look? }]、
+  // simWatch [{ id, sym, k, code, name, kind, reason, at, price }]、simReviews [{ id, at, month, from, text }]
+  data.simGames ||= [];
+  data.simTrades ||= [];
+  data.simWatch ||= [];
+  data.simReviews ||= [];
   data.goals ||= []; // 专项存款（自己加的）：{ id, name, target, by: 'YYYY-MM-DD', note, status?: 'done'|'cancelled', doneAt? }；记账时 tx.special = id
   data.yearly ||= []; // 每年一次的专项（学费、住宿费……）：{ id, name, amount, category（办完了时先填的类别）, month, day（或 lunar: { m, d } 按农历）, skip: [不用交的年份], note }；到时候自动生成一个专项（goals 里带 yearly / yearlyYear）
   data.family ||= { sealed: 0, log: [] }; // 家庭存款：已经封存了多少（一万一万地封），log: [{ date, amount }]

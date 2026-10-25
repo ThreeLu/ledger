@@ -15,6 +15,8 @@
   --sage: #6e8b6b;
   --blue: #5f7fa8;
   --good: #5f9a6a;
+  --up: #c0563f; /* 模拟：红涨绿跌（和国内炒股软件一样） */
+  --down: #4f8a5f;
   --rose: #b97a92;
   /* 花销分组：藤紫的深浅 + 暖灰，不用彩虹色；红色只留给超支 */
   --g-food: #b2a4d6;
@@ -51,6 +53,8 @@
     --sage: #9cb899;
     --blue: #8fa9cc;
     --good: #8cc49a;
+    --up: #e08a76;
+    --down: #8cc49a;
     --rose: #dba6ba;
     --g-food: #7c6db0;
     --g-daily: #ddd4f6;
@@ -782,3 +786,34 @@ button.todo-item { min-height: 0; border-radius: 0; background: none; color: var
 .rec-sum b { font-size: 17px; color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-live { margin-top: 8px; padding-top: 8px; border-top: 0.5px solid var(--line); }
 .rec-live p { margin: 6px 0 0; line-height: 1.55; }
+
+/* 模拟交易 */
+.up { color: var(--up); }
+.down { color: var(--down); }
+.sim-markets { margin: -6px 0 12px; }
+.sim-markets .tag { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+.sim-markets .tag.on { background: var(--accent-soft); color: var(--accent); }
+.sim-worth .big-num { margin: 2px 0; }
+.sim-gain { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.sim-worth .chart { margin: 12px 0 6px; }
+button.cell { width: 100%; background: none; border-radius: 0; text-align: left; font-weight: 400; justify-content: flex-start; }
+.sim-row .grow { min-width: 0; overflow-wrap: anywhere; }
+.sim-right { text-align: right; font-variant-numeric: tabular-nums; flex: none; font-size: 15px; }
+.sim-side { width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center; flex: none; font-size: 13px; font-weight: 600; }
+.sim-side.buy { background: color-mix(in srgb, var(--up) 14%, transparent); color: var(--up); }
+.sim-side.sell { background: color-mix(in srgb, var(--down) 14%, transparent); color: var(--down); }
+.sim-search-btn { width: 100%; margin: 8px 0 4px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.sim-search-btn svg.i { width: 18px; height: 18px; }
+.sim-results { margin-top: 10px; max-height: 50vh; overflow-y: auto; box-shadow: none; background: var(--chip); }
+.sim-price { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.sim-range { margin: 14px 0 4px; }
+.sim-quote .chart { margin: 6px 0; }
+.sim-kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 0.5px solid var(--line); font-size: 15px; }
+.sim-kv span:last-child { text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sim-qa { margin: 10px 0; padding: 8px 12px; background: var(--chip); border-radius: 12px; font-size: 15px; }
+.sim-actions button { flex: 1 1 0; }
+.sim-actions .sim-buy { background: var(--up); color: #fff; }
+.sim-actions .sim-sell { background: var(--down); color: #fff; }
+.sim-review p { line-height: 1.7; margin: 0 0 8px; }
+.sim-look textarea { margin-top: 8px; }
+.strong { font-weight: 600; }

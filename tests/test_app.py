@@ -1383,8 +1383,54 @@ def inventory_seed():
     return {"inventory.json": json.dumps(data, ensure_ascii=False).encode()}
 
 
+# 模拟交易的假行情：{ sym: { name, price, date, ask?, kind } }，测试里随时改
+SIM = {
+    "sh600001": {"name": "某某股份", "code": "600001", "price": 10.5, "date": "2026-10-26", "kind": "GP-A"},
+    "sz159001": {"name": "某某纳指ETF", "code": "159001", "price": 2.0, "date": "2026-10-26", "kind": "QDII-ETF"},
+    "usABC": {"name": "某美股", "code": "ABC.OQ", "price": 100.0, "date": "2026-10-26", "kind": "GP"},
+}
+
+
+def sim_quote_line(sym):
+    x = SIM[sym]
+    f = ["0"] * 40
+    f[1], f[2], f[3], f[4] = x["name"], x["code"], str(x["price"]), str(round(x["price"] / 1.01, 2))
+    f[9], f[10] = str(round(x["price"] - 0.01, 2)), "100"
+    f[19], f[20] = str(x.get("ask", x["price"])), "0" if x.get("ask") == 0 else "100"
+    if x.get("ask") == 0:
+        f[19] = "0"
+    f[30] = x["date"] + " 16:00:01" if sym.startswith("us") else x["date"].replace("-", "") + "101500"
+    f[31], f[32] = "0.10", "1.00"
+    return f'v_{sym}="{"~".join(f)}";'
+
+
+def fake_sim(page):
+    def qt(route):
+        syms = route.request.url.split("q=")[1].split(",")
+        body = "\n".join(sim_quote_line(s) if s in SIM else 'v_pv_none_match="1";' for s in syms)
+        route.fulfill(body=body.encode("gbk"), headers={"content-type": "text/html; charset=GBK", "access-control-allow-origin": "*"})
+
+    def kline(route):
+        k = route.request.url.split("param=")[1].split(",")[0]
+        sym = k.split(".")[0]
+        p = SIM.get(sym, {"price": 1})["price"]
+        rows = [[f"2026-10-{d:02d}", str(p), str(p - 0.2 + d / 100), str(p), str(p), "1000"] for d in range(19, 27)]
+        route.fulfill(json={"code": 0, "data": {k: {"qfqday": rows, "day": rows}}}, headers={"access-control-allow-origin": "*"})
+
+    def smartbox(route):
+        q = route.request.url.split("q=")[1]
+        hits = [s for s, x in SIM.items() if quote(x["name"]) in q or x["code"].lower() in q.lower()]
+        parts = [f'{s[:2]}~{SIM[s]["code"].lower() if s.startswith("us") else SIM[s]["code"]}~{SIM[s]["name"]}~py~{SIM[s]["kind"]}' for s in hits]
+        route.fulfill(body=f'v_hint="{"^".join(parts)}"', headers={"content-type": "text/javascript; charset=utf-8"})
+
+    page.route("https://qt.gtimg.cn/**", qt)
+    page.route("https://web.ifzq.gtimg.cn/**", kline)
+    page.route("https://smartbox.gtimg.cn/**", smartbox)
+
+
 def fake_externals(page):
     page.route("https://api.frankfurter.dev/**", lambda r: r.fulfill(json={"base": "USD", "rates": {"CNY": 7.0}}))
+    fake_sim(page)
 
     def deepseek(route):
         body = json.loads(route.request.post_data)
@@ -1392,6 +1438,9 @@ def fake_externals(page):
         system = body["messages"][0]["content"]
         LAST_AI.clear()
         LAST_AI.append(body)
+        if "模拟交易" in system:
+            ans = {"questions": ["如果明天跌了 5%，你会怎么做？"]} if '"questions"' in system else {"text": "十月你买卖了一只股票，理由是「一直在涨」。\n想一想：涨了才买，是你一贯的想法吗？"}
+            return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
         if "估一下" in system:
             ans = {"estimate": 150, "why": "编的估法"}
             return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
@@ -1723,6 +1772,117 @@ def _(c):
     expect(p.locator(".whisper")).to_have_count(0)
     c.go("#/summary")   # 角落那句话只在首页
     expect(p.locator(".whisper")).to_have_count(0)
+
+
+@step("模拟交易：开始、搜一只、按真的规则买（一手、写理由、AI 问一句）、当天不能卖、看着的、第二天卖、美股、回头看、月度复盘、导出、重开一局")
+def _(c):
+    p = c.page
+    c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
+    p.clock.set_fixed_time("2026-10-26T10:00:00+08:00")  # 周一，A 股开着
+    c.go("#/sim")
+    p.reload()
+    expect(p.locator("nav#nav")).to_contain_text("模拟")
+    p.get_by_role("button", name="开始").click()
+    expect(p.locator(".sim-worth .big-num")).to_have_text("¥10,000")
+    expect(p.locator(".sim-markets")).to_contain_text("A 股开盘中")
+    # 搜一只、打开
+    p.get_by_role("button", name="搜一只").click()
+    p.get_by_label("搜股票").fill("600001")
+    p.locator(".sim-results .cell", has_text="某某股份").click()
+    expect(p.locator(".sim-price")).to_have_text("¥10.50")
+    expect(p.locator(".sim-quote")).to_contain_text("今天买的明天才能卖")
+    # 买：不到一手不行，要写为什么、选拿多久，AI 问一句
+    p.get_by_role("button", name="买", exact=True).click()
+    sheet = p.locator(".sheet")
+    sheet.get_by_label("买多少股").fill("50")
+    sheet.get_by_label("为什么买").fill("一直在涨")
+    sheet.get_by_role("button", name="几周").click()
+    sheet.get_by_role("button", name="下一步").click()
+    expect(sheet).to_contain_text("最少买 100 股")
+    sheet.get_by_label("买多少股").fill("200")
+    expect(sheet).to_contain_text("手续费 ¥5.02")
+    sheet.get_by_role("button", name="下一步").click()
+    sheet.get_by_label("如果明天跌了 5%，你会怎么做？").fill("再等等")
+    sheet.get_by_role("button", name="确认买").click()
+    expect(p.locator(".sheet")).to_have_count(0)
+    t = c.data()["simTrades"][0]
+    assert (t["side"], t["qty"], t["price"], t["fee"], t["cny"], t["hold"]) == ("buy", 200, 10.5, 5.02, 2105.02, "weeks"), t
+    assert t["ask"] == [{"q": "如果明天跌了 5%，你会怎么做？", "a": "再等等"}], t["ask"]
+    assert "模拟交易" not in json.dumps(LAST_AI[0]["messages"][-1]) or "一直在涨" in LAST_AI[0]["messages"][-1]["content"]
+    # 今天买的今天不能卖
+    p.get_by_role("button", name="卖", exact=True).click()
+    sheet.get_by_label("为什么卖").fill("试试")
+    sheet.get_by_role("button", name="下一步").click()
+    expect(sheet).to_contain_text("今天买的明天才能卖")
+    sheet.get_by_role("button", name="取消").click()
+    # 看着的
+    c.go("#/sim/s/sz159001")
+    expect(p.locator(".sim-quote")).to_contain_text("当天买当天能卖")
+    p.get_by_role("button", name="加到看着的").click()
+    p.locator(".sheet").get_by_label("为什么关注").fill("想看看")
+    p.get_by_role("button", name="加上").click()
+    c.go("#/sim")
+    expect(p.locator(".group", has_text="某某纳指ETF")).to_contain_text("想看看")
+    expect(p.locator(".sim-worth")).to_contain_text("现金 ¥7,894.98")
+    # 第二天卖出
+    p.clock.set_fixed_time("2026-10-27T10:00:00+08:00")
+    SIM["sh600001"].update(price=11.0, date="2026-10-27")
+    c.go("#/sim/s/sh600001")
+    p.reload()
+    p.get_by_role("button", name="卖", exact=True).click()
+    expect(sheet.get_by_label("卖多少股")).to_have_value("200")
+    sheet.get_by_label("为什么卖").fill("涨够了")
+    sheet.get_by_role("button", name="下一步").click()
+    sheet.get_by_role("button", name="确认卖").click()
+    expect(p.locator(".sheet")).to_have_count(0)
+    sell = c.data()["simTrades"][1]
+    assert (sell["side"], sell["price"], sell["fee"]) == ("sell", 10.99, 6.12), sell  # 买一价 10.99；佣金 5 + 过户费 0.02 + 印花税 1.10
+    # 美股：晚上开盘，按汇率换
+    p.clock.set_fixed_time("2026-10-27T22:00:00+08:00")
+    SIM["usABC"]["date"] = "2026-10-27"
+    c.go("#/sim/s/usABC")
+    p.reload()
+    p.get_by_role("button", name="买", exact=True).click()
+    sheet.get_by_label("买多少股").fill("1")
+    sheet.get_by_label("为什么买").fill("想试试美股")
+    sheet.get_by_role("button", name="还不知道").click()
+    sheet.get_by_role("button", name="下一步").click()
+    sheet.get_by_role("button", name="确认买").click()
+    expect(p.locator(".sheet")).to_have_count(0)
+    p.screenshot(path=ART / "sim-stock.png", full_page=True)
+    us = c.data()["simTrades"][2]
+    assert (us["rate"], us["cny"]) == (7, round((100 + 1.99) * 7, 2)), us
+    # 一周后：回头看那笔卖出；上个月有买卖 → 自动写十月的复盘
+    p.clock.set_fixed_time("2026-11-03T10:00:00+08:00")
+    c.go("#/sim")
+    p.reload()
+    look = p.locator(".sim-look")
+    expect(look).to_contain_text("涨够了")
+    look.get_by_role("button", name="想对了").click()
+    look.get_by_label("回头看想说的").fill("卖得刚好")
+    look.get_by_role("button", name="记下").click()
+    expect(p.locator(".sim-review")).to_contain_text("2026 年 10 月的复盘")
+    d = c.data()
+    assert d["simTrades"][1]["look"]["verdict"] == "right" and d["simTrades"][1]["look"]["text"] == "卖得刚好"
+    assert [r["month"] for r in d["simReviews"]] == ["2026-10"]
+    p.screenshot(path=ART / "sim.png", full_page=True)
+    # 导出：下载成文件，里面有理由、AI 问答、回头看、复盘
+    p.get_by_role("button", name="导出给 ChatGPT").click()
+    with p.expect_download() as dl:
+        p.get_by_role("button", name="下载成文件").click()
+    text = Path(dl.value.path()).read_text(encoding="utf-8")
+    for want in ("不要直接推荐", "理由：一直在涨；打算拿 几周", "AI 问：如果明天跌了 5%", "回头看", "想对了，卖得刚好", "在观察的", "2026 年 10 月的复盘"):
+        assert want in text, want
+    p.locator(".sheet").get_by_role("button", name="复制，去 ChatGPT").evaluate("b => b.closest('.sheet-overlay').remove()")
+    # 模拟的钱不进账本
+    assert "某某股份" not in json.dumps(c.tx(), ensure_ascii=False)
+    # 重开一局
+    c.go("#/sim")
+    p.get_by_role("button", name="重开一局").click()
+    expect(p.locator(".sim-worth .big-num")).to_have_text("¥10,000")
+    expect(p.locator(".group", has_text="笔买卖")).to_contain_text("3 笔买卖")
+    games = c.data()["simGames"]
+    assert len(games) == 2 and games[0]["end"] == "2026-11-03" and "end" not in games[1], games
 
 
 def main():

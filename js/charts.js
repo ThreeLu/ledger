@@ -71,13 +71,17 @@ export function donut(segments, { center = '', sub = '', title = '' } = {}) {
 }
 
 // 折线图：series = [{ values: [数], color, dashed? }]，xLabels 只标头、中、尾
-export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true } = {}) {
+export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true, fmt = short, tight = false } = {}) {
   const top = 14;
   const bottom = 22;
   const left = 34;
   const all = series.flatMap((x) => x.values);
-  const max = Math.max(1, ...all);
-  const min = fromZero ? 0 : Math.min(...all) * 0.98;
+  // tight：上下只留一成空白（股价、模拟的钱，小涨小跌也看得出来）
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.01 || 1;
+  const max = tight ? hi + pad : Math.max(1, ...all);
+  const min = tight ? lo - pad : fromZero ? 0 : lo * 0.98;
   const span = max - min || 1;
   const n = Math.max(1, ...series.map((x) => x.values.length)) - 1 || 1;
   const X = (i) => left + (i / n) * (W - left - 8);
@@ -85,7 +89,7 @@ export function lineChart(series, { xLabels = [], height = 160, title = '', from
   const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart', role: 'img', 'aria-label': title });
   for (const v of [max, (max + min) / 2, min]) {
     svg.append(s('line', { x1: left, x2: W - 8, y1: Y(v), y2: Y(v), style: 'stroke:var(--line)', 'stroke-width': 1 }));
-    svg.append(s('text', { x: left - 4, y: Y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: short(v) }));
+    svg.append(s('text', { x: left - 4, y: Y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: fmt(v) }));
   }
   for (const ser of series) {
     if (!ser.values.length) continue;
