@@ -394,7 +394,32 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .sub-chip.has:not(.on) { box-shadow: inset 0 0 0 1.5px var(--accent); }
 
 /* 心愿单 */
-.wish { padding: 14px 16px; }
+/* 一张清单：一行一个心愿，名字 · 价格，下面一句状态；点开是详情 */
+.wish-list { padding: 2px 16px; }
+.wish { padding: 13px 0; border-bottom: 0.5px solid var(--line); cursor: pointer; }
+.wish:last-child { border-bottom: 0; }
+.wish:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.wish-line { display: flex; align-items: baseline; gap: 12px; }
+.wish-line .wish-name { flex: 1; min-width: 0; font-size: 16px; }
+.wish-line .wish-price { font-size: 16px; font-weight: 600; }
+.wish-line .wish-check { align-self: center; margin: 0; }
+.wish-status { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.wish-status.good { color: var(--sage); }
+.wish-status.accent, .accent-text { color: var(--accent); }
+.wish .bar-track { margin-top: 8px; height: 5px; }
+.wish-links { display: flex; justify-content: space-between; gap: 12px; margin: -4px 6px 14px; }
+.wish-links .link { font-size: 14px; }
+.wish-history summary { font-size: 15px; }
+.wish-history .label-sm { margin: 4px 0 0; }
+.wish-history .wish-dropped + .wish-done { margin-top: 12px; }
+/* 详情（弹出来的那一页） */
+.wd-price { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wish-detail .wish-status { font-size: 14px; margin: 4px 0 10px; }
+.wd-eta { margin: 6px 0 0; }
+.wd-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; margin: 14px 0 4px; padding-top: 12px; border-top: 0.5px solid var(--line); overflow-wrap: anywhere; }
+.wd-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.wd-links { display: flex; justify-content: center; gap: 20px; }
+.wish-order { margin: 4px 0 10px; padding-left: 22px; line-height: 1.8; }
 .wish-top { display: flex; gap: 12px; align-items: flex-start; }
 .wish-name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .wish-rank { flex: none; width: 22px; height: 22px; border-radius: 11px; background: var(--accent); color: var(--accent-text); font-size: 12px; display: grid; place-items: center; }
@@ -411,14 +436,15 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .ai-summary { margin: 0 0 10px; line-height: 1.65; }
 .done-wishes summary, .dropped-wishes summary { font-size: 15px; }
 /* 心愿基金：大数字 + 从哪来的几行 */
-.wish-fund { text-align: center; }
-.fund-rows { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 10px auto 12px; max-width: 260px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); text-align: left; }
+.wish-fund { display: flex; align-items: flex-end; gap: 12px; }
+.wish-fund .link { margin-bottom: 8px; }
+.fund-rows { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 4px 0 12px; font-size: 14px; color: var(--muted); text-align: left; }
 .fund-rows b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
 .big-last { margin: -4px 4px 8px; }
 /* 预下单 */
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 .wish-check { width: 22px; height: 22px; min-height: 0; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
-.wish.picked { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.wish.picked .wish-name { color: var(--accent); }
 .cart-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .cart-row .grow { min-width: 0; overflow-wrap: anywhere; }
 .cart-price { display: flex; align-items: center; gap: 2px; color: var(--muted); flex: none; }

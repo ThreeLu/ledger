@@ -719,10 +719,24 @@ def _(c):
             sheet.get_by_role("button", name="提升幸福感").click()
         sheet.get_by_role("button", name="加进心愿单").click()
         expect(p.locator(".wish", has_text=name)).to_be_visible()
-    expect(p.locator(".wish", has_text="一本闲书")).to_contain_text("冷静中，还剩 3 天")
-    expect(p.locator(".wish", has_text="降噪耳机").locator(".wish-tags")).to_contain_text("提升幸福感")
+
+    # 一张清单：一行一个，只写名字、价格和一句状态；点开是详情（弹出一页），按钮在详情里
+    def open_wish(name):
+        p.locator(".wish", has_text=name).click()
+        return p.locator(".sheet")
+
+    def close_sheet():
+        p.locator(".sheet").get_by_role("button", name="关上").click()
+        expect(p.locator(".sheet")).to_have_count(0)
+    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-status")).to_have_text("冷静中，还剩 3 天")
+    expect(p.locator(".wish", has_text="降噪耳机")).not_to_contain_text("提升幸福感")
+    expect(p.locator(".section-title", has_text="心愿")).to_have_count(0)  # 不再分小额、大额两段
+    expect(p.locator(".wish-sort")).to_have_count(0)  # 没有排序按钮
+    sheet = open_wish("降噪耳机")
+    expect(sheet.locator(".wd-info")).to_contain_text("提升幸福感")
+    expect(sheet.locator(".wd-info")).to_contain_text("很想要")
+    close_sheet()
     assert next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")["kind"] == "joy"
-    expect(p.locator(".section-title", has_text="小额心愿")).to_be_visible()
     # 上个预算月：生活预算 3000，花了 2400 → 省下的进心愿基金；垫付那步报不回的 200 先从心愿基金扣（留 100）
     cur = period_start(date.today())
     prev = period_start(cur - timedelta(days=1))
@@ -746,62 +760,67 @@ def _(c):
     fund = base - min(writeoff, max(0, base - 100))
     assert fund >= 260 and writeoff, (base, writeoff)
     expect(p.locator(".big-num")).to_have_text(f"¥{fund:,}")
-    expect(p.locator(".fund-rows")).to_contain_text(f"生活费省下+¥{base:,}")
-    expect(p.locator(".fund-rows")).to_contain_text(f"帮专项和看病补−¥{base - fund:,}")
+    # 心愿基金只留一个数，来源点开才看
+    expect(p.locator(".fund-rows")).to_have_count(0)
+    p.locator(".wish-fund").get_by_role("button", name="来源 ›").click()
+    expect(p.locator(".sheet .fund-rows")).to_contain_text(f"生活费省下+¥{base:,}")
+    expect(p.locator(".sheet .fund-rows")).to_contain_text(f"帮专项和看病补−¥{base - fund:,}")
+    close_sheet()
     # 大额心愿只在单子上，不攒钱，也不能买
     ear = p.locator(".wish", has_text="降噪耳机")
-    expect(ear).to_contain_text("还没开始攒")
-    expect(ear.get_by_role("button", name="买了")).to_have_count(0)
+    expect(ear.locator(".wish-status")).to_have_text(re.compile("^还没开始攒"))
+    sheet = open_wish("降噪耳机")
+    expect(sheet.get_by_role("button", name="买了")).to_have_count(0)
     # 开始攒：从能随便用里拿 100
-    ear.get_by_role("button", name="开始攒").click()
-    expect(ear).to_contain_text("攒了 ¥100 / ¥1,200")
-    expect(ear.locator(".wish-tags")).to_contain_text("正在攒")
+    sheet.get_by_role("button", name="开始攒").click()
+    expect(ear.locator(".wish-status")).to_have_text(re.compile("^正在攒 · ¥100 / ¥1,200"))
+    expect(ear.locator(".bar-track")).to_have_count(1)
     assert next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")["saveStart"] == TODAY
     expect(p.locator(".big-num")).to_have_text(f"¥{fund - 100:,}")  # 大字是现在能用的，攒给大额心愿的单独写
-    expect(p.locator(".fund-split")).to_contain_text("另外 ¥100 攒给「降噪耳机」")
-    expect(p.locator(".fund-rows")).to_contain_text("攒给大额心愿−¥100")
+    p.locator(".wish-fund").get_by_role("button", name="来源 ›").click()
+    expect(p.locator(".sheet .fund-split")).to_contain_text("另外 ¥100 攒给「降噪耳机」")
+    expect(p.locator(".sheet .fund-rows")).to_contain_text("攒给大额心愿−¥100")
+    close_sheet()
     # 一次只攒一个：键盘排队，可以不排
     kb = p.locator(".wish", has_text="机械键盘")
-    kb.get_by_role("button", name="排队攒").click()
-    expect(kb.locator(".wish-tags")).to_contain_text("排队中 · 第 1 个")
-    kb.get_by_role("button", name="不排了").click()
-    expect(kb).to_contain_text("还没开始攒")
+    open_wish("机械键盘").get_by_role("button", name="排队攒").click()
+    expect(kb.locator(".wish-status")).to_have_text("排队第 1 个 · 冷静中，还剩 3 天")
+    open_wish("机械键盘").get_by_role("button", name="不排了").click()
+    expect(kb.locator(".wish-status")).to_have_text(re.compile("^还没开始攒"))
     assert "saveStart" not in next(w for w in c.data()["wishes"] if w["name"] == "机械键盘")
-    # 排序只改显示
-    names = lambda: p.locator(".wish .wish-name").all_inner_texts()  # noqa: E731
-    p.locator(".wish-sort").get_by_role("button", name="价格").click()
-    expect(p.locator(".wish-sort")).to_contain_text("价格 低→高")
-    p.locator(".wish-sort").get_by_role("button", name="价格").click()
-    expect(p.locator(".wish-sort")).to_contain_text("价格 高→低")
-    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("降噪耳机")
-    p.locator(".wish-sort").get_by_role("button", name="想要程度").click()
-    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("降噪耳机")
+    # 排在哪按现在能做什么：正在攒的耳机在冷静中、排队的前面
+    expect(p.locator(".wish .wish-name").first).to_have_text("降噪耳机")
     # 改成情怀、非常想要
-    kb.get_by_role("button", name="改").click()
+    open_wish("机械键盘").get_by_role("button", name="改").click()
     p.locator(".sheet").get_by_role("button", name="非常想要").click()
     p.locator(".sheet").get_by_role("button", name="情怀").click()
     p.locator(".sheet").get_by_role("button", name="保存").click()
-    expect(kb.locator(".wish-tags")).to_contain_text("情怀")
-    expect(p.locator(".wish .wish-name").nth(1)).to_have_text("机械键盘")
+    expect(p.locator(".sheet")).to_have_count(0)
+    expect(open_wish("机械键盘").locator(".wd-info")).to_contain_text("情怀")
+    close_sheet()
     k = next(w for w in c.data()["wishes"] if w["name"] == "机械键盘")
     assert (k["want"], k["kind"]) == ("most", "feel"), k
-    p.locator(".wish-sort").get_by_role("button", name="默认").click()
-    assert names()
-    # AI
-    p.get_by_role("button", name="问问 AI").click()
-    expect(p.locator(".ai-summary")).to_contain_text("先买闲书")
-    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-ai")).to_contain_text("想要")
-    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-rank")).to_have_text("1")
+    # AI：清单下面的小链接，弹出总建议和先后顺序；每个心愿的看法在它的详情里
+    p.get_by_role("button", name="AI 看看 ›").click()
+    p.locator(".sheet").get_by_role("button", name="问问 AI").click()
+    expect(p.locator(".sheet .ai-summary")).to_contain_text("先买闲书")
+    expect(p.locator(".sheet .wish-order li").first).to_have_text("一本闲书")
+    close_sheet()
+    expect(p.get_by_role("button", name=re.compile("^AI 建议 · "))).to_be_visible()
+    sheet = open_wish("一本闲书")
+    expect(sheet.locator(".wish-ai")).to_contain_text("想要")
+    expect(sheet.locator(".wish-ai")).to_contain_text("AI 建议先后：第 1 个")
+    close_sheet()
     assert "sk-test" not in json.dumps(c.data())  # 密钥不会写进账本
     sent = json.dumps(LAST_AI[0], ensure_ascii=False)
     assert "1/3" in sent and "开始攒" in sent, "大额心愿的规则要告诉 AI"
     # 单个「买了」的冷静期提醒
-    p.locator(".wish", has_text="一本闲书").get_by_role("button", name="买了").click()
+    open_wish("一本闲书").get_by_role("button", name="买了").click()
     expect(p.locator(".sheet")).to_contain_text("还在冷静期")
     p.locator(".sheet").get_by_role("button", name="取消").click()
     # 预下单：挑闲书和耳机，闲书改价 60
     small = fund - 100
-    p.get_by_role("button", name="挑几个算一算").click()
+    p.get_by_role("button", name="挑几个算一算 ›").click()
     p.get_by_role("checkbox", name="选上一本闲书").check()
     expect(p.locator(".cart-bar")).to_contain_text("选了 1 个 · 共 ¥80")
     p.get_by_role("checkbox", name="选上降噪耳机").check()
@@ -822,7 +841,7 @@ def _(c):
     expect(p.locator(".cart-bar")).to_contain_text(f"买完心愿基金剩 ¥{small - 60:,}")
     p.locator(".cart-bar").get_by_role("button", name="挑好了").click()
     expect(p.locator(".cart-bar")).to_have_count(0)
-    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-tags")).to_contain_text("准备买")
+    expect(p.locator(".wish", has_text="一本闲书").locator(".wish-status")).to_contain_text("准备买")
     expect(p.get_by_role("button", name="预下单 · 2 个")).to_be_visible()
     # 都买了：耳机没攒够，不能勾
     n = len(c.tx())
@@ -848,29 +867,36 @@ def _(c):
     p.locator(".sheet").get_by_label("想要什么").fill("台灯")
     p.locator(".sheet").get_by_label("价格").fill("250")
     p.locator(".sheet").get_by_role("button", name="加进心愿单").click()
-    p.locator(".wish", has_text="台灯").get_by_role("button", name="买了").click()
+    open_wish("台灯").get_by_role("button", name="买了").click()
     expect(p.locator(".sheet")).to_contain_text("差的")
     p.locator(".sheet").get_by_role("button", name="记好了").click()
     c.wait_saved(n + 2)
     split = sorted((x["category"], x["amount"]) for x in c.tx()[-2:])
     assert split == sorted([("c-wish", small - 60), ("c-like", 250 - (small - 60))]), split
     expect(p.locator(".big-num")).to_have_text("¥0")
-    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("攒了 ¥100 / ¥1,200")
+    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("¥100 / ¥1,200")
     # 不想要了：攒的退回能随便用
-    p.locator(".wish", has_text="降噪耳机").get_by_role("button", name="不想要了").click()
+    open_wish("降噪耳机").get_by_role("button", name="不想要了").click()
     expect(p.locator(".toast")).to_contain_text("攒的 ¥100 退回心愿基金")
     expect(p.locator(".big-num")).to_have_text("¥100")
-    expect(p.locator(".fund-split")).to_have_count(0)
-    p.locator(".wish", has_text="机械键盘").get_by_role("button", name="不想要了").click()
-    expect(p.locator(".done-wishes summary")).to_have_text("实现了 2 个")  # 放弃的不算省下多少钱
-    expect(p.locator(".dropped-wishes summary")).to_have_text("这个月放下的 · 2 个")
+    open_wish("机械键盘").get_by_role("button", name="不想要了").click()
+    # 实现了的、放下的合成最下面一行
+    hist = p.locator(".wish-history")
+    expect(hist.locator("summary")).to_have_text("实现了 2 个 · 放下 2 个")  # 放弃的不算省下多少钱
     # 放回来：大额心愿回到单子上，要重新点「开始攒」
-    p.locator(".dropped-wishes summary").click()
-    p.locator(".dropped-wishes .manage-row", has_text="降噪耳机").get_by_role("button", name="放回来").click()
-    expect(p.locator(".wish", has_text="降噪耳机")).to_contain_text("开始攒")
+    hist.locator("summary").click()
+    expect(hist.locator(".wish-done")).to_contain_text("一本闲书")
+    hist.locator(".wish-dropped .manage-row", has_text="降噪耳机").get_by_role("button", name="放回来").click()
+    expect(p.locator(".wish", has_text="降噪耳机").locator(".wish-status")).to_have_text(re.compile("^还没开始攒"))
     expect(p.locator(".big-num")).to_have_text("¥100")
     assert "saveStart" not in next(w for w in c.data()["wishes"] if w["name"] == "降噪耳机")
-    expect(p.locator(".dropped-wishes summary")).to_have_text("这个月放下的 · 1 个")
+    expect(hist.locator("summary")).to_have_text("实现了 2 个 · 放下 1 个")
+    p.wait_for_timeout(600)
+    p.screenshot(path=ART / "wishes.png", full_page=True)
+    open_wish("降噪耳机")
+    p.wait_for_timeout(400)
+    p.screenshot(path=ART / "wish-sheet.png")
+    close_sheet()
     # 「我们的花钱方式」里有心愿单和存款的规则
     c.go("#/rules")
     for t in ("心愿单：只花省下来的钱", "存款按用途分好"):
@@ -1141,7 +1167,9 @@ def _(c):
     expect(card.get_by_role("button", name="删掉")).to_have_count(0)
     # 兼职三成：前面记过 1600 + 去年 800 的兼职
     c.go("#/wishes")
-    expect(p.locator(".fund-rows")).to_contain_text("兼职收入+¥720")
+    p.locator(".wish-fund").get_by_role("button", name="来源 ›").click()
+    expect(p.locator(".sheet .fund-rows")).to_contain_text("兼职收入+¥720")
+    p.locator(".sheet").get_by_role("button", name="关上").click()
     # 预算建议：挑最近 3 个完整、非暑假的预算月，日常每月只花 300
     d = c.data()
     cur = period_start(date.today())
