@@ -226,11 +226,11 @@ function boot() {
 }
 
 function go(hash, replace = false) {
-  if (replace) { history.replaceState({ nav: navAt }, '', hash); navStack[navAt] = hash; saveNav(); render(); } else window.location.hash = hash;
+  if (replace) { history.replaceState({ nav: navAt }, '', hash); navStack[navAt] = { hash }; saveNav(); render(); } else window.location.hash = hash;
 }
 
 // 走过的页面：每一条浏览记录编个号（存在 history.state 里），号变小 = 返回。只比网址分不清 A → B → A 是不是返回
-// 添加到主屏幕的网页没有浏览器的返回键，子页面左上角放「‹ 返回」
+// 添加到主屏幕的网页没有浏览器的返回键，子页面左上角放「‹ 上一页」。navStack[号] = { hash, title }，title 是那页的大标题
 let navStack = [];
 let navAt = 0;
 const scrollAt = {};
@@ -238,27 +238,33 @@ const saveNav = () => { try { sessionStorage.setItem('ledger-nav', JSON.stringif
 function navEnter(boot = false) {
   const hash = window.location.hash || '#/';
   const n = history.state?.nav;
-  if (boot) try { navStack = JSON.parse(sessionStorage.getItem('ledger-nav')) || []; } catch { navStack = []; }
+  if (boot) try { navStack = (JSON.parse(sessionStorage.getItem('ledger-nav')) || []).map((x) => (x?.hash ? x : null)); } catch { navStack = []; }
   if (Number.isInteger(n)) navAt = n; // 返回或前进到走过的一页（刷新也是）
   else {
     navAt = boot ? 0 : navAt + 1;
     navStack.length = navAt;
     history.replaceState({ nav: navAt }, '');
   }
-  navStack[navAt] = hash;
+  navStack[navAt] = navStack[navAt]?.hash === hash ? navStack[navAt] : { hash };
   saveNav();
 }
-const BACK_NAMES = { '#/sim': '模拟', '#/sim/trades': '全部买卖', '#/sim/reviews': '复盘' };
-function backName(hash) {
-  const sym = hash.match(/^#\/sim\/s\/([^/?]+)/)?.[1];
-  const name = sym && (simQ[sym]?.name || simMeta[sym]?.name || store?.data?.simTrades.find((t) => t.sym === sym)?.name);
-  return BACK_NAMES[hash] || name || '返回';
-}
-// parent：直接打开这一页（没有上一页）时回到哪里
+// 子页面：直接打开（没有上一页）时回到哪里。底栏的几页（首页、模拟、总结、更多、＋）没有返回
+const PARENTS = [
+  [/^\/sim\/./, '#/sim'],
+  [/^\/account\//, '#/accounts'],
+  [/^\/claim\//, '#/claims'],
+  [/^\/person\//, '#/people'],
+  [/^\/lost$/, '#/settings'],
+  [/^\/ask$/, '#/'],
+  [/^\/(receipt|siri|bills|accounts|budget|rules|quick|settings|claims|people|reconcile|wishes|tax|subs|goals|money)$/, '#/more'],
+];
+const TAB_NAMES = { '#/': '首页', '#/add': '记一笔', '#/sim': '模拟', '#/summary': '总结', '#/more': '更多' };
+// 底栏的几页写名字；别的页写它的大标题，太长就写「返回」
+const backName = (hash, title) => TAB_NAMES[hash.split('?')[0]] || (title && title.length <= 8 ? title : '返回');
 function backButton(parent) {
-  const prev = navAt > 0 ? navStack[navAt - 1] || '' : null;
-  return h('button', { type: 'button', class: 'back-btn', onclick: () => (prev != null ? history.back() : go(parent, true)) },
-    icon('back'), backName(prev ?? parent));
+  const prev = navAt > 0 ? navStack[navAt - 1] || { hash: '' } : null;
+  return h('button', { type: 'button', class: 'back-btn', onclick: () => (prev ? history.back() : go(parent, true)) },
+    icon('back'), prev ? backName(prev.hash, prev.title) : backName(parent));
 }
 
 // ---------- 路由 ----------
@@ -329,24 +335,30 @@ function render() {
   const [path, query = ''] = window.location.hash.replace(/^#/, '').split('?');
   const q = Object.fromEntries(new URLSearchParams(query));
   let content;
+  let routed = false;
   for (const [re, fn] of routes) {
     const m = path.match(re);
     if (!m) continue;
-    if (re.source.includes('settings')) content = fn();
+    if (re.source.includes('settings')) { content = fn(); routed = !!store?.data; }
     else if (!settings.token) content = settingsView();
     else if (loadError && !store.data) content = errorView(loadError);
     else if (store.missing) content = setupView();
     else if (!store.data) content = h('p', { class: 'muted center' }, '正在读取账本…');
-    else content = fn(m[1], q);
+    else { content = fn(m[1], q); routed = true; }
     break;
   }
-  view.replaceChildren(...[content || notFound(), store?.data && /^\/?$/.test(path) ? whisper(path) : null].filter(Boolean));
+  const parent = routed && (path === '/add' && q.edit ? '#/' : PARENTS.find(([re]) => re.test(path))?.[1]); // 改一笔也算子页面
+  view.replaceChildren(...[parent ? backButton(parent) : null, content || notFound(), store?.data && /^\/?$/.test(path) ? whisper(path) : null].filter(Boolean));
   if (path !== lastPath) {
     if (!path.startsWith('/summary')) summaryFlipped = false;
     view.classList.remove('enter', 'flip-in'); void view.offsetWidth; view.classList.add('enter'); lastPath = path;
   }
   document.documentElement.dataset.season = solarTerm(today()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
+  // 记下这页的大标题，下一页的返回键用
+  const title = view.querySelector('.page-head h1')?.textContent.trim();
+  const here = navStack[navAt];
+  if (here && title && here.title !== title) { here.title = title; saveNav(); }
   for (const a of nav.querySelectorAll('a[href]')) {
     const target = a.getAttribute('href').slice(1);
     a.classList.toggle('active', (NAV_GROUPS[target] || []).some((re) => re.test(path)));
@@ -1651,12 +1663,12 @@ function simStockView(sym) {
   const d = store.data;
   const sim = simOf(d);
   const g = currentGame(sim);
-  if (!g) return h('div', {}, backButton('#/sim'), header('模拟'), h('div', { class: 'card' }, h('p', {}, '还没开始模拟。'), h('a', { href: '#/sim', class: 'button' }, '去开始')));
+  if (!g) return h('div', {}, header('模拟'), h('div', { class: 'card' }, h('p', {}, '还没开始模拟。'), h('a', { href: '#/sim', class: 'button' }, '去开始')));
   needQuotes([sym]);
   const s = simInfo(sym);
   const q = simQ[sym];
-  if (!s) return h('div', {}, backButton('#/sim'), header('…'), h('p', { class: 'muted center' }, '正在读…'));
-  if (s.missing && !q) return h('div', {}, backButton('#/sim'), header('没有找到'), h('div', { class: 'card' }, h('p', {}, '没有这只股票。'), h('a', { href: '#/sim', class: 'button' }, '回到模拟')));
+  if (!s) return h('div', {}, header('…'), h('p', { class: 'muted center' }, '正在读…'));
+  if (s.missing && !q) return h('div', {}, header('没有找到'), h('div', { class: 'card' }, h('p', {}, '没有这只股票。'), h('a', { href: '#/sim', class: 'button' }, '回到模拟')));
   const st = marketState(s.mkt, new Date(), q?.date);
   const pos = positions(sim, g.id).find((p) => p.sym === sym);
   const watching = d.simWatch.find((w) => w.sym === sym);
@@ -1666,7 +1678,6 @@ function simStockView(sym) {
   const l = lot(sym);
   const rules = [st.text, tPlus0(s) ? '当天买当天能卖' : '今天买的明天才能卖', l.min === l.step ? `${l.min} ${l.unit}起` : `最少 ${l.min} 股`];
   return h('div', {},
-    backButton('#/sim'),
     headerSub(s.name, `${s.code} · ${mktName(s)}`),
     h('div', { class: 'card sim-quote' },
       q ? [h('div', { class: 'sim-price' }, px(sym, q.price)),
@@ -1931,13 +1942,13 @@ function simReviewCard(r, short = false) {
 
 function simReviewsView() {
   const list = [...store.data.simReviews].sort((a, b) => b.at.localeCompare(a.at));
-  return h('div', {}, backButton('#/sim'), header('复盘'),
+  return h('div', {}, header('复盘'),
     list.length ? list.map((r) => simReviewCard(r)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有复盘。')));
 }
 
 function simTradesView() {
   const list = [...store.data.simTrades].sort((a, b) => b.at.localeCompare(a.at));
-  return h('div', {}, backButton('#/sim'), header('全部买卖'),
+  return h('div', {}, header('全部买卖'),
     list.length ? h('div', { class: 'group' }, list.map(tradeRow)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有买卖。')));
 }
 

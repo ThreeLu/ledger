@@ -1919,6 +1919,52 @@ def _(c):
     assert len(games) == 2 and games[0]["end"] == "2026-11-03" and "end" not in games[1], games
 
 
+
+@step("返回：子页面左上角回到上一页、写着上一页的名字；刷新、直接打开也行；底栏的几页没有返回")
+def _(c):
+    p = c.page
+    c.go("#/more")
+    expect(p.locator(".back-btn")).to_have_count(0)
+    p.locator(".cell", has_text="账户").first.click()
+    back = p.locator(".back-btn")
+    expect(back).to_have_text("更多")
+    p.locator(".cell", has_text="存钱卡").first.click()
+    expect(back).to_have_text("账户")
+    p.screenshot(path=ART / "back.png")
+    back.click()
+    expect(p).to_have_url(URL + "#/accounts")
+    expect(back).to_have_text("更多")
+    back.click()
+    expect(p).to_have_url(URL + "#/more")
+    expect(p.locator(".back-btn")).to_have_count(0)
+    # 刷新以后返回还认得上一页
+    p.locator(".cell", has_text="设置").click()
+    p.reload()
+    expect(p.locator(".back-btn")).to_have_text("更多")
+    # 直接打开子页面：回到它上面那一页
+    p.evaluate("sessionStorage.clear(); history.replaceState(null, '', '#/budget')")
+    p.reload()
+    expect(p.locator(".back-btn")).to_have_text("更多")
+    p.locator(".back-btn").click()
+    expect(p).to_have_url(URL + "#/more")
+    # 改一笔：从首页点进去，返回回首页
+    d = c.data()
+    d["tx"].append({"id": "t-back", "type": "expense", "date": TODAY, "account": "a-live", "amount": 12, "category": d["categories"][0]["id"], "note": "返回测试", "createdAt": TODAY + "T12:00:00Z"})
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    p.locator(".recent-list .tx", has_text="返回测试").click()
+    expect(p.locator(".page-head h1")).to_have_text("改一笔")
+    expect(p.locator(".back-btn")).to_have_text("首页")
+    p.screenshot(path=ART / "back-edit.png")
+    p.locator(".back-btn").click()
+    expect(p).to_have_url(URL + "#/")
+    for tab in ("#/", "#/summary", "#/add"):
+        c.go(tab)
+        expect(p.locator(".page-head").first).to_be_visible()
+        expect(p.locator(".back-btn")).to_have_count(0)
+
+
 def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)
