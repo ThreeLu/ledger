@@ -538,11 +538,12 @@ def _(c):
         c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
         c.go("#/summary?mode=month")
         p.reload()  # 只换了 # 后面，要刷新才读到刚写的数据
-        head = p.locator(".week-head")
-        expect(head).to_contain_text(re.compile("这个月存下|这个月比收入多花了"))
-        expect(head.locator(".mh-stats")).to_contain_text("收入")
-        expect(head.locator(".time-legend")).to_contain_text("生活预算 ¥")
+        head = p.locator(".rep-head")
+        expect(head.locator(".rep-title")).to_have_text(re.compile(r"^\d{4} 年 \d+ 月财务报表$"))
+        expect(head).to_contain_text("收入 ¥")
         expect(head.locator(".advice")).to_contain_text("下个月可以试试")
+        expect(p.locator(".rep-kpi")).to_have_count(4)
+        expect(p.locator(".rep-kpi").first.locator("b")).to_have_text(re.compile(r"^¥[\d,]+(\.\d\d)?$"))
         head.screenshot(path=str(ART / "month-head.png"))
     finally:
         c.data()  # 等网页把要上传的传完，再还原
@@ -568,24 +569,53 @@ def _(c):
         p.locator(".donut .seg").first.dispatch_event("click")
         expect(p.locator(".legend-row.on")).to_have_count(1)
     p.get_by_role("link", name="月", exact=True).click()
-    expect(p.get_by_role("img", name="花钱曲线")).to_be_visible()
+    # 月度报表：八个部分，每部分一张图 + 一张表
+    expect(p.locator(".rep-sec h3").first).to_have_text("一、关键数字")
+    for img in ("收支瀑布图", "月初和月底的钱按用途分", "每一块预算用了多少", "花钱曲线", "每天的生活花销日历", "收入、支出和储蓄率"):
+        expect(p.get_by_role("img", name=img)).to_be_visible()
+    for table in ("关键数字", "收支表", "按账户", "按用途", "预算执行", "花得最多的类别", "最近几个月"):
+        expect(p.get_by_role("table", name=table)).to_be_visible()
+    expect(p.get_by_role("table", name="按账户")).to_contain_text("净资产")
+    expect(p.locator(".report")).not_to_contain_text("NaN")
+    expect(p.locator(".report")).not_to_contain_text("undefined")
+    expect(p.get_by_role("table", name="收支表")).to_contain_text("支出合计")
     expect(p.locator(".advice")).to_contain_text("下个月可以试试")
-    expect(p.get_by_role("img", name="总资产")).to_be_visible()
-    # 心愿基金这个月：月初 → 现在，每一行进出加起来对得上
-    wm = p.locator(".wish-month")
-    expect(wm.locator("h3")).to_have_text("心愿基金")
-    expect(wm.locator(".wm-top")).to_contain_text("月初 → 现在")
-    got = p.evaluate("""() => Promise.all([import('./js/summary.js'), import('./js/money.js')]).then(([s, m]) => {
+    # 对得上：按用途的合计 = 按账户的净资产（月初、现在都是）；心愿基金每一行进出加起来 = 月初到现在的变化
+    got = p.evaluate("""() => Promise.all([import('./js/report.js'), import('./js/money.js')]).then(([r, m]) => {
       const d = JSON.parse(localStorage.getItem('ledger-cache') || 'null');
-      return d && s.wishMonth(d.data || d, m.periodFor(d.data || d, m.ymd(new Date())));
+      const data = d && (d.data || d);
+      return data && r.monthReport(data, m.ymd(new Date()), data.settings.usdRate || 7);
     })""")
     if got:
-        assert abs(got["start"] + sum(x["v"] for x in got["rows"]) - got["end"]) < 0.01, got
+        for k in ("start", "end"):
+            assert abs(sum(x[k] for x in got["purposes"]) - got[f"{k}NW"]["net"]) < 0.05, (k, got["purposes"], got[f"{k}NW"])
+        assert abs(sum(x["v"] for x in got["spend"]) - got["key"]["total"]) < 0.01, got["spend"]
+        w = got["notes"]["wish"]
+        assert abs(w["start"] + sum(x["v"] for x in w["rows"]) - w["end"]) < 0.01, w
+    p.screenshot(path=ART / "report.png", full_page=True)
+    # 存成 PDF：打开打印；打印时只留报表
+    p.evaluate("window.print = () => { window.__printed = true; }")
+    p.get_by_role("button", name="存成 PDF").click()
+    assert p.evaluate("window.__printed") is True
+    p.emulate_media(media="print")
+    expect(p.locator("nav#nav")).to_be_hidden()
+    expect(p.locator(".rep-export")).to_be_hidden()
+    p.screenshot(path=ART / "report-print.png", full_page=True)
+    p.emulate_media(media="screen")
+    # 导出给 ChatGPT：下载成文件，八个部分都在
+    p.get_by_role("button", name="导出给 ChatGPT").click()
+    with p.expect_download() as dl:
+        p.get_by_role("button", name="下载成文件").click()
+    text = Path(dl.value.path()).read_text(encoding="utf-8")
+    for want in ("财务报表", "## 一、关键数字", "## 二、收支表", "**收入合计**", "## 三、资产表", "**净资产**", "## 四、预算执行", "## 五、花销明细", "## 六、最近几个月", "## 七、附注", "不要推荐任何理财产品"):
+        assert want in text, want
+    p.locator(".sheet").get_by_role("button", name="取消").click()
     p.get_by_role("link", name="上一个").click()
-    expect(p.locator(".wish-month")).to_be_visible()
+    expect(p.locator(".rep-head")).to_be_visible()
     expect(p.locator(".period-nav")).to_be_visible()
     p.get_by_role("button", name="怎么用").click()
     expect(p.locator(".sheet")).to_contain_text("花钱曲线")
+    expect(p.locator(".sheet")).to_contain_text("Save to Files")
 
 
 def period_start(day, start=15):

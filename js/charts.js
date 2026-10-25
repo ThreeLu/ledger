@@ -106,3 +106,66 @@ export function lineChart(series, { xLabels = [], height = 160, title = '', from
   xLabels.forEach(([i, label]) => svg.append(s('text', { x: X(i), y: height - 6, 'text-anchor': i === 0 ? 'start' : i === n ? 'end' : 'middle', class: 'chart-label', text: label })));
   return svg;
 }
+
+// 瀑布图：收入一根柱子，每一块支出往下扣一段，最后一根是剩下的（可以是负数）
+// steps = [{ label, v, color }]：第一个是收入，中间是支出（正数），最后一根自动算
+export function waterfall(steps, { endLabel = '存下', endColor = 'var(--sage)', negColor = 'var(--danger)', height = 170, title = '' } = {}) {
+  const top = 18;
+  const bottom = 22;
+  const bars = [];
+  let run = steps[0]?.v || 0;
+  bars.push({ ...steps[0], a: 0, b: run });
+  for (const x of steps.slice(1)) { bars.push({ ...x, a: run, b: run - x.v }); run -= x.v; }
+  bars.push({ label: endLabel, v: run, color: run >= 0 ? endColor : negColor, a: 0, b: run, end: true });
+  const max = Math.max(1, ...bars.map((x) => Math.max(x.a, x.b)));
+  const min = Math.min(0, ...bars.map((x) => Math.min(x.a, x.b)));
+  const span = max - min || 1;
+  const y = (v) => top + ((max - v) / span) * (height - top - bottom);
+  const slot = W / bars.length;
+  const bw = Math.min(26, slot * 0.62);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart', role: 'img', 'aria-label': title });
+  svg.append(s('line', { x1: 0, x2: W, y1: y(0), y2: y(0), style: 'stroke:var(--line)', 'stroke-width': 1 }));
+  bars.forEach((b, i) => {
+    const x = slot * i + (slot - bw) / 2;
+    const hi = Math.max(b.a, b.b);
+    const lo = Math.min(b.a, b.b);
+    svg.append(s('rect', { x, y: y(hi), width: bw, height: Math.max(1.5, y(lo) - y(hi)), rx: 3, style: `fill:${b.color}` }));
+    // 和下一根之间的细虚线：钱从这里接着往下扣
+    if (i < bars.length - 1) svg.append(s('line', { x1: x + bw, x2: x + slot, y1: y(b.b), y2: y(b.b), style: 'stroke:var(--muted)', 'stroke-width': 0.8, 'stroke-dasharray': '2 2' }));
+    const num = i === 0 || b.end ? short(b.v) : `−${short(b.v)}`;
+    svg.append(s('text', { x: x + bw / 2, y: y(hi) - 4, 'text-anchor': 'middle', class: 'chart-num', text: num }));
+    svg.append(s('text', { x: slot * i + slot / 2, y: height - 6, 'text-anchor': 'middle', class: 'chart-label', text: b.label }));
+  });
+  return svg;
+}
+
+// 每月两根柱子（收入、支出）+ 一条储蓄率的线（右边的刻度）
+// months = [{ label, a, b, rate }]，rate 是 0～1 的小数或 null
+export function barsLine(months, { colorA = 'var(--sage)', colorB = 'var(--g-food)', lineColor = 'var(--accent)', height = 170, title = '' } = {}) {
+  const top = 16;
+  const bottom = 22;
+  const left = 4;
+  const right = 30;
+  const max = Math.max(1, ...months.flatMap((m) => [m.a, m.b]));
+  const y = (v) => top + ((max - v) / max) * (height - top - bottom);
+  const rates = months.map((m) => m.rate).filter((r) => r != null);
+  const rHi = Math.max(1, ...rates);
+  const rLo = Math.min(0, ...rates);
+  const ry = (r) => top + ((rHi - r) / (rHi - rLo || 1)) * (height - top - bottom);
+  const slot = (W - left - right) / Math.max(1, months.length);
+  const bw = Math.min(14, slot * 0.3);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart', role: 'img', 'aria-label': title });
+  svg.append(s('line', { x1: left, x2: W - right, y1: y(0), y2: y(0), style: 'stroke:var(--line)', 'stroke-width': 1 }));
+  for (const r of [rLo, rHi]) svg.append(s('text', { x: W - 2, y: ry(r) + 4, 'text-anchor': 'end', class: 'chart-label', text: `${Math.round(r * 100)}%` }));
+  const pts = [];
+  months.forEach((m, i) => {
+    const cx = left + slot * i + slot / 2;
+    svg.append(s('rect', { x: cx - bw - 1, y: y(m.a), width: bw, height: Math.max(m.a ? 1.5 : 0, y(0) - y(m.a)), rx: 3, style: `fill:${colorA}` }));
+    svg.append(s('rect', { x: cx + 1, y: y(m.b), width: bw, height: Math.max(m.b ? 1.5 : 0, y(0) - y(m.b)), rx: 3, style: `fill:${colorB}` }));
+    svg.append(s('text', { x: cx, y: height - 6, 'text-anchor': 'middle', class: 'chart-label', text: m.label }));
+    if (m.rate != null) pts.push([cx, ry(m.rate)]);
+  });
+  if (pts.length > 1) svg.append(s('path', { d: pts.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' '), fill: 'none', style: `stroke:${lineColor}`, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  for (const [px, py] of pts) svg.append(s('circle', { cx: px, cy: py, r: 3, style: `fill:${lineColor};stroke:var(--card)`, 'stroke-width': 1.5 }));
+  return svg;
+}

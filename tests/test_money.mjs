@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 const m = await import(new URL('../js/money.js', import.meta.url));
 const sm = await import(new URL('../js/summary.js', import.meta.url));
+const rp = await import(new URL('../js/report.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -420,6 +421,26 @@ test('不占预算的花销按来源分开写（心愿基金不说成手续费�
   assert.equal(m.noneLine(m.noneParts(d, st.tx)), '另有 ¥205 不占预算：心愿基金 ¥200、手续费 ¥5');
   assert.equal(m.noneLine(m.noneParts(d, st.tx.slice(0, 2))), '另有 ¥120 是心愿基金的钱，不占预算');
   assert.equal(m.noneLine([]), '');
+});
+
+test('月度报表：收支、预算、净资产对得上；按用途的合计 = 净资产；还没过完时算到今天', () => {
+  const d = book();
+  d.tx = [inc('2026-09-03', 5000), ex('2026-09-10', 1200), ex('2026-09-20', 300, 'c-snack'),
+    inc('2026-10-02', 5000), ex('2026-10-04', 800), ex('2026-10-06', 50, 'c-snack'), ex('2026-10-20', 999)];
+  const r = rp.monthReport(d, '2026-10-05', 7, '2026-10-08');
+  assert.equal(r.ongoing, true);
+  assert.equal(r.asOf, '2026-10-08');
+  assert.deepEqual([r.key.income, r.key.total, r.key.saved], [5000, 850, 4150]); // 10-20 那笔还没到，不算
+  assert.equal(r.key.prev.saved, 3500);
+  assert.equal(r.key.netChange, 4150);
+  assert.equal(r.key.netChange - r.key.prev.netChange, 650);
+  assert.equal(r.spend.reduce((a, g) => a + g.v, 0), r.key.total);
+  assert.equal(r.budget.find((x) => x.id === 'food').v, 850);
+  for (const k of ['start', 'end']) assert.ok(Math.abs(r.purposes.reduce((a, x) => a + x[k], 0) - r[`${k}NW`].net) < 0.01, k);
+  assert.equal(r.calendar.counted, 8);
+  assert.equal(r.calendar.max.day, '2026-10-04');
+  assert.deepEqual(r.trend.map((x) => x.p.startMonth), [9, 10]); // 8 月什么都没记，不放进趋势
+  assert.equal(r.cats[0].name, '午餐');
 });
 
 console.log(`\n${n} 项通过`);
