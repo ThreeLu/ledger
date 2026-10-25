@@ -1389,8 +1389,7 @@ def _(c):
     p.wait_for_function("location.hash.includes('mode=ahead')")
     seg = p.locator(".segmented").first
     expect(seg.get_by_role("link", name="往后")).to_have_class(re.compile("on"))
-    expect(p.locator(".mast-sub")).to_contain_text("次模拟 · 贝叶斯")
-    expect(p.locator(".mast-sub")).not_to_contain_text("Chronos")
+    expect(p.locator(".mast-sub")).to_have_text("照你记的账估的")  # 提醒里不写模型名（用户 2026-10-25）
     expect(p.locator(".ahead-say")).to_contain_text("碰到底线的可能")
     expect(p.locator(".rep-kpi")).to_have_count(4)
     chart = p.locator(".rep-sec", has_text="每个月底的存款").locator("svg.chart")
@@ -1409,7 +1408,7 @@ def _(c):
     p.reload()
     expect(p.locator(".ahead-say")).to_have_text(say)
     p.get_by_role("button", name="怎么用").click()
-    expect(p.locator(".sheet")).to_contain_text("Chronos-2")
+    expect(p.locator(".sheet")).not_to_contain_text("Chronos")
     p.keyboard.press("Escape")
     # Chronos-2 的结果（数据仓库 Actions 每天写）：混进来，「怎么算的」写最近一次
     levels = [0.01] + [round(0.05 * i, 2) for i in range(1, 20)] + [0.99]
@@ -1417,7 +1416,7 @@ def _(c):
         "days": 62, "context": 20, "levels": levels, "series": {"living": [[round(q * 150, 2) for q in levels] for _ in range(62)]}}).encode())
     c.repo.external_write("config/forecast-log.json", json.dumps({"levels": levels, "living": {TODAY: [round(q * 150, 2) for q in levels]}}).encode())
     p.reload()
-    expect(p.locator(".mast-sub")).to_contain_text("贝叶斯 + Chronos-2")
+    expect(p.locator(".mast-sub")).not_to_contain_text("Chronos")
     how.locator("summary").click()
     expect(how).to_contain_text("用了 20 天的记录")
     expect(how).to_contain_text("两个模型各占一半")
