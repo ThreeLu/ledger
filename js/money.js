@@ -865,14 +865,45 @@ export function budgetAdvice(data, today, rate = data.settings.usdRate) {
 // 收入计划对应的收入类别：写了 category 用它，否则按名字找
 export const planCategory = (data, plan) => plan.category || data.categories.find((c) => c.kind === 'income' && c.name === plan.name)?.id || null;
 
+// 收入平时哪天到（2026-10-25 用户要的「钱到了没有」）：看以前完整的、有收入的预算月里，这笔收入是预算月第几天到的；
+// 至少 2 次、最早最晚差不过一周，就算有准日子，取中间那次。没有记录时看收入计划 when 里写的「15 号」。都没有 = 不定时
+export const INCOME_LATE = 3; // 比平时晚过这么多天，才说「晚了」
+export function incomeUsual(data, plan, p) {
+  const cat = planCategory(data, plan);
+  if (!cat) return null;
+  const offs = [];
+  for (const q of closedPeriods(data, p.start).filter((x) => !x.summer && !partial(data, x).isPartial).slice(-6)) {
+    const t = data.tx.filter((x) => x.type === 'income' && x.category === cat && x.date >= q.start && x.date <= q.end).sort((a, b) => a.date.localeCompare(b.date))[0];
+    if (t) offs.push(daysBetween(q.start, t.date));
+  }
+  offs.sort((a, b) => a - b);
+  if (offs.length >= 2 && offs.at(-1) - offs[0] <= 7) {
+    const date = addDays(p.start, offs[Math.floor(offs.length / 2)]);
+    return { date: date > p.end ? p.end : date, from: 'history', n: offs.length };
+  }
+  const m = String(plan.when || '').match(/(\d{1,2})\s*[号日]/);
+  if (!m) return null;
+  const day = Number(m[1]);
+  if (day < 1 || day > 31) return null;
+  // 预算月里第一个是这个日子的那天（这个月没有 31 号就取月底）
+  for (let x = p.start; x <= p.end; x = addDays(x, 1)) {
+    const dd = parseYmd(x);
+    if (dd.getDate() === Math.min(day, lastDay(dd.getFullYear(), dd.getMonth()))) return { date: x, from: 'plan' };
+  }
+  return null;
+}
+
 export function payday(data, today) {
   const p = periodFor(data, today);
   if (partial(data, p).isPartial) return { p, waiting: [], transfer: null }; // 开始记账那个月：之前到的钱没记，不问
   const inP = data.tx.filter((t) => t.date >= p.start && t.date <= p.end);
   const snooze = data.payday?.[p.start] || {};
+  // 有准日子的：前一天才开始问；过了 INCOME_LATE 天还没到，late = 晚了几天
   const waiting = p.summer ? [] : data.incomePlan
-    .map((plan, i) => ({ plan, i, category: planCategory(data, plan) }))
-    .filter((x) => x.category && !inP.some((t) => t.type === 'income' && t.category === x.category) && !(snooze.later?.[x.i] >= today));
+    .map((plan, i) => ({ plan, i, category: planCategory(data, plan), usual: incomeUsual(data, plan, p) }))
+    .filter((x) => x.category && !inP.some((t) => t.type === 'income' && t.category === x.category) && !(snooze.later?.[x.i] >= today))
+    .filter((x) => !x.usual || today >= addDays(x.usual.date, -1))
+    .map((x) => { const late = x.usual ? daysBetween(x.usual.date, today) : 0; return late >= INCOME_LATE ? { ...x, late } : x; });
   const floor = data.settings.floorAccount;
   const gotIncome = inP.some((t) => t.type === 'income' && data.incomePlan.some((plan) => planCategory(data, plan) === t.category));
   const moved = inP.some((t) => t.type === 'transfer' && t.account === floor && t.to !== floor);

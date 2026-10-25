@@ -6,6 +6,7 @@ const m = await import(new URL('../js/money.js', import.meta.url));
 const sm = await import(new URL('../js/summary.js', import.meta.url));
 const rp = await import(new URL('../js/report.js', import.meta.url));
 const rc = await import(new URL('../js/bills.js', import.meta.url));
+const ah = await import(new URL('../js/ahead.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -457,6 +458,92 @@ test('电动车充电费：新类别在交通里；老账本升级后有它；�
   assert.equal(rc.guessCategory(d.categories, [], '电车充电'), 'c-ebike');
   assert.notEqual(rc.guessCategory(d.categories, [], '充电宝'), 'c-ebike');
   assert.equal(rc.guessCategory(d.categories, [], '充电器'), 'c-gadget');
+});
+
+// ---------- 往后一年、专项什么时候留够、钱到了没有（2026-10-25） ----------
+// savingsBook：生活预算 0、订阅 200，存款 = 存钱卡 1 万；收入 5000 → 每月 +4800；底线 = 应急 3000 + 医疗 1000
+
+test('往后一年：这个月 + 还没到的收入 − 还没扣的订阅；之后每月 + 收入 − 预算；自由存款满 1.2 万封存，底线跟着变高', () => {
+  const d = savingsBook();
+  const a = ah.aheadPlan(d, T);
+  assert.equal(a.now, 10000);
+  assert.equal(a.points.length, 12);
+  assert.equal(a.points[0].total, 14800);
+  assert.equal(a.points[1].total, 19600);
+  assert.equal(a.points[0].floor, 4000);
+  assert.equal(a.points[1].floor, 14000); // 自由存款 15600 → 封存 1 万
+  assert.equal(a.perMonth, 4800);
+  assert.equal(a.below, null);
+});
+
+test('往后一年：暑假两个月没有收入，每年一次的专项到日子当作花掉', () => {
+  const d = savingsBook();
+  d.settings.summerMonths = [7, 8];
+  d.yearly = [{ id: 'fee', name: '学费', amount: 8000, month: 9, day: 1 }];
+  const a = ah.aheadPlan(d, T);
+  assert.equal(a.points[8].total, 53200); // 2027 年 6 月底
+  assert.equal(a.points[9].inc, 0);
+  assert.equal(a.points[10].total, 52800);
+  assert.equal(a.points[11].total, 49600); // 9 月：+4800 − 学费 8000
+  assert.deepEqual(a.events.map((e) => [e.name, e.date, e.amount]), [['2027 年学费', '2027-09-01', 8000]]);
+});
+
+test('往后一年：会低于底线时说哪个月、每月少花多少能避开', () => {
+  const d = savingsBook();
+  d.accounts.find((a) => a.id === 'a-save').opening = 5000;
+  Object.assign(d.settings, { expectedIncome: 100 });
+  d.yearly = [{ id: 'x', name: '大开销', amount: 2000, month: 1, day: 10 }];
+  const a = ah.aheadPlan(d, T);
+  assert.equal(a.points[2].total, 4700);
+  assert.equal(a.below.p.start, '2027-01-01');
+  assert.equal(a.below.total, 2600);
+  assert.equal(a.fix, 350); // 差 1400，分 4 个月
+});
+
+test('专项什么时候留够：按 家庭 → 应急 → 医疗 → 专项 往后分；到日子还没留够写差多少', () => {
+  const d = savingsBook();
+  d.goals = [{ id: 'g1', name: '过渡金', target: 20000, by: '2028-06-30', createdAt: '2026-08-01' }];
+  let a = ah.aheadPlan(d, T);
+  assert.equal(a.eta.find((e) => e.id === 'g1').at, '2026-12-31');
+  d.goals = [{ id: 'g2', name: '太多', target: 100000, by: '2027-03-31', createdAt: '2026-08-01' }];
+  a = ah.aheadPlan(d, T);
+  const e = a.eta.find((x) => x.id === 'g2');
+  assert.equal(e.at, null);
+  assert.equal(e.shortAtBy, 70000); // 2 月底留了 3 万
+  // 日子很远的专项也算得到（不止 12 个月）
+  d.goals = [{ id: 'g3', name: '很远', target: 90000, by: '2030-01-01', createdAt: '2026-08-01' }];
+  a = ah.aheadPlan(d, T);
+  assert.equal(a.points.length, 12);
+  assert.equal(a.eta.find((x) => x.id === 'g3').at, '2028-03-31'); // 先留 6000，每月 +4800：第 18 个月底
+});
+
+test('照最近的样子：最近几个完整月份实际进存款多少（花得少也按预算算）', () => {
+  const d = savingsBook();
+  d.tx = [inc('2026-08-05', 3000), inc('2026-09-05', 3000)];
+  const pace = ah.recentPace(d, T);
+  assert.deepEqual([pace.months, pace.perMonth], [2, 2800]);
+  const a = ah.aheadPlan(d, T, { mode: 'recent' });
+  assert.equal(a.mode, 'recent');
+  assert.equal(Math.round(a.points[1].total - a.points[0].total), 2800);
+  assert.equal(ah.aheadPlan(savingsBook(), T, { mode: 'recent' }).mode, 'plan'); // 没有完整月份时按计划
+});
+
+test('钱到了没有：以前都是第 10、11 天到 → 前一天才问，晚 3 天以上说晚了；没有记录看「15 号」', () => {
+  const d = book();
+  d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary' }];
+  d.tx = [inc('2026-08-10', 5000), inc('2026-09-11', 5000)];
+  assert.equal(m.incomeUsual(d, d.incomePlan[0], m.periodFor(d, T)).date, '2026-10-11');
+  assert.equal(m.payday(d, '2026-10-08').waiting.length, 0);
+  const w = m.payday(d, '2026-10-10').waiting;
+  assert.equal(w.length, 1);
+  assert.equal(w[0].late, undefined);
+  assert.equal(m.payday(d, '2026-10-15').waiting[0].late, 4);
+  const d2 = book();
+  d2.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 15 号左右' }];
+  assert.deepEqual(m.incomeUsual(d2, d2.incomePlan[0], m.periodFor(d2, T)), { date: '2026-10-15', from: 'plan' });
+  d2.incomePlan[0].when = '不定时';
+  assert.equal(m.incomeUsual(d2, d2.incomePlan[0], m.periodFor(d2, T)), null);
+  assert.equal(m.payday(d2, '2026-10-01').waiting.length, 1); // 不定时的照旧每天问
 });
 
 console.log(`\n${n} 项通过`);

@@ -1339,6 +1339,91 @@ def _(c):
     assert (t["type"], t["account"], t["to"], t["amount"]) == ("transfer", "a-save", "a-live", living), t
     expect(p.locator(".payday")).to_have_count(0)
 
+@step("钱到了没有：以前都是预算月头一天到的收入晚了 3 天还没记，琥珀色提一句")
+def _(c):
+    p = c.page
+    cur = period_start(date.today())
+    if cur.month in (7, 8):
+        return
+    keep = c.data()
+    d = json.loads(json.dumps(keep))
+    d["payday"] = {}
+    olds, q = [], cur
+    while len(olds) < 2:  # 前两个有收入的预算月（暑假不算）
+        q = period_start(q - timedelta(days=1))
+        if q.month not in (7, 8):
+            olds.append(q)
+    d["tx"] += [{"id": f"t-old-{i}", "type": "income", "date": day.isoformat(), "account": "a-save", "amount": 4000, "category": "i-b", "createdAt": "2020-01-01T00:00:00Z"}
+                for i, day in enumerate(olds)]
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    row = p.locator(".payday-row", has_text="收入乙")
+    late = (date.today() - cur).days
+    if late >= 3:
+        expect(row).to_contain_text(f"比平时晚了 {late} 天")
+        expect(p.locator(".todo-item.warn", has=p.locator(".payday"))).to_have_count(1)
+    else:
+        expect(row).to_contain_text("到了吗？")
+        expect(row).not_to_contain_text("晚了")
+    c.repo.external_write("finance.json", json.dumps(keep, ensure_ascii=False).encode())
+    p.reload()
+    expect(p.locator(".spend-left")).to_be_visible()
+
+
+@step("往后一年：总结页「往后」推 12 个月、底线虚线、要用大钱的时候、专项大约哪个月留够；专项页也写")
+def _(c):
+    p = c.page
+    keep = c.data()
+    d = json.loads(json.dumps(keep))
+    y = date.today().year + 1
+    d["yearly"] = [{"id": "fee", "name": "学费甲", "amount": 3000, "month": 3, "day": 1}]
+    d["goals"] = [{"id": "g-far", "name": "过渡金甲", "target": 20000, "by": f"{y + 3}-05-31", "note": "", "createdAt": TODAY}]
+    d["openingDate"] = TODAY  # 先当作刚开始记账：没有完整的月份，不能「照最近的样子」
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/summary?mode=ahead")
+    p.reload()
+    seg = p.locator(".segmented").first
+    expect(seg.get_by_role("link", name="往后")).to_have_class(re.compile("on"))
+    expect(p.locator(".mast")).to_contain_text("个月")
+    say = p.locator(".ahead-say")
+    expect(say).to_contain_text(re.compile("钱都够|比底线少"))
+    expect(p.locator(".rep-kpi")).to_have_count(4)
+    p.wait_for_timeout(400)  # 等换页淡入完再截图
+    expect(p.locator(".rep-sec", has_text="每个月底的存款").locator("svg.chart")).to_be_visible()
+    big = p.locator(".rep-sec", has_text="要用大钱的时候")
+    expect(big).to_contain_text("学费甲")
+    expect(big).to_contain_text("暑假没有收入")
+    expect(p.locator(".ahead-goal", has_text="过渡金甲")).to_contain_text(re.compile("大约 .*月留够|还差"))
+    expect(p.get_by_text("记满一个完整的预算月以后")).to_be_visible()  # 开始记账才几天，没有「照最近的样子」
+    p.screenshot(path=ART / "ahead.png", full_page=True)
+    p.get_by_role("button", name="怎么用").click()
+    expect(p.locator(".sheet")).to_contain_text("虚线是底线")
+    p.keyboard.press("Escape")
+    # 有完整的月份以后：能切到「照最近的样子」
+    d["openingDate"] = "2020-01-01"
+    olds, q = [], period_start(date.today())
+    while len(olds) < 2:
+        q = period_start(q - timedelta(days=1))
+        if q.month not in (7, 8):
+            olds.append(q)
+    d["tx"] += [{"id": f"t-pace-{i}", "type": "income", "date": day.isoformat(), "account": "a-save", "amount": 6000, "category": "i-b", "createdAt": "2020-01-01T00:00:00Z"}
+                for i, day in enumerate(olds)]
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/summary?mode=ahead")
+    p.reload()
+    p.locator(".ahead-mode").get_by_role("button", name=re.compile("照最近")).click()
+    expect(p.locator(".mast-sub")).to_contain_text("照最近")
+    p.locator(".ahead-mode").get_by_role("button", name="按计划").click()
+    expect(p.locator(".mast-sub")).to_contain_text("照收入计划和预算")
+    c.go("#/goals")
+    expect(p.locator(".card.goal", has_text="过渡金甲")).to_contain_text("照计划，")
+    c.repo.external_write("finance.json", json.dumps(keep, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".spend-left")).to_be_visible()
+
+
 @step("记账时提示上次的价格；里程碑祝贺；月度小信（DeepSeek 写，存下来）")
 def _(c):
     p = c.page
