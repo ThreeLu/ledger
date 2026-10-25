@@ -288,7 +288,7 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .bar-track { display: block; height: 8px; border-radius: 4px; background: var(--chip); overflow: hidden; }
 .bar { display: block; height: 100%; border-radius: 4px; }
 
-/* 流水 */
+/* 一笔一行 */
 .tx-list { padding-top: 4px; padding-bottom: 4px; }
 .tx { display: flex; align-items: center; gap: 12px; min-height: 54px; color: var(--text); border-bottom: 0.5px solid var(--line); }
 .tx:last-child { border-bottom: 0; }
@@ -296,9 +296,6 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .tx-amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
 .tx-amt.in { color: var(--good); }
 .tx-amt.muted { color: var(--muted); font-weight: 500; }
-.period-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.period-nav .icon-btn { font-size: 24px; flex: none; }
-.icon-btn.ghost { visibility: hidden; }
 
 /* 记一笔 */
 .amount-row { display: flex; align-items: baseline; gap: 6px; background: var(--card); border-radius: var(--radius); padding: 6px 16px; box-shadow: var(--shadow); margin: 6px 0 4px; }
@@ -465,10 +462,13 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .link-card { display: block; color: var(--accent); font-weight: 600; }
 .token-banner { display: block; }
 
-/* 流水搜索、发钱日 */
-.list-tools { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 6px; }
-.list-tools select { width: auto; max-width: 9.5em; }
-.list-tools + .muted { min-height: 0; margin: 0 4px 8px; }
+/* 最近记的、发钱日 */
+.recent-head { display: flex; align-items: center; justify-content: space-between; }
+.recent-btn { width: 32px; height: 32px; min-height: 0; padding: 0; border-radius: 16px; background: none; color: var(--muted); display: grid; place-items: center; margin: -8px -4px -8px 0; }
+.recent-btn svg.i { width: 18px; height: 18px; }
+.recent-btn.on { color: var(--accent); background: var(--accent-soft); }
+.recent-search { margin-bottom: 8px; }
+.recent-sum { margin: 0 4px 8px; }
 .payday { background: color-mix(in srgb, var(--accent) 9%, var(--card)); }
 .payday-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--line); }
 .payday-row:last-child { border-bottom: 0; }

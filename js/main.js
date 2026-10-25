@@ -231,7 +231,6 @@ const routes = [
   [/^\/receipt$/, (_, q) => receiptView(q)],
   [/^\/siri$/, () => siriView()],
   [/^\/bills$/, () => billsView()],
-  [/^\/list$/, (_, q) => listView(q)],
   [/^\/accounts$/, () => accountsView()],
   [/^\/account\/([^/]+)$/, (id) => accountView(id)],
   [/^\/more$/, () => moreView()],
@@ -750,7 +749,6 @@ function homeView() {
   if (narrow.length % 2) narrow[narrow.length - 1].classList.add('wide');
   const advice = budgetAdvice(d, today(), usdRate()).items.length;
 
-  const recent = [...d.tx].sort(txOrder).slice(0, 5);
   return h('div', {},
     homeHeader(p),
     spendLeftCard(hl, st, hl.level === 'good' ? hd : null),
@@ -765,9 +763,7 @@ function homeView() {
     flowCard(st, part),
     budgetCard(st, part),
     socialCard({ compact: true }),
-    recent.length ? [h('div', { class: 'section-title' }, '最近记的'), h('div', { class: 'card tx-list' }, recent.map((t) => txRow(t))),
-      h('p', { class: 'center' }, h('a', { href: '#/list' }, '全部流水'))]
-      : h('div', { class: 'card' }, h('p', {}, '还没有记账。点底部中间的 ＋ 记第一笔。')),
+    d.tx.length ? recentCard() : h('div', { class: 'card' }, h('p', {}, '还没有记账。点底部中间的 ＋ 记第一笔。')),
     h('p', { class: 'center small' }, h('a', { href: '#/rules' }, '我们的花钱方式 →')));
 }
 
@@ -905,7 +901,7 @@ const ADD_HELP = [
   ['怎么记', ['填金额 → 点类别 → 点账户 → 记好了。账户默认是你上次用的。', '选好类别后，下面会显示上次花了多少、最近几次平均多少；这次明显贵或便宜也会说一声。', '用支付宝、微信绑卡付的钱，记在实际扣钱的那张卡上。', '常记的（比如食堂午饭 15）勾上「存成快捷」，以后在上面一点就记好。']],
   ['和别人有关', ['和同学吃饭你先付：填总金额，选「AA / 帮人付」，点上一起吃的人。你那份算花销，别人的记成欠你的。', '帮人代买：同样选「AA / 帮人付」，把「我那份」改成 0。', '别人帮你付了：选「别人帮我付的」，算你的花销，记成你欠他的。', '出差开会垫钱不在这里记，去「更多 → 垫付报销」。']],
   ['美元', ['Apple ID 是美元账户，金额填美元，按当天汇率折成人民币算预算。充值 Apple ID 用转账：填花了多少人民币、到账多少美元。']],
-  ['记错了', ['在流水里点那一笔，可以改，也可以删。']],
+  ['记错了', ['在首页「最近记的」里点那一笔，可以改，也可以删。早一点的点放大镜搜出来。']],
 ];
 
 function addView(q) {
@@ -1333,85 +1329,48 @@ function addView(q) {
     box);
 }
 
-// ---------- 流水 ----------
+// ---------- 最近记的（原来的流水页，2026-10-24 并进首页） ----------
 
-const LIST_HELP = [
-  ['看什么', ['按预算月（15 号到下个月 14 号）列出每一笔，左右箭头翻月份。', '点上面的账户只看那个账户的。']],
-  ['搜索和筛选', ['搜索框里打字，会在全部时间里找：备注、名称、类别、账户、人名、金额都能搜，空格隔开可以同时满足几个词（比如「理发 25」）。', '类别可以选一个，也可以选一整组（比如「吃饭（整组）」）。上面会显示找到几笔、一共花了多少。']],
-  ['改和删', ['点任何一笔就能改或删。', '「（自动）」的是固定扣费，到日子网站自己记的。']],
-];
-
-// 流水：默认按预算月看；搜索时看全部时间。类别可以选一个类别，也可以选一整组（吃饭、日常……）
-const listFilter = { text: '', cat: '' }; // 换页回来还记得
+// 平时列最近 8 笔；点放大镜在全部时间里搜。搜的字换页回来还记得（改完一笔回到首页还是搜索结果）
+const recentSearch = { open: false, text: '' };
 
 function txHaystack(t) {
   return [txTitle(t), t.note, t.what, t.category ? catName(t.category) : '', t.account ? accName(t.account) : '', t.to ? accName(t.to) : '',
     t.person ? personName(t.person) : '', t.claim ? claimName(t.claim) : '', String(t.amount), t.date].filter(Boolean).join(' ').toLowerCase();
 }
 
-function listView(q) {
+function recentCard() {
   const d = store.data;
-  const p = periodFor(d, q.day || today());
-  const accFilter = q.account || '';
-  const link = (day, acc) => `#/list?day=${day}${acc ? `&account=${acc}` : ''}`;
-  const prev = shiftPeriod(d, p, -1);
-  const next = shiftPeriod(d, p, 1);
-  const results = h('div', {});
-  const summary = h('div', { class: 'muted small' });
-  const periodBox = h('div', {});
-
-  const catOk = (t) => {
-    if (!listFilter.cat) return true;
-    if (listFilter.cat.startsWith('g:')) return t.category && (category(d, t.category)?.group || 'daily') === listFilter.cat.slice(2);
-    return t.category === listFilter.cat;
-  };
+  const list = h('div', { class: 'card tx-list recent-list' });
+  const summary = h('div', { class: 'muted small recent-sum' });
+  const input = h('input', { type: 'search', placeholder: '搜：理发、打印、25、小王……', 'aria-label': '搜索记过的账', value: recentSearch.text,
+    oninput: (e) => { recentSearch.text = e.target.value; draw(); } });
+  const box = h('div', { class: 'recent-search' }, input);
   const draw = () => {
-    const words = listFilter.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const searching = words.length > 0;
-    const tx = d.tx.filter((t) => (searching || (t.date >= p.start && t.date <= p.end))
-      && (!accFilter || t.account === accFilter || t.to === accFilter) && catOk(t)
-      && (!searching || words.every((w) => txHaystack(t).includes(w)))).sort(txOrder);
-    const spend = tx.filter((t) => t.type === 'expense' || t.type === 'writeoff').reduce((a, t) => a + cny(t), 0);
-    const income = tx.filter((t) => t.type === 'income').reduce((a, t) => a + cny(t), 0);
-    periodBox.hidden = searching;
-    summary.textContent = searching || listFilter.cat
-      ? `${searching ? '全部时间里' : '这个预算月'}找到 ${tx.length} 笔${spend ? ` · 支出 ${money(spend)}` : ''}${income ? ` · 收入 ${money(income)}` : ''}`
-      : '';
-    const byDay = [];
-    for (const t of tx) {
-      if (!byDay.length || byDay.at(-1).date !== t.date) byDay.push({ date: t.date, list: [] });
-      byDay.at(-1).list.push(t);
+    const words = recentSearch.open ? recentSearch.text.trim().toLowerCase().split(/\s+/).filter(Boolean) : [];
+    box.hidden = !recentSearch.open;
+    btn.classList.toggle('on', recentSearch.open);
+    let tx = [...d.tx].sort(txOrder);
+    if (words.length) {
+      tx = tx.filter((t) => words.every((w) => txHaystack(t).includes(w)));
+      const spend = tx.filter((t) => t.type === 'expense' || t.type === 'writeoff').reduce((a, t) => a + cny(t), 0);
+      const income = tx.filter((t) => t.type === 'income').reduce((a, t) => a + cny(t), 0);
+      summary.textContent = `找到 ${tx.length} 笔${spend ? ` · 支出 ${money(spend)}` : ''}${income ? ` · 收入 ${money(income)}` : ''}`;
+    } else {
+      tx = tx.slice(0, 8);
+      summary.textContent = '';
     }
-    results.replaceChildren(...(byDay.length ? byDay.flatMap((g) => [
-      h('div', { class: 'section-title' }, `${searching && g.date.slice(0, 4) !== today().slice(0, 4) ? `${g.date.slice(0, 4)} 年` : ''}${md(g.date)} 周${'日一二三四五六'[new Date(g.date.replace(/-/g, '/')).getDay()]}`),
-      h('div', { class: 'card tx-list' }, g.list.map((t) => txRow(t)))])
-      : [h('div', { class: 'card' }, h('p', { class: 'muted' }, searching || listFilter.cat ? '没有找到。' : '这个预算月还没有记账。'))]));
+    summary.hidden = !words.length;
+    list.replaceChildren(...(tx.length ? tx.map((t) => txRow(t)) : [h('p', { class: 'muted' }, '没有找到。')]));
   };
-  const st = periodStats(d, p);
-  const search = h('input', { type: 'search', placeholder: '搜：理发、打印、25、小王……', 'aria-label': '搜索流水', value: listFilter.text,
-    oninput: (e) => { listFilter.text = e.target.value; draw(); } });
-  const catSelect = h('select', { 'aria-label': '按类别筛选', value: listFilter.cat, onchange: (e) => { listFilter.cat = e.target.value; draw(); } },
-    h('option', { value: '' }, '全部类别'),
-    GROUPS.map((g) => {
-      const cats = d.categories.filter((c) => c.kind === 'expense' && c.group === g.id && (!c.hidden || d.tx.some((t) => t.category === c.id)));
-      return cats.length ? h('optgroup', { label: g.name }, h('option', { value: `g:${g.id}` }, `${g.name}（整组）`), cats.map((c) => h('option', { value: c.id }, c.name))) : null;
-    }),
-    h('optgroup', { label: '收入' }, d.categories.filter((c) => c.kind === 'income').map((c) => h('option', { value: c.id }, c.name))));
-  periodBox.append(
-    h('div', { class: 'period-nav' },
-      h('a', { class: 'icon-btn', href: link(prev.start, accFilter), 'aria-label': '上个月' }, '‹'),
-      h('div', { class: 'grow center' }, h('b', {}, p.label), h('div', { class: 'muted small' }, `支出 ${money(st.total)} · 收入 ${money(st.income)}`)),
-      next.start <= today() ? h('a', { class: 'icon-btn', href: link(next.start, accFilter), 'aria-label': '下个月' }, '›') : h('span', { class: 'icon-btn ghost' })));
+  const btn = h('button', { class: 'recent-btn', 'aria-label': '搜索', onclick: () => {
+    recentSearch.open = !recentSearch.open;
+    if (!recentSearch.open) { recentSearch.text = ''; input.value = ''; }
+    draw();
+    if (recentSearch.open) input.focus();
+  } }, icon('search'));
   draw();
-  return h('div', {},
-    header('流水', helpButton('流水怎么看', LIST_HELP)),
-    h('div', { class: 'list-tools' }, search, catSelect),
-    summary,
-    periodBox,
-    h('div', { class: 'chip-scroll' },
-      h('a', { class: `chip${accFilter ? '' : ' on'}`, href: link(p.start, '') }, '全部'),
-      d.accounts.map((a) => h('a', { class: `chip${accFilter === a.id ? ' on' : ''}`, href: link(p.start, a.id) }, a.name))),
-    results);
+  return [h('div', { class: 'section-title recent-head' }, h('span', {}, '最近记的'), btn), box, summary, list];
 }
 
 // ---------- 账户 ----------
@@ -2447,7 +2406,7 @@ function summaryLinks(p) {
 
 const RECEIPT_HELP = [
   ['整个流程', ['1. 小票拍照，发给手机上能看图的 AI（豆包、ChatGPT、Kimi 都行），连同下面「复制提示词」复制的那段话。', '2. 把 AI 的回答整段复制，回到这里贴进去（或者用快捷指令「发到账本」一步打开）。', '3. 一样一样看：类别对不对、物品档案要不要补货。不对就改，不想记就点「这样不记」。', '4. 最后看一眼合计，点「全部保存」。']],
-  ['会记成什么', ['同一张小票里同一个类别的合成一笔，比如「零食 ¥23.5（薯片、饼干）」，商品名写在备注里，流水里能搜到。', '整单优惠并进金额最多的那一笔。']],
+  ['会记成什么', ['同一张小票里同一个类别的合成一笔，比如「零食 ¥23.5（薯片、饼干）」，商品名写在备注里，首页「最近记的」的放大镜能搜到。', '整单优惠并进金额最多的那一笔。']],
   ['物品档案', ['档案里有的消耗品（比如抽纸）：自动加上买的数量，从购物清单上划掉。', '新东西：放进物品档案的「买回来还没建档」，有空再去拍照、选柜子；那边建档时不会再问记账。', '吃的喝的默认不进档案，可以改。']],
   ['没有 AI 也行', ['一行写一样：名称 数量 价格，比如「可乐 2 6」「抽纸 19.9」，最后一行可以写「合计 25.9」。']],
 ];
@@ -2586,7 +2545,7 @@ function receiptCheck(head) {
 
   return h('div', {},
     head(`第 ${r.step + 1} / ${n} 样`),
-    dup ? h('div', { class: 'banner soon' }, `这张小票 ${dup.date} 好像已经导入过了，看看流水，别记重了。`) : null,
+    dup ? h('div', { class: 'banner soon' }, `这张小票 ${dup.date} 好像已经导入过了，在首页「最近记的」里看看，别记重了。`) : null,
     h('div', { class: 'card receipt-card' },
       fields,
       l.price > 0 ? h('label', { class: 'form-label' }, '记成', categorySelect(l.category, (v) => { l.category = v; }, '类别')) : null,

@@ -63,6 +63,16 @@ class Ctx:
         if same:
             self.page.reload()
 
+    def recent(self, text=""):
+        """首页「最近记的」：不给字看最近 8 笔，给字就点放大镜在全部时间里搜"""
+        self.go("#/")
+        box = self.page.locator(".recent-search")
+        if bool(text) != box.is_visible():
+            self.page.locator(".recent-btn").click()
+        if text:
+            box.get_by_label("搜索记过的账").fill(text)
+        return self.page.locator(".recent-list .tx")
+
     def balance(self, acc):
         d = self.data()
         a = next(x for x in d["accounts"] if x["id"] == acc)
@@ -200,25 +210,24 @@ def _(c):
     assert c.tx()[-1]["cny"] == 14
 
 
-@step("流水：按预算月列出；改一笔、删一笔")
+@step("最近记的：首页最近 8 笔；搜出来改一笔、删一笔")
 def _(c):
     p = c.page
-    c.go("#/list")
-    expect(p.locator(".period-nav")).to_contain_text("支出")
-    p.locator(".tx").filter(has_text=re.compile(r"^生活费\d")).click()
+    expect(c.recent()).to_have_count(min(8, len(c.tx())))
+    c.recent("生活费").filter(has_text=re.compile(r"^生活费\d")).click()
     expect(p.get_by_role("heading", name="改一笔")).to_be_visible()
     p.get_by_label("金额", exact=True).fill("4100")
     p.get_by_role("button", name="保存").click()
-    p.wait_for_function("location.hash.startsWith('#/list')")
+    p.wait_for_function("location.hash === '#/' || location.hash === ''")
+    expect(p.locator(".recent-search input")).to_have_value("生活费")  # 改完回来还是搜索结果
     assert c.balance("a-save") == 14100
     n = len(c.tx())
-    p.locator(".tx", has_text="软件订阅").click()
+    c.recent("软件订阅").first.click()
     p.get_by_role("button", name="删除").click()
     c.wait_saved(n - 1)
-    # 只看一个账户
-    p.locator(".chip-scroll").get_by_role("link", name="校园卡").click()
-    expect(p.locator(".tx", has_text="存钱卡")).to_have_count(0)
-    expect(p.locator(".tx", has_text="午餐").first).to_be_visible()
+    # 关掉放大镜回到最近 8 笔
+    expect(c.recent()).to_have_count(min(8, n - 1))
+    expect(p.locator(".recent-search")).to_be_hidden()
 
 
 @step("账户：总资产、校准（差额记对账差额）")
@@ -387,8 +396,7 @@ def _(c):
     c.go("#/")
     expect(p.locator(".health-tile", has_text="待收回")).to_contain_text("¥45")
     # 删 AA 的那笔花销，连同记给别人的一起删
-    c.go("#/list")
-    p.locator(".tx").filter(has_text=re.compile(r"^出去吃")).click()
+    c.recent("出去吃").filter(has_text=re.compile(r"^出去吃")).click()
     p.get_by_role("button", name="删除").click()
     c.wait_saved(n + 2)
     assert not any(t.get("group") == new[0]["group"] for t in c.tx())
@@ -593,9 +601,9 @@ def _(c):
     d.pop("categoryVersion", None)
     d["tx"].append({"id": "old1", "type": "expense", "date": TODAY, "account": "a-campus", "amount": 9, "category": "c-meal", "note": "老账", "createdAt": "2020-01-01T00:00:00Z"})
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
-    c.go("#/list")
+    c.go("#/")
     p.reload()
-    expect(p.locator(".tx", has_text="老账")).to_contain_text("三餐")
+    expect(c.recent("老账").first).to_contain_text("三餐")
     c.go("#/add")
     expect(p.get_by_role("button", name="早餐", exact=True)).to_be_visible()
     expect(p.get_by_role("button", name="三餐", exact=True)).to_have_count(0)
@@ -622,8 +630,7 @@ def _(c):
     c.wait_saved(n + 1)
     t = c.tx()[-1]
     assert (t["category"], t["what"]) == ("c-other", "二手自行车"), t
-    c.go("#/list")
-    expect(p.locator(".tx").filter(has_text=re.compile(r"^二手自行车"))).to_contain_text("其他")
+    expect(c.recent("二手自行车").filter(has_text=re.compile(r"^二手自行车"))).to_contain_text("其他")
 
 
 @step("心愿单：心愿基金（生活费结余）、大额要「开始攒」从 100 开始、排队、攒够才能买、不买了退回、冷静期、AI 建议、预下单")
@@ -1042,9 +1049,8 @@ def _(c):
     notes = [t.get("note") for t in d["tx"]]
     assert "离线记的" in notes and "另一台设备" in notes and len(d["tx"]) == n + 2, notes[-3:]
     expect(p.locator(".sync-pill")).to_be_hidden()
-    c.go("#/list")
-    expect(p.locator(".tx", has_text="另一台设备")).to_be_visible()
-    expect(p.locator(".tx", has_text="离线记的")).to_be_visible()
+    expect(c.recent("另一台设备")).to_have_count(1)
+    expect(c.recent("离线记的")).to_have_count(1)
 
 @step("暑假生活费自动目标、兼职三成进心愿基金、令牌到期提醒、预算调整建议（采用后改预算）、年度总结")
 def _(c):
@@ -1106,22 +1112,15 @@ def _(c):
     expect(p.get_by_role("img", name="每月存下")).to_be_visible()
     expect(p.get_by_text("花得最多的类别")).to_be_visible()
 
-@step("流水搜索和筛选：全部时间里按名称、人名、金额搜，显示合计；按一整组类别筛选")
+@step("最近记的搜索：全部时间里按名称、人名、金额、类别搜，显示合计")
 def _(c):
     p = c.page
-    c.go("#/list")
-    p.get_by_label("搜索流水").fill("二手")
-    expect(p.locator(".tx")).to_have_count(1)
-    expect(p.get_by_text("全部时间里找到 1 笔 · 支出 ¥680")).to_be_visible()
-    expect(p.locator(".period-nav")).to_be_hidden()
-    p.get_by_label("搜索流水").fill("小乙")
-    expect(p.locator(".tx").first).to_contain_text("小乙")
-    p.get_by_label("搜索流水").fill("")
-    p.get_by_label("按类别筛选").select_option("g:food")
-    expect(p.get_by_text(re.compile("^这个预算月找到"))).to_be_visible()
-    for row in p.locator(".tx").all():
-        assert "转账" not in row.inner_text()
-    p.get_by_label("按类别筛选").select_option("")
+    expect(c.recent("二手")).to_have_count(1)
+    expect(p.get_by_text("找到 1 笔 · 支出 ¥680")).to_be_visible()
+    expect(c.recent("小乙").first).to_contain_text("小乙")
+    expect(c.recent("没有这种东西")).to_have_count(0)
+    expect(p.locator(".recent-list")).to_contain_text("没有找到")
+    c.recent()
 
 
 @step("发钱日一条龙：收入到了点一下记上，「还没」今天不再问，再点一下从存钱卡转生活费")
@@ -1169,9 +1168,9 @@ def _(c):
     d = c.data()
     d["tx"].append({"id": "lunch3", "type": "expense", "date": max(date.today() - timedelta(days=1), period_start(date.today())).isoformat(), "account": "a-campus", "amount": 15, "category": "c-lunch", "note": "食堂午饭", "createdAt": "2020-01-01T00:00:00Z"})
     c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
-    c.go("#/list")
+    c.go("#/")
     p.reload()
-    expect(p.locator(".tx", has_text="食堂午饭").nth(2)).to_be_visible()  # 新数据读到了
+    expect(c.recent("食堂午饭").nth(2)).to_be_visible()  # 新数据读到了
     c.go("#/add")
     p.get_by_role("button", name="午餐", exact=True).first.click()
     expect(p.locator(".price-memo")).to_contain_text("上次")
@@ -1455,8 +1454,7 @@ def _(c):
     c.go(f"#/person/{f1['person']}")
     expect(p.locator(".favor-row.done")).to_contain_text("礼物 · 给小乙 ¥88")
     # 删掉这笔：人情回到没还
-    c.go("#/list")
-    p.locator(".tx", has_text="礼物").first.click()
+    c.recent("礼物").first.click()
     p.get_by_role("button", name="删除").click()
     c.wait_saved(n)
     f = next(x for x in c.data()["favors"] if x["id"] == f1["id"])
@@ -1666,8 +1664,8 @@ def _(c):
     expect(p.locator(".week-head .from-saved")).to_contain_text("心愿基金")
     c.go("#/wishes")
     expect(p.locator(".big-num")).to_have_text(f"¥{int(have) - 20:,}")
-    c.go("#/list")
-    expect(p.locator(f'.tx[href="#/add?edit={t['id']}"]')).to_contain_text("心愿基金")  # 按 id 找：网页时钟被前面固定过，同一天的先后不可靠
+    c.recent(t["date"])
+    expect(p.locator(f'.recent-list .tx[href="#/add?edit={t['id']}"]')).to_contain_text("心愿基金")  # 按 id 找：网页时钟被前面固定过，同一天的先后不可靠
     # 改这一笔、去掉勾：回到普通花销
     c.go(f"#/add?edit={t['id']}")
     expect(p.get_by_role("checkbox", name="用心愿基金的钱")).to_be_checked()
