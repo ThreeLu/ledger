@@ -72,11 +72,12 @@ export function donut(segments, { center = '', sub = '', title = '' } = {}) {
 
 // 折线图：series = [{ values: [数], color, dashed? }]，xLabels 只标头、中、尾
 // marks = [{ i, color }]：在第一条线的第 i 个点上画小圆点（模拟交易的买卖点）
-export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true, fmt = short, tight = false, marks = [] } = {}) {
+// bands：阴影 [{ lo: [], hi: [], color, opacity }]（预测的范围），画在线下面
+export function lineChart(series, { xLabels = [], height = 160, title = '', fromZero = true, fmt = short, tight = false, marks = [], bands = [] } = {}) {
   const top = 14;
   const bottom = 22;
   const left = 34;
-  const all = series.flatMap((x) => x.values);
+  const all = [...series.flatMap((x) => x.values), ...bands.flatMap((b) => [...b.lo, ...b.hi])];
   // tight：上下只留一成空白（股价、模拟的钱，小涨小跌也看得出来）
   const lo = Math.min(...all);
   const hi = Math.max(...all);
@@ -91,6 +92,10 @@ export function lineChart(series, { xLabels = [], height = 160, title = '', from
   for (const v of [max, (max + min) / 2, min]) {
     svg.append(s('line', { x1: left, x2: W - 8, y1: Y(v), y2: Y(v), style: 'stroke:var(--line)', 'stroke-width': 1 }));
     svg.append(s('text', { x: left - 4, y: Y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: fmt(v) }));
+  }
+  for (const b of bands) {
+    const pts = [...b.hi.map((v, i) => [X(i), Y(v)]), ...b.lo.map((v, i) => [X(i), Y(v)]).reverse()];
+    svg.append(s('path', { d: `M${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L')} Z`, style: `fill:${b.color}`, 'fill-opacity': b.opacity ?? 0.15, stroke: 'none' }));
   }
   for (const ser of series) {
     if (!ser.values.length) continue;

@@ -1,5 +1,6 @@
-// 往后一年（2026-10-25 用户要的）：照收入计划和预算往后推，每个预算月底存款大概有多少，最低的时候碰不碰底线；
-// 还有每个专项大约哪个月能留够。纯计算，`node tests/test_money.mjs` 测。
+// 往后一年「按计划」的确定性推算（2026-10-25）：照收入计划和预算往后推，每个预算月底存款有多少、专项哪个月留够。
+// 页面上用的是 forecast.js 的概率模拟（它也用这里的 dueEvents、reservesAfter）；这里的结果是它的基准（收入都到、正好花到预算），
+// 「要用大钱的时候」也从这里来。纯计算，`node tests/test_money.mjs` 测。
 //
 // 口径和「钱都在哪」一样：存款 = savingsMap().total（所有账户 + 别人欠我 − 我欠别人 − 心愿基金 − 这个月生活费还剩的）。
 // - 这个预算月：+ 还没到的收入（收入计划里这个月还没记的）− 订阅预算还没扣完的；生活费还剩的本来就不在存款里。
@@ -7,10 +8,9 @@
 // - 专项（学费、住宿费、年费、人情……）到了日子就当花掉了；还没生成的下一年的，按每年的金额算。
 // - 生活费省下的进心愿基金、不进存款，所以按预算花；心愿基金当作不动；兼职、补助这种不一定有的钱不算。
 // - 底线 = 家庭存款（封存的）+ 应急底线 + 医疗备用金。存款低于底线 = 要用到应急钱了。
-// 「照最近的样子」：有收入的月改成最近几个完整月份实际的「收入 − 花销」（花得比预算少也按预算算，省下的进心愿基金）。
 
 import {
-  periodFor, shiftPeriod, partial, periodStats, budgetTotal, closedPeriods, savingsMap, specialList, summerGoal,
+  periodFor, shiftPeriod, partial, periodStats, budgetTotal, savingsMap, specialList, summerGoal,
   yearlySubs, planCategory, medTarget, FREE_KEEP, FAMILY_STEP, addDays,
 } from './money.js';
 import { nextLunar } from './cal.js';
@@ -18,21 +18,9 @@ import { nextLunar } from './cal.js';
 const r2 = (n) => Math.round(n * 100) / 100;
 const pad = (n) => String(n).padStart(2, '0');
 export const AHEAD_MONTHS = 12;
-export const PACE_MONTHS = 3;
-
-// 最近几个完整的、有收入的预算月，每月实际进存款多少
-export function recentPace(data, today) {
-  const full = closedPeriods(data, today).filter((p) => !p.summer && !partial(data, p).isPartial).slice(-PACE_MONTHS);
-  if (!full.length) return null;
-  const b = budgetTotal(data);
-  const stats = full.map((p) => periodStats(data, p));
-  if (!stats.some((st) => st.income > 0)) return null; // 一笔收入都没记，算不出样子
-  const vals = stats.map((st) => st.income - Math.max(b, st.total - st.fromSaved));
-  return { months: full.length, perMonth: r2(vals.reduce((a, x) => a + x, 0) / vals.length), income: r2(stats.reduce((a, st) => a + st.income, 0) / full.length) };
-}
 
 // 到日子要花掉的专项：现在有的（日子已经过了还没办完的算今天）+ 往后每年一次的（还没生成的那几年）
-function dueEvents(data, today, until, rate) {
+export function dueEvents(data, today, until, rate) {
   const out = [];
   for (const x of specialList(data, today)) {
     if (x.kind === 'summer' || !(x.target > 0) || !x.by) continue;
@@ -55,7 +43,7 @@ function dueEvents(data, today, until, rate) {
 }
 
 // 某天之后还要留着的专项（和 savingsMap 一样按日子先后）：每年一次的只留最近的那一次（网站上同一时间只有一个）
-function reservesAfter(data, events, undated, day) {
+export function reservesAfter(data, events, undated, day) {
   const seen = new Set();
   const out = [];
   for (const e of events) {
@@ -68,14 +56,11 @@ function reservesAfter(data, events, undated, day) {
   return [...out, ...undated].map((x, i) => ({ x, i })).sort((a, b) => (a.x.date || '9999').localeCompare(b.x.date || '9999') || a.i - b.i).map((y) => y.x);
 }
 
-// mode：'plan' 按收入计划；'recent' 照最近几个月的样子（没有完整月份时退回 plan）
 // months：画几个月；返回的 eta 会一直算到最远那个专项的日子（最多 10 年）
-export function aheadPlan(data, today, { mode = 'plan', months = AHEAD_MONTHS, rate = data.settings.usdRate } = {}) {
+export function aheadPlan(data, today, { months = AHEAD_MONTHS, rate = data.settings.usdRate } = {}) {
   const map = savingsMap(data, today, rate);
   const p0 = periodFor(data, today);
   const st0 = periodStats(data, p0);
-  const pace = recentPace(data, today);
-  const useRecent = mode === 'recent' && pace;
   const budget = budgetTotal(data);
   const income = Number(data.settings.expectedIncome) || 0;
 
@@ -112,7 +97,7 @@ export function aheadPlan(data, today, { mode = 'plan', months = AHEAD_MONTHS, r
   periods.forEach((p, k) => {
     let inc;
     let out;
-    if (k === 0) { inc = waiting; out = subLeft; } else if (p.summer) { inc = 0; out = budget; } else if (useRecent) { inc = budget + pace.perMonth; out = budget; } else { inc = income; out = budget; }
+    if (k === 0) { inc = waiting; out = subLeft; } else if (p.summer) { inc = 0; out = budget; } else { inc = income; out = budget; }
     const ev = events.filter((e) => e.date >= (k ? p.start : today) && e.date <= p.end);
     total = r2(total + inc - out - ev.reduce((a, e) => a + e.amount, 0));
     // 日子到了：还差多少看上一个月底留了多少
@@ -141,7 +126,7 @@ export function aheadPlan(data, today, { mode = 'plan', months = AHEAD_MONTHS, r
   // eta 的 at：哪个月底留够（null = 到日子也没留够，看 shortAtBy）
   return {
     now: map.total, floorNow: (Number(data.family?.sealed) || 0) + base, points: shown, low, below, fix,
-    end: shown.at(-1), mode: useRecent ? 'recent' : 'plan', pace, perMonth: useRecent ? pace.perMonth : r2(income - budget), budget, income,
+    end: shown.at(-1), perMonth: r2(income - budget), budget, income,
     eta: Object.values(eta), events: events.filter((e) => e.date <= shown.at(-1).p.end),
   };
 }

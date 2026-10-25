@@ -7,6 +7,7 @@ const sm = await import(new URL('../js/summary.js', import.meta.url));
 const rp = await import(new URL('../js/report.js', import.meta.url));
 const rc = await import(new URL('../js/bills.js', import.meta.url));
 const ah = await import(new URL('../js/ahead.js', import.meta.url));
+const fc = await import(new URL('../js/forecast.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -517,17 +518,6 @@ test('专项什么时候留够：按 家庭 → 应急 → 医疗 → 专项 往
   assert.equal(a.eta.find((x) => x.id === 'g3').at, '2028-03-31'); // 先留 6000，每月 +4800：第 18 个月底
 });
 
-test('照最近的样子：最近几个完整月份实际进存款多少（花得少也按预算算）', () => {
-  const d = savingsBook();
-  d.tx = [inc('2026-08-05', 3000), inc('2026-09-05', 3000)];
-  const pace = ah.recentPace(d, T);
-  assert.deepEqual([pace.months, pace.perMonth], [2, 2800]);
-  const a = ah.aheadPlan(d, T, { mode: 'recent' });
-  assert.equal(a.mode, 'recent');
-  assert.equal(Math.round(a.points[1].total - a.points[0].total), 2800);
-  assert.equal(ah.aheadPlan(savingsBook(), T, { mode: 'recent' }).mode, 'plan'); // 没有完整月份时按计划
-});
-
 test('钱到了没有：以前都是第 10、11 天到 → 前一天才问，晚 3 天以上说晚了；没有记录看「15 号」', () => {
   const d = book();
   d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary' }];
@@ -544,6 +534,110 @@ test('钱到了没有：以前都是第 10、11 天到 → 前一天才问，晚
   d2.incomePlan[0].when = '不定时';
   assert.equal(m.incomeUsual(d2, d2.incomePlan[0], m.periodFor(d2, T)), null);
   assert.equal(m.payday(d2, '2026-10-01').waiting.length, 1); // 不定时的照旧每天问
+});
+
+// ---------- 预测：贝叶斯（Dirichlet 过程）+ Chronos-2 混合、收入 Beta-伯努利、蒙特卡洛（2026-10-25） ----------
+const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''} ${a} 不在 ${b} ± ${tol}`);
+// 8 月 1 日起每天生活花 v 元（book() 生活预算 2300，预算月 1 号开始）
+function dailyBook(v) {
+  const d = book();
+  d.tx = [];
+  for (let x = '2026-08-01'; x < T; x = m.addDays(x, 1)) d.tx.push(ex(x, v));
+  return d;
+}
+
+test('随机数：同一个种子结果一样；Gamma、Beta 的均值对', () => {
+  const a = fc.rng('x'); const b = fc.rng('x');
+  assert.equal(a.u(), b.u());
+  const R = fc.rng('moments');
+  let g = 0; let be = 0;
+  for (let i = 0; i < 20000; i++) { g += R.gamma(3); be += R.beta(2, 6); }
+  near(g / 20000, 3, 0.06, 'Gamma(3)');
+  near(be / 20000, 0.25, 0.01, 'Beta(2,6)');
+  let small = 0;
+  for (let i = 0; i < 20000; i++) small += R.gamma(0.5);
+  near(small / 20000, 0.5, 0.03, 'Gamma(0.5)');
+});
+
+test('Dirichlet 过程后验：没数据时就是先验；数据多了贴近实际；抽出来的 P 平均下来是 (αμ₀ + Σx)/(α + n)', () => {
+  const prior = fc.g0(60);
+  near(fc.dpPredictive([], prior).q(0.5), 60 / Math.SQRT2, 0.5, '对数正态 cv=1 的中位数 = 均值/√2');
+  const xs = Array.from({ length: 300 }, (_, i) => 20 + (i % 10) * 10); // 20…110，平均 65
+  near(fc.dpPredictive(xs, prior).q(0.5), 60, 6);
+  const R = fc.rng('dp');
+  let mean = 0;
+  for (let i = 0; i < 4000; i++) mean += fc.drawP(R, xs, prior).mean;
+  near(mean / 4000, (30 * 60 + 65 * 300) / 330, 0.6);
+});
+
+test('分位数：插值抽样、分位数损失（实际正好在中位数、分位数都一样时损失 0）', () => {
+  const qs = fc.LEVELS.map((q) => q * 100);
+  assert.equal(fc.fromQuantiles(qs, 0.5), 50);
+  near(fc.fromQuantiles(qs, 0.33), 33, 1e-9);
+  assert.ok(fc.fromQuantiles(qs, 0.995) > 99);
+  assert.equal(fc.quantileLoss(fc.LEVELS.map(() => 5), 5), 0);
+  assert.ok(fc.quantileLoss(qs, 50) < fc.quantileLoss(qs, 95));
+});
+
+test('这个月会花多少：一直照预算花 → 超预算的可能在一半上下；一直花 3 倍 → 几乎一定超；三成 → 几乎不超；同一天结果一样', () => {
+  const mu = 2300 / 31;
+  const even = fc.monthForecast(dailyBook(Math.round(mu)), T);
+  assert.ok(even.pOver > 0.2 && even.pOver < 0.8, `照预算 ${even.pOver}`);
+  near(even.median, 2300, 150);
+  assert.ok(even.lo < even.median && even.median < even.hi);
+  assert.ok(fc.monthForecast(dailyBook(Math.round(mu * 3)), T).pOver > 0.95);
+  assert.ok(fc.monthForecast(dailyBook(Math.round(mu * 0.3)), T).pOver < 0.05);
+  assert.deepEqual(fc.monthForecast(dailyBook(50), T), fc.monthForecast(dailyBook(50), T));
+  assert.equal(even.chronos, false);
+});
+
+test('Chronos-2 混进来：按打分定权重；预测得准的权重高；混合后的这个月往它那边靠', () => {
+  const d = dailyBook(40);
+  const levels = fc.LEVELS;
+  // Chronos 每天都说 40 左右（正好对），贝叶斯先验以为每天 74
+  const tight = levels.map((q) => 38 + 4 * q);
+  const log = {}; for (let x = '2026-09-20'; x < T; x = m.addDays(x, 1)) log[x] = tight;
+  const sc = fc.scoreModels(d, T, log);
+  assert.equal(sc.days, 18);
+  assert.ok(sc.chronos.loss < sc.bayes.loss);
+  assert.ok(sc.w > 0.5 && sc.w < 1, `权重 ${sc.w}`);
+  assert.equal(sc.chronos.cover, 1);
+  // 让 Chronos 预测剩下每天 200：混合以后中位数比只用贝叶斯高
+  const big = { status: 'ok', from: T, levels, series: { living: Array.from({ length: 40 }, () => levels.map((q) => 190 + 20 * q)) } };
+  const only = fc.monthForecast(d, T);
+  const mixed = fc.monthForecast(d, T, { fc: big, score: { w: 1 } });
+  assert.ok(mixed.chronos && mixed.wChronos === 1);
+  assert.ok(mixed.median > only.median + 3000);
+  assert.equal(fc.scoreModels(d, T, null).w, 0);
+});
+
+test('收入：写了几号的先验 Beta(19.5, 0.5)；不定时的 Beta(4.5, 0.5) 按到没到更新', () => {
+  const d = book();
+  d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 10 号' }, { name: '补贴', amount: 1000, category: 'i-job' }];
+  d.tx = [inc('2026-08-10', 5000), inc('2026-09-10', 5000), inc('2026-09-20', 1000, 'i-job')];
+  const [a, b] = fc.incomeModels(d, T);
+  assert.deepEqual([a.regular, a.a, a.b, a.hits, a.months], [true, 21.5, 0.5, 2, 2]);
+  assert.deepEqual([b.regular, b.a, b.b], [false, 5.5, 1.5]);
+  near(b.p, 5.5 / 7, 1e-9);
+});
+
+test('往后蒙特卡洛：收入几乎一定到时中位数和按计划一样；钱不够时碰底线的可能接近 1；专项按时留够的可能', () => {
+  const d = savingsBook();
+  d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 1 号' }];
+  d.goals = [{ id: 'g1', name: '过渡金', target: 20000, by: '2028-06-30', createdAt: '2026-08-01' }];
+  const s = fc.simulateAhead(d, T, { paths: 2000 });
+  assert.equal(s.fan.length, 12);
+  near(s.fan[1].q[2], 19600, 1); // 生活预算是 0，先验每天只有几分钱
+  assert.ok(s.fan[11].q[0] <= s.fan[11].q[2] && s.fan[11].q[2] <= s.fan[11].q[4]);
+  assert.ok(s.pBelow < 0.05, `碰底线 ${s.pBelow}`);
+  const g = s.goals.find((x) => x.id === 'g1');
+  assert.ok(g.pOnTime > 0.99);
+  assert.equal(g.p50, '2026-12-31');
+  const poor = savingsBook();
+  poor.accounts.find((a) => a.id === 'a-save').opening = 5000;
+  poor.settings.expectedIncome = 100;
+  poor.yearly = [{ id: 'x', name: '大开销', amount: 2000, month: 1, day: 10 }];
+  assert.ok(fc.simulateAhead(poor, T, { paths: 1000 }).pBelow > 0.99);
 });
 
 console.log(`\n${n} 项通过`);

@@ -893,10 +893,21 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 .ahead-goal { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--line); color: inherit; text-decoration: none; }
 .rep-sec h3 + .ahead-goal, .rep-sec h3 + .charge-row { border-top: 0; }
 .ahead-goal .small { margin-top: 2px; font-weight: 400; }
+.forecast-line { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 0.5px solid var(--line); color: var(--muted); text-decoration: none; }
+.forecast-line b { font-weight: 600; color: var(--text); white-space: nowrap; }
+.forecast-line b.soon { color: var(--amber); }
+.forecast-line + .hero-foot { border-top: 0; padding-top: 0; margin-top: 4px; }
+/* 怎么算的：方法名、公式和他自己的参数 */
+.how summary { font-size: 15px; }
+.how-block { padding: 10px 0; border-top: 0.5px solid var(--line); }
+.how-block h4 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+.how-block p { margin: 4px 0; line-height: 1.6; }
+.how-math { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; background: var(--chip); border-radius: 8px; padding: 6px 8px; overflow-wrap: anywhere; }
 .rep-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .rep-kpi { background: var(--chip); border-radius: 12px; padding: 10px 12px; min-width: 0; }
 .rep-kpi b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; margin: 2px 0; overflow-wrap: anywhere; }
 .rep-kpi.warn b { color: var(--danger); }
+.rep-kpi.small-num b { font-size: 17px; white-space: nowrap; }
 /* 储蓄率：大字 + 一句话 + 0～100% 的条，竖线是计划和 20% */
 .saving-meter { --tone: var(--accent); background: color-mix(in srgb, var(--tone) 8%, var(--card)); border-radius: 14px; padding: 12px 14px 10px; margin: 0 0 4px; }
 .saving-meter.good { --tone: var(--sage); }
