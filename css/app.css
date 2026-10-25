@@ -103,6 +103,9 @@ h3 { font-size: 13px; margin: 0 0 10px; color: var(--muted); font-weight: 600; l
 svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 /* 苹果式大标题 */
+/* 子页面左上角的「‹ 返回」 */
+.back-btn { display: inline-flex; align-items: center; gap: 2px; background: none; color: var(--accent); padding: 4px 8px 4px 0; min-height: 36px; margin: 0 0 -6px -4px; font-size: 15px; font-weight: 500; }
+.back-btn svg.i { width: 22px; height: 22px; }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 8px 2px 16px; }
 .page-head h1 { font-size: 32px; font-weight: 700; line-height: 1.15; }
 .page-head .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }

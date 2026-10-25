@@ -1834,6 +1834,26 @@ def _(c):
     p.get_by_role("button", name="加上").click()
     c.go("#/sim")
     expect(p.locator(".group", has_text="某某纳指ETF")).to_contain_text("想看看")
+    # 返回：左上角「‹ 模拟」回到模拟页，还在原来滚到的地方
+    p.evaluate("window.scrollTo(0, 400)")
+    y = p.evaluate("window.scrollY")
+    assert y > 0, y
+    p.locator(".sim-row", has_text="某某纳指ETF").click()
+    expect(p.locator(".sim-price")).to_have_text("¥2.000")
+    back = p.locator(".back-btn")
+    expect(back).to_have_text("模拟")
+    back.click()
+    expect(p).to_have_url(URL + "#/sim")
+    expect(p.locator(".sim-worth")).to_be_visible()
+    p.wait_for_function(f"window.scrollY === {y}")
+    # 直接打开股票页（没有上一页）也能回到模拟
+    p.evaluate("sessionStorage.clear()")
+    p.goto(URL + "#/sim/s/sh600001")
+    p.reload()
+    p.evaluate("history.replaceState(null, '')")
+    p.reload()
+    p.locator(".back-btn").click()
+    expect(p).to_have_url(URL + "#/sim")
     expect(p.locator(".sim-worth")).to_contain_text("现金 ¥7,894.98")
     # 第二天卖出
     p.clock.set_fixed_time("2026-10-27T10:00:00+08:00")

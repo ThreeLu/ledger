@@ -201,10 +201,14 @@ function boot() {
   setupNav();
   document.body.append(syncPill);
   window.addEventListener('online', () => store?.sync());
+  navEnter(true);
   window.addEventListener('hashchange', () => {
     for (const el of document.querySelectorAll('.sheet-overlay, .overlay')) el.remove(); // 换页时收起弹出的表单
+    scrollAt[navAt] = window.scrollY;
+    const was = navAt;
+    navEnter();
     render();
-    window.scrollTo(0, 0);
+    window.scrollTo(0, navAt < was ? scrollAt[navAt] || 0 : 0); // 返回时回到原来滚到的地方
   });
   if (settings.token) {
     connect();
@@ -222,7 +226,39 @@ function boot() {
 }
 
 function go(hash, replace = false) {
-  if (replace) { history.replaceState(null, '', hash); render(); } else window.location.hash = hash;
+  if (replace) { history.replaceState({ nav: navAt }, '', hash); navStack[navAt] = hash; saveNav(); render(); } else window.location.hash = hash;
+}
+
+// 走过的页面：每一条浏览记录编个号（存在 history.state 里），号变小 = 返回。只比网址分不清 A → B → A 是不是返回
+// 添加到主屏幕的网页没有浏览器的返回键，子页面左上角放「‹ 返回」
+let navStack = [];
+let navAt = 0;
+const scrollAt = {};
+const saveNav = () => { try { sessionStorage.setItem('ledger-nav', JSON.stringify(navStack)); } catch { /* 存不了就算了 */ } };
+function navEnter(boot = false) {
+  const hash = window.location.hash || '#/';
+  const n = history.state?.nav;
+  if (boot) try { navStack = JSON.parse(sessionStorage.getItem('ledger-nav')) || []; } catch { navStack = []; }
+  if (Number.isInteger(n)) navAt = n; // 返回或前进到走过的一页（刷新也是）
+  else {
+    navAt = boot ? 0 : navAt + 1;
+    navStack.length = navAt;
+    history.replaceState({ nav: navAt }, '');
+  }
+  navStack[navAt] = hash;
+  saveNav();
+}
+const BACK_NAMES = { '#/sim': '模拟', '#/sim/trades': '全部买卖', '#/sim/reviews': '复盘' };
+function backName(hash) {
+  const sym = hash.match(/^#\/sim\/s\/([^/?]+)/)?.[1];
+  const name = sym && (simQ[sym]?.name || simMeta[sym]?.name || store?.data?.simTrades.find((t) => t.sym === sym)?.name);
+  return BACK_NAMES[hash] || name || '返回';
+}
+// parent：直接打开这一页（没有上一页）时回到哪里
+function backButton(parent) {
+  const prev = navAt > 0 ? navStack[navAt - 1] || '' : null;
+  return h('button', { type: 'button', class: 'back-btn', onclick: () => (prev != null ? history.back() : go(parent, true)) },
+    icon('back'), backName(prev ?? parent));
 }
 
 // ---------- 路由 ----------
@@ -1568,7 +1604,7 @@ function tradeSheet(t) {
       row('有几成把握', t.sure ? `${t.sure} / 5` : ''),
       (t.ask || []).map((x) => h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `AI：${x.q}`), h('div', {}, x.a || '（没答）'))),
       t.look && !t.look.skip ? h('div', { class: 'sim-qa' }, h('div', { class: 'muted small' }, `回头看 · ${md(t.look.at.slice(0, 10))}`), h('div', {}, [lookName(t.look.verdict), t.look.text].filter(Boolean).join('：'))) : null,
-      h('p', {}, h('a', { href: `#/sim/s/${t.sym}`, onclick: () => document.querySelector('.sheet-overlay')?.remove() }, `看看 ${t.name} →`))),
+      currentPath() === `/sim/s/${t.sym}` ? null : h('p', {}, h('a', { href: `#/sim/s/${t.sym}` }, `看看 ${t.name} →`))),
     confirmText: '好', cancelText: null, onConfirm: () => {},
   });
 }
@@ -1615,12 +1651,12 @@ function simStockView(sym) {
   const d = store.data;
   const sim = simOf(d);
   const g = currentGame(sim);
-  if (!g) return h('div', {}, header('模拟'), h('div', { class: 'card' }, h('p', {}, '还没开始模拟。'), h('a', { href: '#/sim', class: 'button' }, '去开始')));
+  if (!g) return h('div', {}, backButton('#/sim'), header('模拟'), h('div', { class: 'card' }, h('p', {}, '还没开始模拟。'), h('a', { href: '#/sim', class: 'button' }, '去开始')));
   needQuotes([sym]);
   const s = simInfo(sym);
   const q = simQ[sym];
-  if (!s) return h('div', {}, header('…'), h('p', { class: 'muted center' }, '正在读…'));
-  if (s.missing && !q) return h('div', {}, header('没有找到'), h('div', { class: 'card' }, h('p', {}, '没有这只股票。'), h('a', { href: '#/sim', class: 'button' }, '回到模拟')));
+  if (!s) return h('div', {}, backButton('#/sim'), header('…'), h('p', { class: 'muted center' }, '正在读…'));
+  if (s.missing && !q) return h('div', {}, backButton('#/sim'), header('没有找到'), h('div', { class: 'card' }, h('p', {}, '没有这只股票。'), h('a', { href: '#/sim', class: 'button' }, '回到模拟')));
   const st = marketState(s.mkt, new Date(), q?.date);
   const pos = positions(sim, g.id).find((p) => p.sym === sym);
   const watching = d.simWatch.find((w) => w.sym === sym);
@@ -1630,6 +1666,7 @@ function simStockView(sym) {
   const l = lot(sym);
   const rules = [st.text, tPlus0(s) ? '当天买当天能卖' : '今天买的明天才能卖', l.min === l.step ? `${l.min} ${l.unit}起` : `最少 ${l.min} 股`];
   return h('div', {},
+    backButton('#/sim'),
     headerSub(s.name, `${s.code} · ${mktName(s)}`),
     h('div', { class: 'card sim-quote' },
       q ? [h('div', { class: 'sim-price' }, px(sym, q.price)),
@@ -1894,13 +1931,13 @@ function simReviewCard(r, short = false) {
 
 function simReviewsView() {
   const list = [...store.data.simReviews].sort((a, b) => b.at.localeCompare(a.at));
-  return h('div', {}, header('复盘'),
+  return h('div', {}, backButton('#/sim'), header('复盘'),
     list.length ? list.map((r) => simReviewCard(r)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有复盘。')));
 }
 
 function simTradesView() {
   const list = [...store.data.simTrades].sort((a, b) => b.at.localeCompare(a.at));
-  return h('div', {}, header('全部买卖'),
+  return h('div', {}, backButton('#/sim'), header('全部买卖'),
     list.length ? h('div', { class: 'group' }, list.map(tradeRow)) : h('div', { class: 'card' }, h('p', { class: 'muted' }, '还没有买卖。')));
 }
 
@@ -3021,7 +3058,7 @@ function matchReceiptLines() {
 function receiptView(q) {
   if (q.text && (!receipt || receipt.text !== q.text)) {
     try { startReceipt(q.text); } catch (e) { receipt = { stage: 'paste', text: q.text, error: e.message }; }
-    history.replaceState(null, '', '#/receipt'); // 网址里的小票内容用完就去掉，刷新不会重新开始
+    history.replaceState(history.state, '', '#/receipt'); // 网址里的小票内容用完就去掉，刷新不会重新开始
   }
   if (!receipt) receipt = { stage: 'paste', text: '' };
   const r = receipt;
