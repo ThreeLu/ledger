@@ -1,6 +1,6 @@
 // 记账的计算：余额、预算月、预算进度、健康指标。都是纯函数，不碰网络和页面。
 //
-// 几条约定（和「我们的花钱方式」页面写的一致）：
+// 几条约定（和「花钱方式」页面写的一致）：
 // - 转账（自己的账户之间倒钱）不算收入也不算花销，只改两边余额。
 // - 美元账户（Apple ID）的金额按美元记；花销同时存一个人民币金额 cny（记账当时的汇率），统计都用人民币。
 // - 预算月从每月 periodStartDay 号开始（可以和发钱的日子对齐）。
@@ -70,7 +70,7 @@ export function defaultData(today) {
       I('i-salary', '生活费'), I('i-job', '兼职'), I('i-tax', '个税退税'), I('i-gift', '收到的红包礼金'), I('i-med', '医保报销'), I('i-other', '其他收入'),
     ],
     budget: { food: 1500, daily: 600, free: 300, sub: 0 },
-    notes: {}, // 预算每组的说明（「我们的花钱方式」里显示）
+    notes: {}, // 预算每组的说明（「花钱方式」里显示）
     incomePlan: [], // 每笔固定收入：{ name, amount, when, use }
     // 记转账时的常用路线
     presets: [
@@ -79,7 +79,6 @@ export function defaultData(today) {
     ],
     // 固定扣费：{ name, amount, account, category, day（每月几号，到日子自动记）, since } 或 { yearly: 'MM-DD', remindOnly: true }
     recurring: [],
-    quick: [],
     tx: [],
   };
 }
@@ -95,7 +94,7 @@ export function migrate(data) {
   data.notes ||= {};
   data.incomePlan ||= [];
   data.presets ||= [];
-  data.quick ||= [];
+  delete data.quick; // 快捷记账 2026-10-25 删了
   data.recurring ||= [];
   data.tx ||= [];
   data.claims ||= []; // 垫付报销：{ id, name, payer, createdAt, status: 'open'|'settled', settledAt, docs: [{ file, name, kind, submitted }] }

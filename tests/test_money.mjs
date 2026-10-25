@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 const m = await import(new URL('../js/money.js', import.meta.url));
 const sm = await import(new URL('../js/summary.js', import.meta.url));
 const rp = await import(new URL('../js/report.js', import.meta.url));
-const rc = await import(new URL('../js/receipt.js', import.meta.url));
+const rc = await import(new URL('../js/bills.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {

@@ -92,7 +92,7 @@ class Ctx:
             self.page.wait_for_timeout(200)
         raise AssertionError(f"流水数是 {len(self.tx())}，不是 {n}")
 
-    def add(self, amount, *, kind="支出", cat=None, acc=None, to=None, note=None, quick=False):
+    def add(self, amount, *, kind="支出", cat=None, acc=None, to=None, note=None):
         p = self.page
         self.go("#/add")
         p.locator(".segmented").get_by_role("button", name=kind, exact=True).click()
@@ -106,8 +106,6 @@ class Ctx:
             p.get_by_role("group", name="转入账户").get_by_role("button", name=to, exact=True).click()
         if note:
             p.get_by_label("备注").fill(note)
-        if quick:
-            p.get_by_text("存成快捷").click()
         n = len(self.tx())
         p.get_by_role("button", name="记好了").click()
         self.wait_saved(n + 1)
@@ -154,20 +152,20 @@ def _(c):
     expect(p.locator(".spend-left")).to_be_visible()
 
 
-@step("记支出：金额、类别、账户；存成快捷，再点快捷记一笔")
+@step("记支出：金额、类别、账户；没有快捷记账、导入小票")
 def _(c):
     p = c.page
     c.go("#/add")
     expect(p.get_by_text("测试：支付宝记在生活费卡")).to_be_visible()
-    c.add(15, cat="午餐", acc="校园卡", note="食堂午饭", quick=True)
+    expect(p.get_by_text("存成快捷")).to_have_count(0)
+    expect(p.get_by_text("有小票？")).to_have_count(0)
+    c.add(15, cat="午餐", acc="校园卡", note="食堂午饭")
     expect(p.locator(".tx", has_text="午餐").first).to_be_visible()
     d = c.data()
     t = d["tx"][-1]
     assert (t["type"], t["amount"], t["category"], t["account"], t["note"]) == ("expense", 15, "c-lunch", "a-campus", "食堂午饭"), t
-    assert d["quick"][0]["name"] == "食堂午饭"
-    c.go("#/add")
-    p.get_by_role("button", name="食堂午饭 ¥15").click()
-    c.wait_saved(2)
+    assert "quick" not in d
+    c.add(15, cat="午餐", acc="校园卡", note="食堂午饭")
     assert c.balance("a-campus") == 70
     # 下次默认账户是上次用的
     c.go("#/add")
@@ -260,33 +258,49 @@ def _(c):
     p.get_by_role("button", name="怎么用").click()
     expect(p.locator(".sheet")).to_contain_text("健康指标")
     p.locator(".sheet").get_by_role("button", name="知道了").click()
-    # 预算页把底线调到 99999 → 红
-    c.go("#/budget")
-    p.get_by_label("应急钱底线").fill("99999")
-    p.get_by_role("button", name="保存").click()
-    p.wait_for_function("location.hash === '#/'")
+    # 花钱方式里「应急钱」那条规矩点开改底线：调到 99999 → 红
+    def set_floor(v):
+        c.go("#/rules")
+        rule = p.locator(".rule-item", has_text="应急钱")
+        rule.locator("summary").click()
+        rule.get_by_role("button", name="改应急钱底线").click()
+        p.locator(".sheet").get_by_label("应急钱底线").fill(v)
+        p.locator(".sheet").get_by_role("button", name="保存").click()
+        expect(rule).to_contain_text("¥" + format(int(v), ","))
+    set_floor("99999")
+    assert c.data()["settings"]["emergencyFloor"] == 99999
+    c.go("#/")
     expect(p.locator(".todo-item.bad", has_text="应急钱")).to_contain_text("下一笔收入会先把它补上")
-    c.go("#/budget")
-    p.get_by_label("应急钱底线").fill("8000")
-    p.get_by_label("吃饭").fill("2000")
-    p.get_by_role("button", name="保存").click()
-    p.wait_for_function("location.hash === '#/'")
+    set_floor("8000")
+
+    # 每月预算在花钱方式最上面：点「改」就地改，保存后还在这一页
+    def set_budget(**kw):
+        c.go("#/rules")
+        p.locator(".budget-plan").get_by_role("button", name="改").click()
+        for label, v in kw.items():
+            p.locator(".budget-plan").get_by_label(label).fill(v)
+        p.locator(".budget-plan").get_by_role("button", name="保存").click()
+        expect(p.locator(".budget-plan input")).to_have_count(0)
+        assert p.evaluate("location.hash") == "#/rules"
+    set_budget(吃饭="2000")
+    c.go("#/")
     expect(p.locator(".todo-item.bad")).to_have_count(0)
     assert c.data()["budget"]["food"] == 2000
     # 形象预算：单独一组，算进生活预算
-    c.go("#/budget")
-    p.get_by_label("形象").fill("150")
-    p.get_by_role("button", name="保存").click()
-    p.wait_for_function("location.hash === '#/'")
+    set_budget(形象="150")
+    expect(p.locator(".budget-plan")).to_contain_text("形象")
     assert c.data()["budget"]["look"] == 150
     c.add(66, cat="护肤", acc="生活费卡", note="编的洗面奶")
     assert c.tx()[-1]["category"] == "c-skin"
     c.go("#/rules")
+    p.locator(".rule-item summary", has_text="形象").click()
     expect(p.get_by_text("买护肤品、化妆品、香水这些")).to_be_visible()
-    c.go("#/budget")
-    p.get_by_label("形象").fill("0")
-    p.get_by_role("button", name="保存").click()
-    p.wait_for_function("location.hash === '#/'")
+    # 「改」了又取消：不改
+    p.locator(".budget-plan").get_by_role("button", name="改").click()
+    p.locator(".budget-plan").get_by_label("吃饭").fill("1")
+    p.locator(".budget-plan").get_by_role("button", name="取消").click()
+    assert c.data()["budget"]["food"] == 2000
+    set_budget(形象="0")
 
 
 @step("固定扣费：到日子自动记一笔（美元按汇率折算），不会重复记")
@@ -311,15 +325,22 @@ def _(c):
     assert len([t for t in c.tx() if t.get("auto") == "r-claude"]) == len(auto), "重复记了"
 
 
-@step("我们的花钱方式：规则和一年能存多少")
+@step("花钱方式：预算在最上面，规矩折起来，一年能存多少；更多里只有一项")
 def _(c):
     p = c.page
     c.go("#/more")
-    p.get_by_role("link", name="我们的花钱方式").click()
-    expect(p.get_by_text("先存后花")).to_be_visible()
-    expect(p.locator(".rule", has_text="2 笔收入")).to_contain_text("收入乙 ¥4,000：全部存下")
-    expect(p.locator(".rule", has_text="7、8 月没有收入")).to_be_visible()
-    expect(p.locator(".rule", has_text="兼职的钱")).to_contain_text("70% 存下")
+    expect(p.get_by_role("link", name=re.compile("^预算"))).to_have_count(0)
+    p.get_by_role("link", name=re.compile("^花钱方式")).click()
+    expect(p.locator(".budget-plan")).to_contain_text("每月预算")
+    expect(p.locator(".rule-item summary", has_text="先存后花")).to_be_visible()
+    expect(p.get_by_text("钱一到账，先把要存的留下")).to_be_hidden()  # 折着
+    rule = lambda t: p.locator(".rule-item", has_text=t)  # noqa: E731
+    for t in ("2 笔收入", "7、8 月没有收入", "兼职的钱"):
+        rule(t).locator("summary").click()
+    expect(rule("2 笔收入")).to_contain_text("收入乙 ¥4,000：全部存下")
+    expect(rule("2 笔收入").locator(".set-row")).to_contain_text("每月正常收入¥8,000")
+    expect(rule("兼职的钱")).to_contain_text("70% 存下")
+    p.screenshot(path=ART / "rules.png", full_page=True)
     expect(p.locator(".rule", has_text="一年下来")).to_contain_text("能存约 ¥33,200，储蓄率 42%")  # 前面把吃饭预算改成了 2000
 
 def person(c, name):
@@ -543,6 +564,13 @@ def _(c):
         expect(p.locator(".rep-kpi")).to_have_count(4)
         expect(head.locator(".advice")).to_be_hidden()  # 网页上只有四个数和图，小字只在 PDF 里
         expect(p.locator(".rep-kpi").first.locator("b")).to_have_text(re.compile(r"^¥[\d,]+(\.\d\d)?$"))
+        # 储蓄率：大字 + 一句话 + 条（暑假那几个月没有收入时只写一句）
+        meter = head.locator(".saving-meter")
+        expect(meter).to_be_visible()
+        if "没有收入" not in meter.inner_text():
+            expect(meter.locator(".sm-num")).to_have_text(re.compile(r"^−?\d+%$"))
+            expect(meter).to_contain_text(re.compile("每 100 块收入，存下 \\d+ 块|花的比收入多"))
+            expect(meter.locator(".sm-mark.plan")).to_contain_text("按预算花")
         head.screenshot(path=str(ART / "month-head.png"))
     finally:
         c.data()  # 等网页把要上传的传完，再还原
@@ -677,7 +705,10 @@ def _(c):
 def _(c):
     p = c.page
     c.go("#/more")
+    expect(p.get_by_role("link", name="心愿单")).to_have_count(0)  # 心愿单藏在首页右上角
+    c.go("#/")
     p.get_by_role("link", name="心愿单").click()
+    expect(p.locator(".back-btn")).to_have_text("首页")
     for name, price, want in (("一本闲书", "80", "有了更好"), ("降噪耳机", "1200", "很想要"), ("机械键盘", "600", "有了更好")):
         p.get_by_role("button", name="加一个心愿").click()
         sheet = p.locator(".sheet")
@@ -842,8 +873,10 @@ def _(c):
     expect(p.locator(".dropped-wishes summary")).to_have_text("这个月放下的 · 1 个")
     # 「我们的花钱方式」里有心愿单和存款的规则
     c.go("#/rules")
-    expect(p.locator(".rule", has_text="心愿单：只花省下来的钱")).to_contain_text("1/3")
-    expect(p.locator(".rule", has_text="存款按用途分好")).to_contain_text("医疗备用金")
+    for t in ("心愿单：只花省下来的钱", "存款按用途分好"):
+        p.locator(".rule-item summary", has_text=t).click()
+    expect(p.locator(".rule-item", has_text="心愿单：只花省下来的钱")).to_contain_text("1/3")
+    expect(p.locator(".rule-item", has_text="存款按用途分好")).to_contain_text("医疗备用金")
 
 @step("买不买：先问问题再给建议、价格换算、硬规则（超过能自由用的钱一定不建议）、放进心愿单、决定买去记账、只发汇总、小课堂、回访")
 def _(c):
@@ -1130,7 +1163,8 @@ def _(c):
     c.go("#/")
     p.reload()
     expect(p.locator(".cell", has_text="条调整建议")).to_be_visible()
-    c.go("#/budget")
+    p.locator(".cell", has_text="条调整建议").click()
+    expect(p.get_by_role("heading", name="花钱方式")).to_be_visible()
     adv = p.locator(".advice-card")
     daily = adv.locator(".advice-item", has_text="日常")
     expect(daily).to_contain_text("¥700 → ¥350")
@@ -1139,7 +1173,8 @@ def _(c):
     expect(adv.locator(".advice-item", has_text="订阅")).to_contain_text("¥900 → ¥150")
     expect(adv.locator(".advice-item", has_text="吃饭")).to_have_count(0)  # 吃饭花得和预算差不多，不用调
     adv.get_by_role("button", name=re.compile("^全部采用")).click()
-    expect(adv).to_contain_text("不用调")
+    expect(adv).to_have_count(0)  # 都采用了：没有建议就不放这张卡
+    expect(p.locator(".budget-plan")).to_contain_text("¥350")
     b = c.data()["budget"]
     assert (b["daily"], b["sub"], b["food"]) == (350, 150, 2000), b
     assert len(c.data()["budgetHistory"]) == 2
@@ -1155,6 +1190,9 @@ def _(c):
     days = (date(year, 12, 31) - date(year, 1, 1)).days + 1
     expect(p.locator(".year-cal rect")).to_have_count(days + 5 + 1)  # 每天一格 + 图例 5 格 + 今天描的一圈
     expect(p.locator(".report")).not_to_contain_text("NaN")
+    meter = p.locator(".rep-head .saving-meter")
+    expect(meter.locator(".sm-num")).to_have_text(re.compile(r"^−?\d+%$"))
+    expect(meter.locator(".sm-mark.plan")).to_have_text(re.compile(r"^计划 \d+%$"))
     assert p.evaluate("document.querySelector('.report').lastElementChild.classList.contains('rep-export')")
     p.wait_for_timeout(600)  # 等淡入
     p.screenshot(path=ART / "year.png", full_page=True)
@@ -1300,104 +1338,13 @@ def _(c):
     p.reload()
     expect(p.locator(".letter-text")).to_contain_text("这个月你把吃饭控制得很好")
 
-RECEIPT = {"shop": "测试超市", "date": TODAY, "total": 47.4, "items": [
-    {"name": "可乐", "qty": 2, "price": 6, "category": "饮料奶茶"},
-    {"name": "抽纸", "qty": 1, "price": 19.9, "category": "纸巾清洁"},
-    {"name": "薯片", "qty": 1, "price": 8, "category": "零食"},
-    {"name": "收纳盒", "qty": 1, "price": 15, "category": "收纳整理"},
-    {"name": "优惠", "price": -1.5}]}
-
-
-@step("导入小票：一样一样确认（类别、补货、建档），按类别合成几笔；物品档案补数量、划掉购物清单、进待建档；同一张再导提醒")
+@step("删一笔直接删、可以撤销")
 def _(c):
     p = c.page
-    n = len(c.tx())
-    c.go("#/add")
-    p.get_by_role("link", name="有小票？一次导入一整张").click()
-    expect(p.get_by_role("heading", name="导入小票")).to_be_visible()
-    p.get_by_label("小票内容").fill("下面是整理好的：\n```json\n" + json.dumps(RECEIPT, ensure_ascii=False) + "\n```")
-    p.get_by_role("button", name="下一步").click()
-    expect(p.get_by_text("第 1 / 5 样")).to_be_visible()
-    # 可乐：AI 给的类别；吃的喝的默认不进档案
-    expect(p.get_by_label("类别")).to_have_value("c-drink")
-    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="不进档案")).to_have_attribute("aria-pressed", "true")
-    p.get_by_role("button", name="对，下一样").click()
-    # 抽纸：档案里用完了的消耗品 → 补货；数量改成 2
-    expect(p.get_by_text("第 2 / 5 样")).to_be_visible()
-    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="补货：现在 ×0 → ×1")).to_have_attribute("aria-pressed", "true")
-    p.get_by_label("数量").fill("2")
-    p.get_by_label("数量").blur()
-    expect(p.get_by_label("一共有几个")).to_have_value("2")
-    p.get_by_role("button", name="对，下一样").click()
-    # 薯片：购物清单上手动加的，会划掉
-    expect(p.get_by_text("购物清单上的「薯片」会划掉")).to_be_visible()
-    p.get_by_role("button", name="对，下一样").click()
-    # 收纳盒：档案里没有 → 放进待建档
-    expect(p.get_by_role("group", name="物品档案").get_by_role("button", name="放进「买回来还没建档」")).to_have_attribute("aria-pressed", "true")
-    p.get_by_role("button", name="对，下一样").click()
-    expect(p.get_by_text("优惠会并进金额最多的那一笔")).to_be_visible()
-    p.get_by_role("button", name="对，看合计").click()
-    expect(p.get_by_text("和小票实付对得上")).to_be_visible()
-    expect(p.get_by_text("记账 4 笔")).to_be_visible()
-    p.get_by_role("group", name="账户").get_by_role("button", name="生活费卡").click()
-    p.get_by_role("button", name="全部保存").click()
-    expect(p.get_by_text("记了 4 笔，共 ¥47.4")).to_be_visible()
-    expect(p.get_by_text("补货 1 样，1 样等着建档，购物清单划掉 1 样")).to_be_visible()
-    d = c.data()
-    new = d["tx"][n:]
-    assert sorted((t["category"], t["amount"]) for t in new) == [("c-drink", 6), ("c-snack", 8), ("c-storage", 15), ("c-tissue", 18.4)], new
-    assert all(t["account"] == "a-live" and t["date"] == TODAY and t["receipt"] for t in new)
-    assert next(t for t in new if t["category"] == "c-tissue")["note"] == "测试超市：抽纸×2、优惠 -1.5"
-    inv = json.loads(c.inventory.read("inventory.json"))
-    tissue = next(i for i in inv["items"] if i["name"] == "抽纸")
-    assert tissue["quantity"] == 2 and "runningLow" not in tissue and "小票导入" in tissue["notes"], tissue
-    sh = inv["shopping"]
-    assert [e["name"] for e in sh["extra"]] == ["电池"], sh["extra"]
-    assert [(e["name"], e["price"], e["paid"]) for e in sh["toFile"]] == [("收纳盒", 15, True)], sh["toFile"]
-    assert sorted(x["name"] for x in sh["history"]) == ["抽纸", "收纳盒", "薯片"], sh["history"]
-    # 同一张小票再导一次：提醒别记重了
-    p.get_by_role("button", name="再导入一张").click()
-    p.get_by_label("小票内容").fill(json.dumps(RECEIPT, ensure_ascii=False))
-    p.get_by_role("button", name="下一步").click()
-    expect(p.get_by_text("好像已经导入过了")).to_be_visible()
-
-
-@step("小票没有 AI 也能贴（一行一样）；快捷指令带内容打开；剩下的按推荐；物品档案写不上可以再试")
-def _(c):
-    p = c.page
-    n = len(c.tx())
-    text = "楼下便利店\n矿泉水 2 4\n电池 ×4 12.5\n合计 16.5"
-    c.go("#/receipt?text=" + quote(text))
-    expect(p.get_by_text("第 1 / 2 样")).to_be_visible()
-    assert p.evaluate("location.hash") == "#/receipt"  # 网址里的内容用完就去掉
-    expect(p.get_by_label("类别")).to_have_value("c-drink")
-    p.get_by_role("button", name="剩下的都按推荐，直接看合计").click()
-    expect(p.get_by_text("和小票实付对得上")).to_be_visible()
-    # 物品档案这时连不上：账照样记好，可以再试
-    p.route(f"{API}/repos/x/inventory-data/**", lambda r: r.abort())
-    p.get_by_role("button", name="全部保存").click()
-    expect(p.get_by_text("物品档案没更新上")).to_be_visible()
-    assert len(c.tx()) == n + 2
-    p.unroute(f"{API}/repos/x/inventory-data/**")
-    p.get_by_role("button", name="再试一次").click()
-    expect(p.get_by_text("购物清单划掉 1 样")).to_be_visible()
-    assert json.loads(c.inventory.read("inventory.json"))["shopping"]["extra"] == []
-
-
-@step("Siri 一句话记账：打开填好的记一笔；删一笔直接删、可以撤销")
-def _(c):
-    p = c.page
-    n = len(c.tx())
-    c.go("#/add?text=" + quote("午饭 18块5"))
-    expect(p.get_by_text("听到：「午饭 18块5」")).to_be_visible()
-    expect(p.get_by_label("金额", exact=True)).to_have_value("18.5")
-    expect(p.get_by_role("button", name="午餐", exact=True).first).to_have_attribute("aria-pressed", "true")
-    p.get_by_role("button", name="记好了").click()
-    c.wait_saved(n + 1)
+    c.add(18.5, cat="午餐", note="午饭")
+    n = len(c.tx()) - 1
     t = c.tx()[-1]
     assert (t["amount"], t["category"], t["note"]) == (18.5, "c-lunch", "午饭"), t
-    c.go("#/siri")
-    expect(p.locator("code", has_text="#/add?text=")).to_be_visible()
     # 删掉刚才那笔：不弹确认，底部可以撤销
     c.go(f"#/add?edit={t['id']}")
     p.get_by_role("button", name="删除").click()
@@ -1472,7 +1419,7 @@ def _(c):
     assert rows[0][0] == "日期" and len(rows) == len(c.tx()) + 1, rows[:2]
 
 
-# 物品档案（导入小票写进去）：抽纸用完了、购物清单上手动加了薯片和电池
+# 物品档案（买不买、心愿单建议会读）：抽纸用完了、购物清单上手动加了薯片和电池
 def inventory_seed():
     I = lambda i, name, tag, **kw: {"id": i, "name": name, "assetId": None, "location": "L1", "tags": [tag], "quantity": 1, "fields": {},  # noqa: E731,E741
                                     "photos": [], "receipts": [], "notes": "", "archived": False, "consumable": False, **kw}

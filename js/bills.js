@@ -105,8 +105,8 @@ const MERCHANTS = [
   [/App Store|Apple|网易云|QQ音乐|腾讯视频|爱奇艺|优酷|哔哩哔哩|bilibili/i, 'c-member'],
 ];
 
-// 猜类别：以前记过同一个商家的 → 商家名 → 商品名里的字（导入小票的 guessCategory）
-export function guessBillCategory(b, cats, tx, guessByName) {
+// 猜类别：以前记过同一个商家的 → 商家名 → 商品名里的字（guessCategory）
+export function guessBillCategory(b, cats, tx) {
   const ok = (id) => (cats.some((c) => c.id === id) ? id : null);
   const party = b.party.trim();
   if (party) {
@@ -116,7 +116,7 @@ export function guessBillCategory(b, cats, tx, guessByName) {
   if (/红包/.test(b.type + b.product)) return ok('c-hongbao');
   const text = `${party} ${b.product}`;
   for (const [re, id] of MERCHANTS) if (re.test(text) && ok(id)) return id;
-  return guessByName(b.product || party);
+  return guessCategory(cats, tx, b.product || party);
 }
 
 // 转给个人的钱（微信转账、红包、支付宝转账）：可能是 AA、还钱，默认不记，让用户自己看
@@ -135,3 +135,31 @@ export function guessAccount(b, accounts, remembered = {}, fallback = null) {
   return fallback && accounts.some((a) => a.id === fallback) ? fallback : accounts[0]?.id;
 }
 export const methodKey = (b) => `${b.source}:${b.method}`;
+
+// 名字里的字 → 类别（物品档案「顺手记账」用的是同一张表，改的话两边一起改）
+const BY_WORD = [
+  [/水$|矿泉水|可乐|雪碧|汽水|茶饮|奶茶|咖啡|饮料|果汁|酸奶|牛奶|豆奶|红牛|脉动|东方树叶/, 'c-drink'],
+  [/苹果|香蕉|橙|橘|梨|葡萄|西瓜|草莓|蓝莓|芒果|猕猴桃|水果|柚/, 'c-fruit'],
+  [/薯片|饼干|面包|巧克力|糖|坚果|瓜子|辣条|泡面|方便面|火腿肠|零食|蛋糕|卤|肉干|海苔|果冻/, 'c-snack'],
+  [/纸巾|抽纸|卷纸|湿巾|洗衣|清洁|垃圾袋|洗洁精|消毒|除菌|抹布|拖把|刷子|购物袋|塑料袋/, 'c-tissue'],
+  [/洗面奶|洁面|面霜|乳液|精华|面膜|防晒|润唇|唇膏|身体乳|护手霜|爽肤水|护肤/, 'c-skin'],
+  [/遮瑕|眉笔|素颜霜|粉底|隔离霜|修眉|眉刀|口红/, 'c-makeup'],
+  [/香水|香氛/, 'c-scent'],
+  [/牙膏|牙刷|牙线|洗面|洗发|护发|沐浴|香皂|肥皂|面霜|乳液|护肤|防晒|剃须|毛巾/, 'c-toiletry'],
+  [/药|创可贴|口罩|体温计|碘伏|棉签/, 'c-medical'],
+  [/笔|本子|笔记本|便利贴|文件夹|胶带|胶水|橡皮|尺|订书/, 'c-stationery'],
+  [/电动车|电瓶车|电车|充电费|充电桩/, 'c-ebike'], // 在电子耗材前面：「电动车充电」不算充电器
+  [/电池|数据线|充电|耳机|插座|插线板|U盘|转接/, 'c-gadget'],
+  [/收纳|挂钩|衣架|置物/, 'c-storage'],
+  [/袜|内裤|背心|T恤|衬衫|裤|外套|卫衣/, 'c-clothes'],
+];
+const usable = (cats, id) => (cats.some((c) => c.id === id) ? id : null);
+
+// 按商品名猜类别：账本里以前同名的东西 → 名字里的字 → 宿舍小物件
+export function guessCategory(cats, tx, name) {
+  const clean = name.replace(/[?？]$/, '');
+  const past = [...tx].reverse().find((t) => t.type === 'expense' && t.category && (t.note || '').split(/[、，,：:\s]/).includes(clean));
+  if (past && usable(cats, past.category)) return past.category;
+  for (const [re, id] of BY_WORD) if (re.test(clean) && usable(cats, id)) return id;
+  return usable(cats, 'c-dorm') || cats[0]?.id;
+}
