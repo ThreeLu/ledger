@@ -715,10 +715,16 @@ export function specialList(data, today) {
 
 // 每年一次的专项：每一项同一时间只有一个在专项里（最近一个没办完的年份）；办完了 / 不用了，马上生成下一年的。
 // skip 里的年份不生成（比如那一年不用交）。返回要新加进 data.goals 的专项。
+// 每年扣的订阅（年费）也当成每年一次的专项（2026-10-24 用户定的）：提前从存款里留好，扣的那个月不占订阅预算
+export const yearlySubs = (data, rate = data.settings.usdRate) => data.recurring.filter((r) => r.yearly && !r.day).map((r) => {
+  const [month, day] = r.yearly.split('-').map(Number);
+  return { id: r.id, name: r.name, amount: r2(r.amount * (isUsd(data, r.account) ? rate : 1)), category: r.category, month, day, note: r.note || '' };
+});
+
 export function yearlyDue(data, today) {
   const out = [];
   const y0 = Number(today.slice(0, 4));
-  for (const it of data.yearly || []) {
+  for (const it of [...(data.yearly || []), ...yearlySubs(data)]) {
     const amount = Number(it.amount) || 0;
     if (!it.id || !amount || !(it.month || it.lunar)) continue;
     for (let y = y0; y <= y0 + 1; y++) {
@@ -833,12 +839,14 @@ export function budgetAdvice(data, today, rate = data.settings.usdRate) {
     }
   }
   // 订阅：按登记的固定扣费算每月实际要多少
-  const subs = data.recurring.reduce((sum, r) => sum + yearlyCost(data, r, rate), 0) / 12;
+  // 年费按专项留钱，不算进订阅预算，这里只看每月扣的
+  const monthly = data.recurring.filter((r) => r.day);
+  const subs = monthly.reduce((sum, r) => sum + yearlyCost(data, r, rate), 0) / 12;
   const b = Number(data.budget.sub) || 0;
-  if (data.recurring.length && Math.abs(roundUp(subs) - b) >= 50 && dismissed.sub !== cur) {
+  if (monthly.length && Math.abs(roundUp(subs) - b) >= 50 && dismissed.sub !== cur) {
     const to = roundUp(subs);
     out.push({ group: 'sub', name: '订阅', from: b, to, delta: to - b, top: [],
-      why: `现在登记的订阅（${data.recurring.map((r) => r.name).join('、')}）按今天的汇率每月大约 ${money(subs)}。预算跟着实际走，「还能花」和「存钱」才算得准。` });
+      why: `每月扣的订阅（${monthly.map((r) => r.name).join('、')}）按今天的汇率每月大约 ${money(subs)}。年费在专项里留，不算在这里。预算跟着实际走，「还能花」和「存钱」才算得准。` });
   }
   return { periods: full, items: out, waiting: full.length < 2 ? 2 - full.length : 0 };
 }

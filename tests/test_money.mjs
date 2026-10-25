@@ -392,6 +392,24 @@ test('每年一次的专项：这一年的不用交就跳过；办完了 / 花�
   assert.deepEqual(home.map((g) => [g.id, g.by]), [['y-home-2027', '2027-01-30']]);
 });
 
+test('年费（每年扣的订阅）当成每年一次的专项：美元按汇率；付了选专项，不占订阅预算；月费不算专项', () => {
+  const d = savingsBook();
+  d.accounts.push({ id: 'a-usd', name: '美元', currency: 'USD', opening: 0 });
+  d.recurring = [
+    { id: 'r-vip', name: '编的会员', amount: 300, account: 'a-live', category: 'c-member', yearly: '10-24', remindOnly: true },
+    { id: 'r-app', name: '编的软件', amount: 10, account: 'a-usd', category: 'c-soft', yearly: '05-25', remindOnly: true },
+    { id: 'r-mon', name: '编的月费', amount: 5, account: 'a-live', category: 'c-member', day: 3 },
+  ];
+  d.settings.usdRate = 7;
+  const due = m.yearlyDue(d, '2026-10-24');
+  assert.deepEqual(due.map((g) => [g.id, g.by, g.target]), [['y-r-vip-2026', '2026-10-24', 300], ['y-r-app-2027', '2027-05-25', 70]]);
+  d.goals.push(...due);
+  d.tx = [{ id: 'p1', type: 'expense', date: '2026-10-24', amount: 300, account: 'a-live', category: 'c-member', special: 'y-r-vip-2026' }];
+  assert.equal(m.periodStats(d, m.periodFor(d, '2026-10-24')).spent.sub, 0);
+  assert.deepEqual(m.goalsPaid(d, '2026-10-24'), ['y-r-vip-2026']);
+  Object.assign(d.goals[0], { status: 'done' });
+  assert.deepEqual(m.yearlyDue(d, '2026-10-24').map((g) => g.id), ['y-r-vip-2027']);
+});
 
 test('不占预算的花销按来源分开写（心愿基金不说成手续费）', () => {
   const d = book();

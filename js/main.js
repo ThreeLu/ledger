@@ -6,7 +6,7 @@ import {
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, ADJUST_CAT, isLivingAccount,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine, plannedSoFar, onPace,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, yearlySubs, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine, plannedSoFar, onPace,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
@@ -718,7 +718,7 @@ function chargeRow(u, rate) {
     h('div', { class: 'charge-date' }, h('b', {}, String(Number(day))), h('span', {}, `${Number(m)}月`)),
     h('div', { class: 'grow' },
       h('div', { class: 'charge-name' }, u.r.name),
-      h('div', { class: 'muted small' }, [u.left === 1 ? '明天' : `还有 ${u.left} 天`, u.r.yearly ? '每年' : '每月', accName(u.r.account), u.r.remindOnly ? u.r.note || '到时自己记' : ''].filter(Boolean).join(' · '))),
+      h('div', { class: 'muted small' }, [u.left === 1 ? '明天' : `还有 ${u.left} 天`, u.r.yearly ? '每年' : '每月', accName(u.r.account), u.r.remindOnly ? u.r.note || (u.r.yearly ? '从专项出，记账时选它' : '到时自己记') : ''].filter(Boolean).join(' · '))),
     h('div', { class: 'charge-amt' }, exact(u.r.amount, cur), u.usd ? h('span', { class: 'muted small block' }, `≈${money(u.r.amount * rate)}`) : null));
 }
 function chargeFoot(a) {
@@ -3810,7 +3810,7 @@ function subMonthCard(d, t) {
   const budget = Number(d.budget?.sub) || 0;
   const rate = usdRate();
   const paid = st.tx.filter((x) => spendOf(d, x) > 0 && txGroup(d, x) === 'sub').sort((a, b) => a.date.localeCompare(b.date));
-  const coming = upcoming(d, t, daysBetween(t, p.end)).filter((u) => u.date <= p.end);
+  const coming = upcoming(d, t, daysBetween(t, p.end)).filter((u) => u.date <= p.end && u.r.day); // 年费按专项留钱，不算进这个月
   const comingCny = coming.reduce((s2, u) => s2 + u.r.amount * (isUsd(d, u.r.account) ? rate : 1), 0);
   const all = round2(st.spent.sub + comingCny);
   const left = round2(budget - all);
@@ -3825,8 +3825,9 @@ function subMonthCard(d, t) {
     coming.length ? [h('div', { class: 'label-sm' }, '这个月还要扣'), coming.map((u) => line(u.r.name, u.date, exact(u.r.amount, isUsd(d, u.r.account) ? '$' : '¥'),
       isUsd(d, u.r.account) ? `≈${money(u.r.amount * rate)}` : u.r.remindOnly ? '到时自己记' : ''))] : null,
     h('p', { class: `small sub-sum ${left < 0 ? 'warn-text' : 'muted'}` },
-      budget ? (left >= 0 ? `都扣完大约 ${money(all)}，订阅预算还剩 ${money(left)}。` : `都扣完大约 ${money(all)}，比订阅预算多 ${money(-left)}（多的算超支，月底先从心愿基金扣）。`)
-        : `都扣完大约 ${money(all)}。在「预算」里给订阅定个数，就能看够不够。`)),
+      budget ? (left >= 0 ? `都扣完大约 ${money(all)}，订阅预算还剩 ${money(left)}。` : `都扣完大约 ${money(all)}，比订阅预算多 ${money(-left)}，这个月存下的钱会少一些。`)
+        : `都扣完大约 ${money(all)}。在「预算」里给订阅定个数，就能看够不够。`),
+    yearlySubs(d, rate).length ? h('p', { class: 'muted small' }, `年费（${yearlySubs(d, rate).map((x) => x.name).join('、')}）在专项里提前留好，扣的那个月不占订阅预算。`) : null),
   accs.length ? h('div', { class: 'card sub-flow' },
     h('h3', {}, '美元订阅的钱怎么走'),
     h('ol', { class: 'flow-steps' },
@@ -3834,6 +3835,15 @@ function subMonthCard(d, t) {
       h('li', {}, h('b', {}, '扣款'), '：到扣款那天，网站自动记一笔订阅花销，按当天汇率折成人民币，算进上面的订阅预算。'),
       h('li', {}, h('b', {}, '看余额'), '：只要美元余额够付下一笔就行，不够时首页会提醒提前充。')),
     accs.map(chargeFoot)) : null];
+}
+
+// 年费改了金额、日子：还没办完的那个专项跟着改；改成每月的，专项就不用了
+function syncYearlyGoal(data, r) {
+  const g = (data.goals || []).find((x) => x.yearly === r.id && !x.status);
+  if (!g) return;
+  const it = yearlySubs(data).find((x) => x.id === r.id);
+  if (!it) { Object.assign(g, { status: 'cancelled', doneAt: today() }); return; }
+  Object.assign(g, { target: it.amount, by: `${g.yearlyYear}-${r.yearly}`, name: `${g.yearlyYear} 年${r.name}` });
 }
 
 function subsView() {
@@ -3868,7 +3878,7 @@ function subsView() {
     openSheet({
       title: r ? `改「${r.name}」` : '加一个订阅',
       body: h('div', { class: 'form' }, name, amount, kindBox, day, ydate, h('div', { class: 'label-sm' }, '从哪个账户扣'), accBox,
-        h('p', { class: 'muted small' }, '每月的到日子网站自动记一笔；每年的只提前提醒，不自动记。')),
+        h('p', { class: 'muted small' }, '每月的到日子网站自动记一笔，算进订阅预算。每年的（年费）会变成一个专项，提前从存款里留好，不占扣款那个月的预算；扣了以后记一笔、选上这个专项。')),
       confirmText: '保存',
       onConfirm: async () => {
         const n = Number(amount.value.replace(/[，,\s]/g, ''));
@@ -3886,6 +3896,7 @@ function subsView() {
             if (!x) { x = { id: newId('r'), category: 'c-member', since: today() }; data.recurring.push(x); }
             Object.assign(x, fields);
             for (const k of Object.keys(x)) if (x[k] === undefined) delete x[k];
+            syncYearlyGoal(data, x);
           });
           render();
         } catch { return false; }
@@ -3893,7 +3904,10 @@ function subsView() {
       },
     });
   };
-  const stop = (r) => saveUndoable(`停掉订阅：${r.name}`, (data) => { data.recurring = data.recurring.filter((x) => x.id !== r.id); },
+  const stop = (r) => saveUndoable(`停掉订阅：${r.name}`, (data) => {
+    data.recurring = data.recurring.filter((x) => x.id !== r.id);
+    for (const g of data.goals || []) if (g.yearly === r.id && !g.status) Object.assign(g, { status: 'cancelled', doneAt: today() });
+  },
     `停掉了「${r.name}」，记得去 App Store 取消订阅`).then(render).catch(() => {});
   const mark = (r, v) => upd(`订阅体检：${r.name} ${SUB_NOTE[v]}`, (data) => {
     data.subReview = { ...(data.subReview || {}), notes: { ...(data.subReview?.notes || {}), [r.id]: v } };
@@ -3903,6 +3917,7 @@ function subsView() {
     headerSub('订阅', `一年大约 ${money(total)}`, h('button', { class: 'icon-btn', 'aria-label': '加一个订阅', onclick: () => edit() }, icon('plus')), helpButton('订阅体检', [
       ['为什么要体检', ['订阅是自动扣的，单看一个月不多，一年加起来很可观，也很容易忘了自己还订着。', '每 3 个月看一眼，每个问自己：这 3 个月真的常用吗？低一档的够不够？几个订阅用途重不重叠？能不能走报销？']],
       ['怎么做', ['每个订阅点一下「值」「降档」或「停掉」，最后点「体检完了」。3 个月后首页会再提醒。', '决定停掉的，记得也去 App Store（设置 → Apple ID → 订阅）或对应的网站取消，网站这边点「停掉」就不再自动记账。']],
+      ['年费怎么算', ['每月扣的算进订阅预算。一年扣一次的（年费）不算进扣款那个月，会变成一个专项：平时从存款里慢慢留好，到期扣了记一笔、选上这个专项，从专项出。这样年费那个月不会显得超支。', '办完了明年的专项自己生成；改了金额、日子专项跟着改；停掉了专项也不要了。']],
     ])),
     d.recurring.length ? subMonthCard(d, t) : null,
     d.recurring.length ? h('div', { class: 'section-title' }, '每一个订阅') : null,
@@ -4271,7 +4286,7 @@ function budgetView() {
   };
   return h('div', { class: 'form' },
     headerSub('预算', '每个预算月（15 号到下个月 14 号）的计划', helpButton('预算怎么定', [
-      ['调整建议', ['网站看最近 3 个完整的预算月（开始记账那个月和暑假不算）：一直有富余的建议调低（多出来的进存款），总是超的建议调高（定得太紧容易放弃）。订阅按登记的实际金额算。', '调低预算 = 多存钱，但每月进心愿基金的结余会少一些。要不要采用你来定，「这个月先不改」下个预算月会再看一次。']],
+      ['调整建议', ['网站看最近 3 个完整的预算月（开始记账那个月和暑假不算）：一直有富余的建议调低（多出来的进存款），总是超的建议调高（定得太紧容易放弃）。订阅按每月扣的实际金额算（年费在专项里，不算）。', '调低预算 = 多存钱，但每月进心愿基金的结余会少一些。要不要采用你来定，「这个月先不改」下个预算月会再看一次。']],
       ['怎么定的', ['这些数是我们按你的饮食习惯和固定扣费一起估的。第一两个月照常花、照实记，再按真实数据调。']],
       ['改了会怎样', ['首页的「还能花」「花钱节奏」「本月存钱」都会按新数字算。以前的流水不受影响。']],
     ])),

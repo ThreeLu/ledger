@@ -920,6 +920,17 @@ def _(c):
     expect(p.locator(".card.sub", has_text="笔记软件")).to_contain_text("每年 5月25日")
     r = next(x for x in c.data()["recurring"] if x["name"] == "笔记软件")
     assert r["yearly"] == "05-25" and r["remindOnly"] and "day" not in r, r
+    # 年费变成每年一次的专项（打开网站时生成），改金额跟着改，订阅页写一句不占订阅预算
+    p.reload()
+    p.wait_for_timeout(800)
+    g = next(x for x in c.data()["goals"] if x.get("yearly") == r["id"])
+    assert g["target"] == 68 and g["by"].endswith("-05-25") and "笔记软件" in g["name"], g
+    expect(p.locator(".sub-month")).to_contain_text("在专项里提前留好")
+    p.locator(".card.sub", has_text="笔记软件").get_by_role("button", name="改").click()
+    p.locator(".sheet").get_by_label("每次扣多少").fill("90")
+    p.locator(".sheet").get_by_role("button", name="保存").click()
+    p.wait_for_timeout(500)
+    assert next(x for x in c.data()["goals"] if x["id"] == g["id"])["target"] == 90
     p.locator(".card.sub", has_text="订阅甲").get_by_role("button", name="停掉", exact=True).click()
     expect(p.locator(".card.sub", has_text="订阅甲")).to_have_count(0)
     p.get_by_role("button", name="体检完了").click()
