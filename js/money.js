@@ -135,6 +135,7 @@ export function migrate(data) {
     data.categories.splice(at < 0 ? data.categories.length : at, 0, I('i-med', '医保报销'));
   }
   data.taxYears ||= {}; // 个税年度汇算：{ 年份: { done: 日期, refund: 退了多少 } }
+  data.todoDone ||= {}; // 要做的事点了「做完了」：{ 指标 key: '预算月开始日|轻重', token: 令牌到期日 }
   data.subReview ||= {}; // 订阅体检：{ last: 上次体检日期, notes: { 订阅 id: 'keep'|'downgrade'|'stop' } }
   data.goals ||= []; // 专项存款（自己加的）：{ id, name, target, by: 'YYYY-MM-DD', note, status?: 'done'|'cancelled', doneAt? }；记账时 tx.special = id
   data.yearly ||= []; // 每年一次的专项（学费、住宿费……）：{ id, name, amount, category（办完了时先填的类别）, month, day（或 lunar: { m, d } 按农历）, skip: [不用交的年份], note }；到时候自动生成一个专项（goals 里带 yearly / yearlyYear）

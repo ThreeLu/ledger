@@ -510,7 +510,7 @@ function openExplain(x, hl) {
 
 const HOME_HELP = [
   ['一句结论', ['一切正常时，在「这个月还能花」最上面一行。有事留意或要处理时，放在下面的「要做的事」里，直接告诉你做什么，点「为什么」看解释。']],
-  ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里，一件一行：红色是要处理，琥珀色是留意一下，紫色是待办。点一行看为什么。事多时先露 4 件，点「还有 N 件」看全部。']],
+  ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里，一件一行：红色是要处理，琥珀色是留意一下，紫色是待办。点一行看为什么；已经弄好了点右边「做完了」，就不再提醒（点错了马上点「撤销」）。事多时先露 4 件，点「还有 N 件」看全部。']],
   ['即将扣款', ['接下来一个多月要自动扣的订阅，一笔一行，左边是哪天。美元的最下面写 Apple ID 余额够不够；不够会写哪天前充多少。点「订阅」看这个月订阅一共多少钱。']],
   ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '圆环是预算用了多少；下面那条和周总结一样：紫色是钱用了多少，竖线是按日子到今天该花到哪（开始记账那个月从记账那天数起）。紫色没过竖线，或者只多出一点（一成以内），都算节奏正常；预算月头 3 天不算快慢；首页、健康指标、周总结、月总结都是这一条规矩。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
   ['健康指标', ['每一格一个小圆环：绿 = 很好，黄 = 留意一下，红 = 需要做点什么。', '圆环有多满：安全垫按 3 个月算满，应急钱按底线算满，花钱节奏是生活预算用了多少（小白点是按日子该用到哪），本月存钱是离目标多近。其他的只看颜色。', '每一格都能点开，看它是什么、为什么重要、你现在怎么样。']],
@@ -623,6 +623,18 @@ function tokenNotice() {
     left < 0 ? 'GitHub 令牌已经过期了，账本和物品档案都打不开，点这里去换新的' : `GitHub 令牌还有 ${left} 天过期（账本和物品档案共用），点这里去续期`);
 }
 
+// 令牌：「做完了」= 已经续过了，到期日没变就不再提（续了以后在物品档案设置里改到期日，记号就变了）
+function tokenTodo() {
+  const el = tokenNotice();
+  if (!el) return null;
+  let exp = '';
+  try { exp = (JSON.parse(localStorage.getItem('inventory-settings')) || {}).tokenExpires || ''; } catch { /* 没有 */ }
+  if (store.data.todoDone?.token === exp) return null;
+  const row = todoItem('bad', 'gear', el);
+  row.append(doneButton('令牌续期', (data) => { data.todoDone = { ...(data.todoDone || {}), token: exp }; }));
+  return row;
+}
+
 // 要做的事：要处理的指标、令牌、发钱日、节假日人情、里程碑合成一张卡（不再一张张叠在「还能花」上面）；先露 4 件，其余点开
 let todoMore = false;
 function medLowCard() {
@@ -637,21 +649,37 @@ function medLowCard() {
 const TODO_ICON = { cushion: 'shield', floor: 'shield', pace: 'chart', saving: 'wallet', charges: 'clock', owed: 'people', reconcile: 'check', summer: 'calendar', tax: 'receipt', subs: 'clock' };
 const todoItem = (tone, ic, body) => h('div', { class: `todo-item ${tone}` }, h('span', { class: 'todo-dot' }, icon(ic)), h('div', { class: 'todo-body' }, body));
 function healthTodo(x, hl) {
-  return h('button', { type: 'button', class: `todo-item tap ${x.level}`, onclick: () => openExplain(x, hl), 'aria-label': `${x.name}：${x.action || x.text}` },
-    h('span', { class: 'todo-dot' }, icon(TODO_ICON[x.key] || 'bolt')),
-    h('span', { class: 'todo-body' },
-      h('span', { class: 'todo-title' }, x.name, h('span', { class: 'todo-tag' }, LEVEL_TEXT[x.level])),
-      h('span', { class: 'todo-text' }, x.action || x.text)),
-    icon('chev', 'i chev'));
+  return h('div', { class: `todo-item ${x.level}` },
+    h('button', { type: 'button', class: 'todo-tap', onclick: () => openExplain(x, hl), 'aria-label': `${x.name}：${x.action || x.text}` },
+      h('span', { class: 'todo-dot' }, icon(TODO_ICON[x.key] || 'bolt')),
+      h('span', { class: 'todo-body' },
+        h('span', { class: 'todo-title' }, x.name, h('span', { class: 'todo-tag' }, LEVEL_TEXT[x.level])),
+        h('span', { class: 'todo-text' }, x.action || x.text))),
+    doneButton(x.name, (data) => markTodoDone(data, x, hl.period)));
 }
 
+// 「做完了」（2026-10-24 用户要的：已经弄了就别再提醒）。有现成记录的照记：个税退税办好了、订阅体检看过了、对过账了；
+// 别的记 data.todoDone[key] = 记号（预算月 + 轻重），下个预算月、或者从「留意」变成「要处理」才再出现
+const todoSig = (x, p) => `${p.start}|${x.level}`;
+const todoHidden = (d, x, p) => d.todoDone?.[x.key] === todoSig(x, p);
+function markTodoDone(data, x, p) {
+  const t = today();
+  if (x.key === 'tax') { const y = taxSeason(t); data.taxYears = { ...(data.taxYears || {}), [y]: { ...(data.taxYears?.[y] || {}), done: t } }; } else if (x.key === 'subs') data.subReview = { ...(data.subReview || {}), last: t };
+  else if (x.key === 'reconcile') data.lastReconciled = t;
+  else data.todoDone = { ...(data.todoDone || {}), [x.key]: todoSig(x, p) };
+}
+const doneButton = (name, fn) => h('button', { type: 'button', class: 'small secondary todo-done', 'aria-label': `${name}做完了`,
+  onclick: () => saveUndoable(`要做的事：${name}做完了`, fn, `${name} · 做完了`).then(render).catch(() => {}) }, '做完了');
+
 function todoCard(hl) {
-  const bad = hl.items.filter((x) => x.level === 'bad');
-  const warn = hl.items.filter((x) => x.level === 'warn' && !inChargeCard(x)); // 年费快到了只在「即将扣款」卡里说，不再当成要做的事
+  const d = store.data;
+  const open = hl.items.filter((x) => !todoHidden(d, x, hl.period));
+  const bad = open.filter((x) => x.level === 'bad');
+  const warn = open.filter((x) => x.level === 'warn' && !inChargeCard(x)); // 年费快到了只在「即将扣款」卡里说，不再当成要做的事
   const wrap = (el, tone, ic) => (el ? todoItem(tone, ic, el) : null);
   const items = [
     ...bad.map((x) => healthTodo(x, hl)),
-    wrap(tokenNotice(), 'bad', 'gear'),
+    tokenTodo(),
     wrap(favorHolidayCard(), 'accent', 'people'), // 假期只有几天，排在发钱日（整个月都在）前面
     wrap(paydayCard(), 'accent', 'wallet'),
     ...warn.map((x) => healthTodo(x, hl)),
@@ -731,7 +759,6 @@ function homeView() {
     h('div', { class: 'section-title' }, '健康指标', h('span', { class: 'muted' }, ' · 点一下看解释')),
     h('div', { class: 'health-grid' }, tiles),
     upcomingCard(),
-    h('a', { class: 'receipt-link', href: '#/money' }, icon('wallet'), ' 钱都在哪：应急、医疗、专项、自由、家庭存款'),
     summaryLinks(p),
     advice ? h('div', { class: 'group' }, cell({ href: '#/budget', ic: 'chart', color: 'var(--amber)',
       title: `预算有 ${advice} 条调整建议`, sub: '根据你最近几个月实际的花销' })) : null,

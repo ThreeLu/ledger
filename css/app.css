@@ -735,6 +735,8 @@ button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: 
 .todo-item.bad { --tone: var(--danger); }
 .todo-item.warn { --tone: var(--amber); }
 .todo-item.calm { --tone: var(--sage); }
+.todo-tap { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 12px; min-height: 0; padding: 0; border-radius: 0; background: none; color: var(--text); font-weight: 400; box-shadow: none; text-align: left; }
+.todo-done { flex: none; align-self: center; }
 button.todo-item { min-height: 0; border-radius: 0; background: none; color: var(--text); font-weight: 400; box-shadow: none; }
 .todo-dot { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; margin-top: 1px; color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, var(--card)); }
 .todo-dot svg { width: 16px; height: 16px; }

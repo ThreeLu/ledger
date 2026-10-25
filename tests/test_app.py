@@ -1573,7 +1573,28 @@ def _(c):
         if p.locator(".todo-more").count():
             p.locator(".todo-more").click()
         for name in p.locator(".health-tile.warn .tile-name, .health-tile.bad .tile-name").all_inner_texts():
-            expect(p.locator(".todo-item.tap", has_text=name)).to_have_count(1)
+            expect(p.locator(".todo-item", has_text=name)).to_have_count(1)
+    # 「做完了」：对账点了记成今天对过，不再提醒；撤销回来
+    d = c.data()
+    d["lastReconciled"] = (date.today() - timedelta(days=30)).isoformat()
+    c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
+    p.locator(".todo-more").click() if p.locator(".todo-more").count() else None
+    p.get_by_role("button", name="对账做完了").click()
+    expect(p.locator(".todo-item", has_text="对账")).to_have_count(0)
+    assert c.data()["lastReconciled"] == date.today().isoformat()
+    p.get_by_role("button", name="撤销").click()
+    expect(p.locator(".todo-item", has_text="对账")).to_have_count(1)
+    # 别的指标点了只是这个预算月不提（记号 = 预算月开始日 | 轻重）
+    tiles = p.locator(".todo-item.warn .todo-done, .todo-item.bad .todo-done")
+    if tiles.count() > 1:
+        name = tiles.nth(0).get_attribute("aria-label")
+        tiles.nth(0).click()
+        expect(p.get_by_role("button", name=name)).to_have_count(0)
+        p.get_by_role("button", name="撤销").click()
+        expect(p.get_by_role("button", name=name)).to_have_count(1)
+    # 首页不再放「钱都在哪」的入口（总结页翻过来就是它）
+    expect(p.locator("#view a[href='#/money']")).to_have_count(0)
     # 即将扣款单独一张卡：一笔一行，美元账户最下面写够不够；健康指标里没有它了
     expect(p.locator(".health-tile", has_text="即将扣款")).to_have_count(0)
     expect(p.locator(".charges .charge-row").first).to_be_visible()
