@@ -693,4 +693,40 @@ test('建议·方差分解：有不定时收入时，一年后存款的不确定
   assert.deepEqual(u.irregular, ['补贴']);
 });
 
+test('买不买·假设今天买：先用心愿基金能随便用的，不够的从存款出；原来的账不变；买得越贵，存款少得越多、专项可能越低', () => {
+  const d = savingsBook();
+  d.incomePlan = [{ name: '工资', amount: 5000, category: 'i-salary', when: '每月 1 号' }];
+  d.goals = [{ id: 'g1', name: '过渡金', target: 20000, by: '2027-03-31', createdAt: '2026-08-01' }];
+  d.tx = [ex('2026-10-01', 50, 'c-like', { wishFund: false })];
+  const n = d.tx.length;
+  const small = m.wishFunds(d, T).small;
+  const w = fc.withPurchase(d, T, small + 300);
+  assert.equal(d.tx.length, n);
+  assert.equal(w.fromWish, small);
+  assert.equal(w.fromSaved, 300);
+  assert.equal(m.wishFunds(w.data, T).small, 0);
+  const opts = { paths: 1000 };
+  const base = fc.simulateAhead(d, T, opts);
+  const cheap = fc.buyImpact(d, T, 300, { ...opts, base });
+  near(cheap.yearOn[0] - cheap.yearOn[1], 300 - cheap.fromWish, 1); // 同一批随机数：一年后少的就是从存款出的那部分
+  const dear = fc.buyImpact(d, T, 15000, { ...opts, base });
+  assert.ok(dear.yearOn[1] < cheap.yearOn[1]);
+  const g = dear.goals.find((x) => x.id === 'g1');
+  assert.ok(g && g.after < g.before, JSON.stringify(dear.goals));
+  assert.ok(!dear.later.after || dear.later.after > dear.later.before, JSON.stringify(dear.later)); // 晚了，或者留不够了
+  assert.deepEqual(fc.buyImpact(d, T, 300, { ...opts, base }), cheap); // 同一天结果一样
+});
+
+test('买不买·每用一次：范围很窄时就是 价格×(1−卖回)÷(次数×年数)；范围越宽 80% 越宽；没给范围不算', () => {
+  const u = fc.perUse(1000, { perYear: [100, 100], years: [2, 2], resale: 0.2 });
+  near(u.median, 4, 1e-9);
+  near(u.lo, 4, 1e-9);
+  const wide = fc.perUse(1000, { perYear: [50, 200], years: [1, 4], resale: 0 });
+  near(wide.median, 1000 / (100 * 2), 0.3);
+  assert.ok(wide.lo < wide.median && wide.median < wide.hi);
+  assert.equal(fc.perUse(1000, null), null);
+  assert.equal(fc.perUse(1000, { perYear: [0, 3], years: [1, 2] }), null);
+  assert.equal(fc.perUse(1000, { perYear: [10, 20], years: [1, 2], resale: 5 }).resale, 0.9);
+});
+
 console.log(`\n${n} 项通过`);

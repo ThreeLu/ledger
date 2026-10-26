@@ -488,6 +488,15 @@ button.link.left { justify-content: flex-start; text-align: left; color: var(--t
 .verdict.no { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .facts { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--bg); font-size: 13px; color: var(--muted); white-space: normal; }
 .facts b { color: var(--text); }
+.buy-card { margin: 2px 0 8px; padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 13px; white-space: normal; }
+.buy-title { font-weight: 700; font-size: 14px; }
+.buy-card p { margin: 2px 0 6px; }
+.buy-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 3px 0; }
+.buy-row span { color: var(--muted); }
+.buy-row b { text-align: right; font-weight: 600; }
+.buy-how { margin-top: 6px; color: var(--muted); }
+.buy-how summary { cursor: pointer; font-size: 12px; }
+.buy-how .how-math { margin: 4px 0; }
 .decide { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .review p { margin: 0 0 6px; }
 .chat-input { position: sticky; bottom: calc(76px + env(safe-area-inset-bottom)); display: flex; gap: 8px; padding: 8px 0; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }

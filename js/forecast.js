@@ -449,3 +449,55 @@ export function adviceItems(data, today, sim, opts = {}) {
   }
   return items;
 }
+
+// ---------- 六、买不买（2026-10-26，用户选的：买了以后一年里会怎样、每用一次多少钱；价格超过 BUY_CARD_FROM 才算） ----------
+export const BUY_CARD_FROM = 100;
+
+// 假设今天买：先用心愿基金能随便用的，不够的从存款出（这个月的生活费不动）。返回加了这一两笔的账（原来的账不改）
+export function withPurchase(data, today, price) {
+  const d = structuredClone(data);
+  const fromWish = r2(Math.min(price, Math.max(0, wishFunds(data, today).small)));
+  const fromSaved = r2(price - fromWish);
+  const acc = data.settings.floorAccount || data.accounts[0]?.id;
+  const living = data.categories.find((c) => c.kind === 'expense' && LIVING.includes(c.group))?.id;
+  const none = data.categories.find((c) => c.kind === 'expense' && c.group === 'none')?.id;
+  const add = (amount, extra) => d.tx.push({ id: `buy-${d.tx.length}`, type: 'expense', date: today, account: acc, amount, note: '假设买了', ...extra });
+  if (fromWish > 0) add(fromWish, { category: living, wishFund: true });
+  if (fromSaved > 0) add(fromSaved, { category: none });
+  return { data: d, fromWish, fromSaved };
+}
+
+// 买和不买各模拟一次（同一个种子 = 共同随机数，差别只来自这笔钱）。base：不买的那次（页面上已经算好的就传进来）
+export function buyImpact(data, today, price, { base = null, ...opts } = {}) {
+  const w = withPurchase(data, today, price);
+  const before = base || simulateAhead(data, today, opts);
+  const after = simulateAhead(w.data, today, opts);
+  const yearOn = (s) => s.fan[Math.min(11, s.fan.length - 1)].q[2];
+  const was = (g) => before.goals.find((x) => x.id === g.id); // 不买时没有 = 本来已经留够了
+  // 按时留够的可能少了 1 个百分点以上的专项
+  const goals = after.goals.filter((g) => g.by && g.pOnTime != null).map((g) => ({ id: g.id, name: g.name, before: was(g)?.pOnTime ?? 1, after: g.pOnTime }))
+    .filter((g) => g.before - g.after >= 0.01);
+  // 缺口总落在最远的专项上：看它大约哪个月留够，晚了几个月
+  const far = after.goals.filter((g) => g.by).sort((a, b) => b.by.localeCompare(a.by))[0];
+  const later = far ? { id: far.id, name: far.name, before: was(far) ? was(far).p50 : today, after: far.p50 } : null;
+  if (later && (later.before || '').slice(0, 7) === (later.after || '').slice(0, 7)) later.same = true;
+  return { price, fromWish: w.fromWish, fromSaved: w.fromSaved, pBelow: [before.pBelow, after.pBelow], yearOn: [yearOn(before), yearOn(after)], goals, later, paths: after.paths };
+}
+
+// 每用一次多少钱 =（价格 − 用完能卖回的）÷（一年用几次 × 用几年）。
+// 次数、年数各是一个范围 [少, 多]，当作对数正态的 10% 和 90% 分位，抽 4000 次，给中位数和 80% 范围
+export function perUse(price, use, seed = '') {
+  const range = (r) => (Array.isArray(r) && r.length === 2 && r.every((x) => Number(x) > 0) ? r.map(Number).sort((a, b) => a - b) : null);
+  const f = range(use?.perYear);
+  const y = range(use?.years);
+  if (!(price > 0) || !f || !y) return null;
+  const resale = Math.min(0.9, Math.max(0, Number(use.resale) || 0));
+  const R = rng(`peruse|${seed}|${price}`);
+  const Z = 1.2815515655; // 标准正态的 90% 分位
+  const ln = ([lo, hi]) => { const mu = (Math.log(lo) + Math.log(hi)) / 2; const s = (Math.log(hi) - Math.log(lo)) / (2 * Z); return () => Math.exp(mu + s * R.normal()); };
+  const F = ln(f);
+  const Y = ln(y);
+  const net = price * (1 - resale);
+  const xs = Array.from({ length: 4000 }, () => net / Math.max(1, F() * Y())).sort((a, b) => a - b);
+  return { median: r2(quantile(xs, 0.5)), lo: r2(quantile(xs, 0.1)), hi: r2(quantile(xs, 0.9)), perYear: f, years: y, resale, net: r2(net) };
+}

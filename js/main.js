@@ -16,7 +16,7 @@ import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } fr
 import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { monthReport, yearReport } from './report.js';
 import { aheadPlan } from './ahead.js';
-import { scoreModels, monthForecast, simulateAhead, adviceItems, uncertaintySources, ON_TIME, BELOW_MAX, CRED_DAYS } from './forecast.js';
+import { scoreModels, monthForecast, simulateAhead, adviceItems, uncertaintySources, buyImpact, perUse, BUY_CARD_FROM, ON_TIME, BELOW_MAX, CRED_DAYS } from './forecast.js';
 import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar } from './charts.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx, makeWorkbook } from './xlsx.js';
@@ -4491,6 +4491,52 @@ async function inventoryContext() {
 }
 const INVENTORY_RULE = '他想买东西时，先看下面「已经有的东西」里有没有类似的：有的话点出来（比如「你已经有 3 件灰色卫衣，最近一个月只穿了 1 次」），用得多不多也说一句；只是提醒，买不买他自己定。没有类似的就不用提。';
 
+// ---------- 买了以后（2026-10-26，用户选的两样：买了以后一年里会怎样、每用一次多少钱；价格超过 BUY_CARD_FROM 才算） ----------
+// 计算在 forecast.js：假设今天买（先用心愿基金能随便用的，不够的从存款出），和不买各模拟一次（同一批随机数），比一年里的变化
+function buyLater(price) {
+  if (!(price > BUY_CARD_FROM)) return null;
+  try {
+    const v = forecasts();
+    return buyImpact(store.data, today(), price, { fc: v.fc, score: v.score, rate: usdRate(), base: aheadForecast() });
+  } catch { return null; } // 算不出来就不出这一块
+}
+const pctPair = ([a, b]) => (pct(a) === pct(b) ? `${pct(b)}，没变` : `${pct(a)} → ${pct(b)}`);
+// 发给 AI 的：只有这几个数
+function impactText(x) {
+  if (!x) return '';
+  const lines = [`一年里碰到应急底线的可能 ${pctPair(x.pBelow)}`, `一年后存款（中位数）少 ${money(x.yearOn[0] - x.yearOn[1])}`,
+    ...x.goals.map((g) => `「${g.name}」按时留够的可能 ${pct(g.before)} → ${pct(g.after)}`),
+    x.later && !x.later.same ? `「${x.later.name}」大约留够的月份 ${x.later.before ? aheadMonth(x.later.before) : '留不够'} → ${x.later.after ? aheadMonth(x.later.after) : '留不够'}` : ''];
+  return `\n网站模拟了「如果今天买 ${money(x.price)}」和不买的一年（先用心愿基金能随便用的 ${money(x.fromWish)}，其余 ${money(x.fromSaved)} 从存款出）：${lines.filter(Boolean).join('；')}。可以参考，数字照这里说，不要编。`;
+}
+const useMoney = (v) => (v < 10 ? `¥${v.toFixed(1)}` : money(v));
+const rangeText = ([a, b]) => (a === b ? `${a}` : `${a}～${b}`);
+function buyCard(c) {
+  const x = c.impact;
+  const u = c.use;
+  if (!x && !u) return null;
+  const row = (label, value, warn = false) => h('div', { class: 'buy-row' }, h('span', {}, label), h('b', { class: warn ? 'warn-text' : '' }, value));
+  const later = x?.later && !x.later.same ? x.later : null;
+  return h('div', { class: 'buy-card' },
+    x ? [
+      h('div', { class: 'buy-title' }, `如果今天买（${money(x.price)}）`),
+      h('p', { class: 'muted small' }, x.fromSaved <= 0 ? '全部用心愿基金能随便用的钱' : x.fromWish > 0 ? `先用心愿基金 ${money(x.fromWish)}，其余 ${money(x.fromSaved)} 从存款出` : '从存款出'),
+      row('一年里碰到底线的可能', pctPair(x.pBelow), x.pBelow[1] > BELOW_MAX && pct(x.pBelow[0]) !== pct(x.pBelow[1])),
+      row('一年后的存款', `少 ${money(Math.max(0, x.yearOn[0] - x.yearOn[1]))}`),
+      x.goals.slice(0, 3).map((g) => row(`「${g.name}」按时留够`, `${pct(g.before)} → ${pct(g.after)}`, g.after < ON_TIME)),
+      later ? row(`「${later.name}」大约留够`, `${later.before ? aheadMonth(later.before) : '—'} → ${later.after ? aheadMonth(later.after) : '10 年内留不够'}`) : null,
+      !x.goals.length && !later ? row('专项', '按时留够的可能都没变') : null,
+    ] : null,
+    u ? [
+      row('每用一次', `约 ${useMoney(u.median)}${useMoney(u.lo) === useMoney(u.hi) ? '' : `（80%：${useMoney(u.lo)}～${useMoney(u.hi)}）`}`),
+      h('p', { class: 'muted small' }, `按一年用 ${rangeText(u.perYear)} 次、用 ${rangeText(u.years)} 年估的${u.resale ? `，用完能卖回 ${Math.round(u.resale * 10)} 成` : ''}。`),
+    ] : null,
+    h('details', { class: 'buy-how' }, h('summary', {}, '怎么算的'),
+      x ? h('p', { class: 'small' }, `和「往后」同一套模拟，同一批随机数跑两遍：一遍照现在的账，一遍假设今天花掉 ${money(x.price)}（先用心愿基金能随便用的，不够的从存款出），各 ${x.paths} 条路径。两遍只差这笔钱，所以变化就是它带来的。底线 = 应急底线 + 医疗备用金 + 封存的家庭存款；存款缺口总落在日子最远的专项上，所以看它晚几个月留够。`) : null,
+      u ? [h('p', { class: 'small' }, '一年用几次、能用几年是按你说的用法估的两个范围（衣服鞋子参考物品档案里类似的穿了几次），当作对数正态分布的 10% 和 90% 分位，抽 4000 次：'),
+        h('p', { class: 'how-math' }, '每用一次 = 价格 × (1 − 能卖回的成数) ÷ (一年用几次 × 用几年)')] : null));
+}
+
 async function askMoney(question) {
   const d = store.data;
   const ai = await aiConfig();
@@ -4505,8 +4551,9 @@ async function askMoney(question) {
     '网站算好的「硬规则」必须遵守：超过能自由用的钱（会动到专项、医疗、应急或家庭存款）的，verdict 必须是 no；大额的东西就算值得买，也要建议先冷静几天、放进心愿单。',
     '他问别的（比如这个月花得怎么样、钱花哪了、某个理财概念）就直接回答，verdict 为 null。',
     'answer 控制在 150 字以内，可以分几行。item 是他想买的东西（名称和价格，价格不知道就 null），不是买东西的问题就 null。',
+    `给结论（verdict 不为 null）而且价格超过 ${BUY_CARD_FROM} 时填 use，网站用它算「每用一次多少钱」：perYear 一年大概用几次 [少, 多]，years 大概能用几年 [少, 多]，resale 用完能卖回原价的几成（0～0.9，卖不掉就 0）。按他说的用法估；衣服鞋子参考下面已有的类似东西穿了几次；拿不准就把范围放宽。其余时候 use 为 null。`,
     INVENTORY_RULE,
-    '只输出 JSON：{"answer":"","verdict":null,"item":{"name":"","price":null}}',
+    '只输出 JSON：{"answer":"","verdict":null,"item":{"name":"","price":null},"use":null}',
     '',
     '他的情况（汇总数字）：',
     moneyContext(d),
@@ -4519,12 +4566,17 @@ async function askMoney(question) {
   ].join('\n') : '';
   const history = chatState.messages.filter((m) => !m.pending).slice(-8)
     .map((m) => ({ role: m.role === 'me' ? 'user' : 'assistant', content: m.role === 'me' ? m.text : JSON.stringify({ answer: m.text }) }));
-  const out = await askJson(ai, system + extra, question, { history, maxTokens: 6000, timeout: 90000 });
+  // 接着上一句聊（「坏了，每天都用」）时话里没有价格，就用刚才在聊的那样东西的价格
+  const impact = buyLater(price || chatState.messages.filter((x) => x.item?.price).at(-1)?.item.price);
+  const out = await askJson(ai, system + extra + impactText(impact), question, { history, maxTokens: 6000, timeout: 90000 });
   const item = out.item && out.item.name ? { name: String(out.item.name).slice(0, 40), price: Number(out.item.price) || price || null } : null;
   let verdict = ['buy', 'wait', 'no'].includes(out.verdict) ? out.verdict : null;
   const facts = item?.price ? priceFacts(d, item.price) : pf;
   if (verdict && facts?.floorBreak) verdict = 'no'; // 硬规则不靠 AI
-  return { text: String(out.answer || '（没有回答）'), verdict, item, facts };
+  // 数字卡：价格超过 BUY_CARD_FROM、给了结论才有（用户 2026-10-26 定的）
+  const p = facts?.price;
+  const card = verdict && p > BUY_CARD_FROM ? { impact: impact?.price === p ? impact : buyLater(p), use: perUse(p, out.use, item?.name || '') } : null;
+  return { text: String(out.answer || '（没有回答）'), verdict, item, facts, card };
 }
 
 async function decide(m, choice) {
@@ -4627,7 +4679,8 @@ function openLesson(ls) {
 
 const askHelp = () => [
   ['能问什么', ['想买个东西：比如「想买个 1200 的机械键盘」。它会先问你一两个问题，再给建议：可以买、等等再说、或者不建议。', '问花钱的情况：比如「这个月花得怎么样？」「我钱都花哪了？」「下周想出去吃顿好的，预算够吗？」']],
-  ['网站帮你算的', ['只要话里有价格，网站会换算成你有感觉的说法：相当于几天的饭钱、几个月的自由钱、存钱目标晚几天。', `两条规则不靠 AI：超过能自由用的钱（自由存款 + 心愿基金能随便用的 + 这个月生活费还剩的）一定「不建议」；${money(store.data.settings.wishBigFrom)} 以上的建议先放进心愿单冷静几天。`]],
+  ['网站帮你算的', ['只要话里有价格，网站会换算成你有感觉的说法：相当于几天的饭钱、几个月的自由钱、存钱目标晚几天。',
+    `超过 ${money(BUY_CARD_FROM)} 的，回答上面多一张卡：如果今天买，一年里碰到底线的可能、存款少多少、专项还能不能按时留够；还有每用一次大约多少钱。点「怎么算的」看算法。`, `两条规则不靠 AI：超过能自由用的钱（自由存款 + 心愿基金能随便用的 + 这个月生活费还剩的）一定「不建议」；${money(store.data.settings.wishBigFrom)} 以上的建议先放进心愿单冷静几天。`]],
   ['决定还是你做', ['给了建议以后，下面有「决定买」「放进心愿单」「不买了」。决定买会带你去记一笔。买了的东西一个月后会问你「值不值」，下次判断会参考。']],
   ['隐私', ['发给 AI 的只有汇总数字（各类花了多少、余额、预算剩多少、心愿单），不发每一笔的明细。聊天记录不保存，关掉页面就没了。']],
   ['理财小课堂', ['上面那排卡片，每张讲一个概念，用你自己的数字举例。看完有问题，点「问问 AI」接着聊。']],
@@ -4646,6 +4699,7 @@ function askView() {
       const f = m.facts;
       return h('div', { class: 'msg ai' },
         m.verdict ? h('div', { class: `verdict ${m.verdict}` }, VERDICT[m.verdict]) : null,
+        m.card ? buyCard(m.card) : null,
         h('div', {}, m.text),
         f && m.verdict ? h('div', { class: 'facts' },
           h('b', {}, `${money(f.price)}：`), f.facts.map((x) => h('div', {}, `· ${x}`)),

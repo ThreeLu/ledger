@@ -939,6 +939,14 @@ def _(c):
     expect(last.locator(".verdict")).to_have_text("等等再说")
     expect(last.locator(".facts")).to_contain_text("天的饭钱")
     expect(last.locator(".facts")).to_contain_text("先冷静")
+    # 超过 100 的给了结论：数字卡（买了以后一年里会怎样、每用一次多少钱），模拟的结果也发给 AI
+    card = last.locator(".buy-card")
+    expect(card).to_contain_text("如果今天买（¥1,200）")
+    expect(card).to_contain_text("一年里碰到底线的可能")
+    expect(card).to_contain_text("约 ¥1.0")  # 1200 ÷ (300 × 4)
+    assert "网站模拟了「如果今天买 ¥1,200」" in json.dumps(LAST_AI[0], ensure_ascii=False)
+    expect(p.locator(".msg.ai").first.locator(".buy-card")).to_have_count(0)  # 还在问问题时没有
+    card.screenshot(path=ART / "buy-card.png")
     n = len(c.data().get("wishes", []))
     last.get_by_role("button", name="放进心愿单").click()
     expect(last).to_contain_text("你的决定：放进心愿单")
@@ -1651,7 +1659,7 @@ def fake_externals(page):
             elif "键盘" in user:
                 ans = {"answer": "现在用的键盘坏了吗？多久用一次？", "verdict": None, "item": {"name": "机械键盘", "price": 1200}}
             elif "坏了" in user:
-                ans = {"answer": "每天都用、旧的坏了，值得买；不过 1200 不少，先冷静几天、等双十一看看。", "verdict": "wait", "item": {"name": "机械键盘", "price": 1200}}
+                ans = {"answer": "每天都用、旧的坏了，值得买；不过 1200 不少，先冷静几天、等双十一看看。", "verdict": "wait", "item": {"name": "机械键盘", "price": 1200}, "use": {"perYear": [300, 300], "years": [4, 4], "resale": 0}}
             else:
                 ans = {"answer": "这个月吃饭花得最多，整体在预算内。", "verdict": None, "item": None}
             return route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
