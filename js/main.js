@@ -17,7 +17,8 @@ import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { monthReport, yearReport } from './report.js';
 import { aheadPlan } from './ahead.js';
 import { scoreModels, monthForecast, simulateAhead, adviceItems, uncertaintySources, buyImpact, perUse, BUY_CARD_FROM, ON_TIME, BELOW_MAX, CRED_DAYS } from './forecast.js';
-import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar } from './charts.js';
+import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar, mealStrip } from './charts.js';
+import { mealWeek, MEAL_PATHS, TREND_DAYS } from './meals.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx, makeWorkbook } from './xlsx.js';
 import { START_CASH, HOLD, holdName, SURE, BENCH, benchSeries, tradeMarks, LOOK, lookName, zoned, bjDate, marketState, marketOf, tPlus0, lot, fees, currentGame, cash, positions, checkOrder, maxBuy, worth, worthSeries, lookbackDue, reviewDue } from './sim.js';
@@ -2672,7 +2673,7 @@ function weekHead(ws) {
 }
 
 const SUMMARY_HELP = [
-  ['周总结', ['一周从周一到周日。最上面是这周生活花了多少（心愿基金、专项这些不占预算的另写一行，不算在里面）：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线、或者只多出一成以内，就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
+  ['周总结', ['一周从周一到周日。最上面是这周生活花了多少（心愿基金、专项这些不占预算的另写一行，不算在里面）：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线、或者只多出一成以内，就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。', '午饭和晚饭：格子一行午饭、一行晚饭，数字是那顿花了多少，颜色越深越贵，带点的是外面吃的（校园卡以外的卡付的），空着的是别人请的。下面的线是你以前每顿的范围（粗的一段是中间一半，竖线是中间那个数），点是这周的每一顿，琥珀色的是比以前九成都贵的。', '最下面几行：下周两顿大约花多少、这个预算月吃饭会不会超（按你记的估的，「怎么算的」里有方法）；记满 8 周后，变贵了或者换成学校里能省不少时才会多一行。早餐是囤着吃的，按最近四周摊到每天。']],
   ['月度报表', ['「月」是一份财务报表，按预算月算（和发钱对齐）。这个月还没过完时，算到今天。',
     '最上面四个数：收入、支出、存下、净资产（所有账户 + 别人欠你的 − 你欠别人的）。',
     '储蓄率：存下的钱占收入的几成，「每 100 块收入存下多少」。条上的竖线：「按预算花」是每一块都正好花到预算时能到的，20% 是常见的建议。到了「按预算花」那条是绿色。是负数时，条从右边的 0 往左长：只是用了存好的钱（专项、心愿基金）就安安静静的；去掉这些还是负的，就是真的花超了，这块会暗下来。',
@@ -2736,6 +2737,79 @@ function yearMast(year) {
   return { big: String(year), range: '1月1日 – 12月31日', sub: ago ? (ago === 1 ? '去年' : `${ago} 年前`) : mastLeft(`${year}-12-31`, '今年') };
 }
 
+// 午饭和晚饭（2026-10-26 用户要的，周总结「花在哪了」和「这周最大的几笔」之间）：计算在 meals.js。
+// 七天两行的格子（颜色越深越贵、带点的是外面吃的、空着的是别人请的）、三个数、每顿花多少的分布、学校里 / 外面，
+// 最下面几行：下周两顿大约多少、这个预算月吃饭会不会超、（记满 8 周）变贵了没有 / 换成学校里能省多少、早餐
+const mmd = (day) => `${Number(day.slice(5, 7))}月${Number(day.slice(8))}日`;
+function mealCard(d, ws) {
+  const now = today();
+  const mw = mealWeek(d, ws, now);
+  if (!mw.kinds.some((k) => k.hist.length)) return null;
+  const all = mw.kinds.flatMap((k) => k.hist).sort((a, b) => a - b);
+  const q = (p) => all[Math.min(all.length - 1, Math.floor(p * all.length))];
+  const cuts = [q(0.25), q(0.5), q(0.75)];
+  const level = (v) => (v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4);
+  const grid = h('div', { class: 'meal-grid', role: 'img', 'aria-label': `这周的午饭和晚饭：${mw.grid.map((k) => `${k.name}${k.cells.filter((c) => c.v != null).length} 顿`).join('，')}` },
+    h('span', {}), [...WEEKDAYS].map((w) => h('span', { class: 'meal-wd' }, w)),
+    mw.grid.map((k) => [h('span', { class: 'meal-kind small' }, k.name.slice(0, 1)),
+      k.cells.map((c) => h('span', { class: `meal-cell${c.future ? ' off' : c.v == null ? ' none' : ` lv${level(c.v)}${c.school ? '' : ' out'}`}` },
+        c.v != null ? String(Math.round(c.v)) : ''))]));
+  const kpi = (label, v, sub) => h('div', { class: 'meal-kpi' }, h('div', { class: 'muted small' }, label), h('b', {}, v), sub ? h('div', { class: 'muted small' }, sub) : null);
+  const kpis = h('div', { class: 'meal-kpis' },
+    mw.kinds.map((k) => kpi(`${k.name}每顿`, k.avg != null ? money(k.avg) : '—', k.usual != null ? `平时 ${money(k.usual)}` : null)),
+    kpi('两顿一共', money(mw.total), mw.share != null ? `占吃饭 ${Math.round(mw.share * 100)}%` : null));
+  const [sc, out] = mw.place;
+  const n = sc.n + out.n;
+  const place = n ? h('div', { class: 'meal-place' },
+    h('div', { class: 'meal-place-bar' }, sc.n ? h('span', { class: 'school', style: `width:${(sc.n / n) * 100}%` }) : null, out.n ? h('span', { class: 'out', style: `width:${(out.n / n) * 100}%` }) : null),
+    h('div', { class: 'meal-place-row small' },
+      h('span', {}, h('i', { class: 'school' }), `学校里 ${sc.n} 顿${sc.n ? ` · 每顿 ${money(sc.avg)}` : ''}`),
+      h('span', {}, h('i', { class: 'out' }), `外面 ${out.n} 顿${out.n ? ` · 每顿 ${money(out.avg)}` : ''}`))) : null;
+  const b = mw.breakfast;
+  const nx = b.next;
+  const buy = !nx ? null : now > nx.to ? '该买了' : now >= nx.from ? '这几天又该买了' : `大约 ${mmd(nx.from)}${nx.to === nx.from ? '' : nx.to.slice(5, 7) === nx.from.slice(5, 7) ? `–${Number(nx.to.slice(8))}日` : `–${mmd(nx.to)}`}该买了`;
+  const bfLine = [b.perDay != null ? `早餐大约每天 ${money(b.perDay)}` : null, b.school ? `学校里吃了 ${b.school} 顿` : null, buy].filter(Boolean);
+  const lines = [
+    mw.next ? [`下周两顿大约 ${money(mw.next.mid)}`, `八成在 ${money(mw.next.lo)} – ${money(mw.next.hi)}`] : null,
+    mw.month ? [`这个预算月吃饭大约 ${money(mw.month.mid)}`, `超预算的可能 ${mw.month.pOver < 0.01 ? '不到 1%' : `${Math.round(mw.month.pOver * 100)}%`}`, mw.month.pOver >= 0.3] : null,
+    ...(mw.trends || []).map((t) => [`${t.name}每顿大约每个月${t.perMonth > 0 ? '贵' : '便宜'}了 ${Math.round(Math.abs(t.perMonth) * 100)}%`]),
+    mw.swap ? [`每周一顿${mw.swap.name}换成学校里`, `一个月约省 ${money(mw.swap.month)}`] : null,
+    bfLine.length ? [bfLine.join(' · ')] : null,
+  ].filter(Boolean);
+  return h('div', { class: 'card meal-card' }, h('h3', {}, '午饭和晚饭'),
+    grid,
+    h('p', { class: 'muted small meal-legend' }, '颜色越深越贵 · 带点的是外面吃的'),
+    kpis,
+    mealStrip(mw.kinds.map((k) => ({ name: k.name, hist: k.hist, week: k.week })), { title: '每顿花多少：以前的范围和这周的每一顿' }),
+    place,
+    lines.length ? h('div', { class: 'meal-lines' }, lines.map(([a, sub, warn]) => h('div', { class: `meal-line small${warn ? ' warn' : ''}` }, h('span', {}, a), sub ? h('span', { class: 'muted' }, sub) : null))) : null,
+    mw.models ? mealHow(mw) : null);
+}
+
+function mealHow(mw) {
+  const f = (text) => h('p', { class: 'how-math' }, text);
+  const p = (text) => h('p', { class: 'small' }, text);
+  const k = mw.models.kinds;
+  const fmt = (x) => Math.round(x * 100) / 100;
+  return h('details', { class: 'meal-how' }, h('summary', { class: 'small' }, '怎么算的'),
+    h('h4', {}, '一、每顿多少钱'),
+    p('一顿饭的价格取对数后当成正态分布，午饭、晚饭各一套。没记账时，先假设一顿是吃饭预算每天的三成，相当于先有两顿这样的数据。'),
+    f('log x ~ N(μ, σ²)，先验 μ₀ = log m₀ − s₀²/2，κ₀ = 2，α₀ = 2，β₀ = α₀·s₀²，s₀ = 0.5'),
+    f('后验：κₙ = κ₀ + n，μₙ = (κ₀μ₀ + n·x̄) / κₙ，αₙ = α₀ + n/2，βₙ = β₀ + S/2 + κ₀n(x̄ − μ₀)² / (2κₙ)'),
+    mw.models && p(`你的：m₀ = ¥${k.lunch.m0}；午饭记了 ${k.lunch.post.n} 顿，e^μₙ = ¥${fmt(Math.exp(k.lunch.post.mu))}；晚饭记了 ${k.dinner.post.n} 顿，e^μₙ = ¥${fmt(Math.exp(k.dinner.post.mu))}。`),
+    h('h4', {}, '二、这顿是不是自己付的'),
+    p('没记的那顿当作别人请的。从开始记账到昨天，每一顿自己付的可能：'),
+    f(`p ~ Beta(1 + 记了的, 1 + 没记的)：午饭 Beta(${1 + k.lunch.paid}, ${1 + k.lunch.slots - k.lunch.paid})，晚饭 Beta(${1 + k.dinner.paid}, ${1 + k.dinner.slots - k.dinner.paid})`),
+    h('h4', {}, '三、下周、这个预算月'),
+    p(`蒙特卡洛 ${MEAL_PATHS} 次：每次抽一组 σ²、μ、p，再一顿一顿抽价格；早餐、零食、饮料这些按天用贝叶斯自助法，往后几天的和用正态近似。范围是 10% 到 90%。`),
+    f('σ² ~ InvGamma(αₙ, βₙ)，μ ~ N(μₙ, σ²/κₙ)，x = e^(μ + σz)'),
+    h('h4', {}, '四、变贵了没有（记满 8 周）'),
+    p(`记满 ${TREND_DAYS} 天后，用每顿价格的对数对日子做回归，看斜率往上的可能。只有可能 ≥ 90%、每个月变化 ≥ 2% 时才说。换成学校里能省多少：最近 8 周外面和学校里每顿的差 × 每个月的周数，省得不多时不说。`),
+    f('log x = a + b·t，b ~ N(b̂, se²)，P(变贵) = Φ(b̂ / se)，每个月 = e^(30.44·b) − 1'),
+    h('h4', {}, '五、早餐'),
+    p('校园卡付的按顿数；别的卡付的是囤着吃的，最近四周买早餐的钱 ÷ 天数 = 每天多少。下次大约哪天该买：上次买的日子 + 以前隔几天买一次的 25% 到 75%。'));
+}
+
 function summaryView(q) {
   if (summaryFlipped) return moneyView(true);
   const d = store.data;
@@ -2770,6 +2844,7 @@ function summaryView(q) {
       h('div', { class: 'card' }, h('h3', {}, '花在哪了'),
         ws.st.total ? spendDonut(ws.st, groups, { sub: '这周花销', title: '花在哪了', extra: (g) => arrow(ws.st.byGroup[g.id], ws.prev.byGroup[g.id]) })
           : h('p', { class: 'muted small' }, '这周还没有花销。')),
+      mealCard(d, ws),
       ws.top.length ? h('div', { class: 'card tx-list' }, h('h3', {}, '这周最大的几笔'), ws.top.map((t) => txRow(t))) : null);
   }
 

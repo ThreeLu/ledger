@@ -559,6 +559,46 @@ def _(c):
         expect(head.locator(".time-legend")).to_contain_text("计划 ¥")
         expect(head.locator(".hero-foot")).to_contain_text("上周 ¥")
         head.screenshot(path=str(ART / "week-head.png"))
+        # 午饭和晚饭：格子（校园卡 = 学校里，别的卡带点）、三个数、每顿的分布、学校里 / 外面；这一周有下周和这个预算月的预测、早餐
+        camp = next((a["id"] for a in d["accounts"] if a["id"] == "a-campus"), None) or d["accounts"][-1]["id"]
+        other = next(a["id"] for a in d["accounts"] if a["id"] != camp)
+        d["openingDate"] = min(d.get("openingDate") or TODAY, (date.today() - timedelta(days=21)).isoformat())
+        for k in range(1, 22):
+            day = (date.today() - timedelta(days=k)).isoformat()
+            d["tx"] += [
+                {"id": f"wk-l{k}", "type": "expense", "date": day, "account": camp, "amount": 12 + k % 4, "category": "c-lunch", "note": "", "createdAt": f"{day}T12:00:00Z"},
+                {"id": f"wk-d{k}", "type": "expense", "date": day, "account": other, "amount": 18 + k % 7, "category": "c-dinner", "note": "", "createdAt": f"{day}T18:00:00Z"},
+            ]
+            if k % 4 == 0:
+                d["tx"].append({"id": f"wk-b{k}", "type": "expense", "date": day, "account": other, "amount": 7, "category": "c-breakfast", "note": "", "createdAt": f"{day}T08:00:00Z"})
+        d["tx"].append({"id": "wk-l0", "type": "expense", "date": TODAY, "account": camp, "amount": 15, "category": "c-lunch", "note": "", "createdAt": f"{TODAY}T12:00:00Z"})
+        c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+        p.reload()
+        meal = p.locator(".meal-card")
+        expect(meal.locator("h3")).to_have_text("午饭和晚饭")
+        cells = meal.locator(".meal-cell")
+        expect(cells).to_have_count(14)
+        today_i = date.today().weekday()
+        expect(cells.nth(today_i)).to_have_text(re.compile(r"^\d+$"))  # 别的步骤今天也可能记了午饭，合成一顿
+        if today_i > 0:
+            expect(cells.nth(today_i - 1)).to_have_text(str(12 + 1 % 4))
+            expect(cells.nth(today_i - 1)).not_to_have_class(re.compile(r"\bout\b"))
+            expect(cells.nth(7 + today_i - 1)).to_have_class(re.compile(r"\bout\b"))
+        expect(meal.locator(".meal-cell.out")).not_to_have_count(0)
+        expect(meal.locator(".meal-kpi")).to_have_count(3)
+        expect(meal.locator(".meal-kpi").first).to_contain_text("午饭每顿")
+        expect(meal.locator(".meal-kpi").first).to_contain_text("平时 ¥")
+        expect(meal.get_by_role("img", name=re.compile("^每顿花多少"))).to_be_visible()
+        expect(meal.locator(".meal-place-row")).to_contain_text("学校里")
+        expect(meal.locator(".meal-lines")).to_contain_text(re.compile(r"下周两顿大约 ¥[\d,]+"))
+        expect(meal.locator(".meal-lines")).to_contain_text("这个预算月吃饭大约")
+        expect(meal.locator(".meal-lines")).to_contain_text(re.compile(r"早餐大约每天 ¥"))
+        expect(meal.locator(".meal-how .how-math").first).to_be_hidden()
+        meal.locator(".meal-how summary").click()
+        expect(meal.locator(".meal-how")).to_contain_text("Beta(")
+        expect(meal).not_to_contain_text("NaN")
+        expect(meal).not_to_contain_text("undefined")
+        meal.screenshot(path=str(ART / "week-meals.png"))
         # 月总结最上面也是一张卡：存下多少、收入 / 花了 / 其中生活、生活预算进度条、建议
         inc = next(x["id"] for x in d["categories"] if x["kind"] == "income")
         d["tx"].append({"id": "wk-in", "type": "income", "date": TODAY, "account": acc, "amount": 1000, "category": inc, "note": "", "createdAt": f"{TODAY}T12:00:00Z"})

@@ -245,3 +245,35 @@ export function yearCalendar(days, { today = '', title = '' } = {}) {
   svg.append(s('text', { x: lx + 5 * (size + 3) + 1, y: ly + size - 1, class: 'chart-label', text: '多' }));
   return svg;
 }
+
+// 每顿花多少（周总结「午饭和晚饭」）：一行一类，细线是以前每顿的 10%～90%，粗的一段是 25%～75%，竖线是中位数；
+// 点是这周的每一顿，比以前九成都贵的（记满 10 顿才标）琥珀色。rows = [{ name, hist: 从小到大, week: [] }]
+export function mealStrip(rows, { title = '' } = {}) {
+  const left = 34;
+  const right = 10;
+  const rowH = 30;
+  const top = 6;
+  const axis = 18;
+  const q = (xs, p) => { const i = (xs.length - 1) * p; const a = Math.floor(i); const b = Math.ceil(i); return xs[a] + (xs[b] - xs[a]) * (i - a); };
+  const hi = Math.max(10, ...rows.flatMap((r) => [...r.hist, ...r.week]));
+  const x = (v) => left + (v / hi) * (W - left - right);
+  const height = top + rows.length * rowH + axis;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart meal-strip', role: 'img', 'aria-label': title });
+  rows.forEach((r, i) => {
+    const cy = top + i * rowH + rowH / 2;
+    svg.append(s('text', { x: 0, y: cy + 4, class: 'chart-label', text: r.name }));
+    svg.append(s('line', { x1: left, x2: W - right, y1: cy, y2: cy, style: 'stroke:var(--line)', 'stroke-width': 1 }));
+    const h = r.hist;
+    if (h.length >= 3) {
+      svg.append(s('line', { x1: x(q(h, 0.1)), x2: x(q(h, 0.9)), y1: cy, y2: cy, style: 'stroke:var(--muted)', 'stroke-width': 2, 'stroke-linecap': 'round' }));
+      svg.append(s('rect', { x: x(q(h, 0.25)), y: cy - 4, width: Math.max(2, x(q(h, 0.75)) - x(q(h, 0.25))), height: 8, rx: 4, style: 'fill:color-mix(in srgb, var(--accent) 28%, var(--chip))' }));
+      svg.append(s('line', { x1: x(q(h, 0.5)), x2: x(q(h, 0.5)), y1: cy - 7, y2: cy + 7, style: 'stroke:var(--text)', 'stroke-width': 1.5 }));
+    }
+    const p90 = h.length >= 10 ? q(h, 0.9) : Infinity;
+    for (const v of r.week) svg.append(s('circle', { cx: x(v), cy, r: 4, style: `fill:${v > p90 ? 'var(--amber)' : 'var(--accent)'};stroke:var(--card);stroke-width:1.5` }));
+  });
+  const base = top + rows.length * rowH + 12;
+  const step = hi > 60 ? 20 : hi > 30 ? 10 : 5;
+  for (let v = 0; v <= hi; v += step) svg.append(s('text', { x: x(v), y: base, 'text-anchor': 'middle', class: 'chart-label', text: `¥${v}` }));
+  return svg;
+}

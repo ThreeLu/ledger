@@ -8,6 +8,7 @@ const rp = await import(new URL('../js/report.js', import.meta.url));
 const rc = await import(new URL('../js/bills.js', import.meta.url));
 const ah = await import(new URL('../js/ahead.js', import.meta.url));
 const fc = await import(new URL('../js/forecast.js', import.meta.url));
+const ml = await import(new URL('../js/meals.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -742,6 +743,88 @@ test('买不买·每用一次：范围很窄时就是 价格×(1−卖回)÷(次
   assert.equal(fc.perUse(1000, null), null);
   assert.equal(fc.perUse(1000, { perYear: [0, 3], years: [1, 2] }), null);
   assert.equal(fc.perUse(1000, { perYear: [10, 20], years: [1, 2], resale: 5 }).resale, 0.9);
+});
+
+test('午饭和晚饭：同一天同一类合成一顿；校园卡 = 学校里；一周的格子、平均、和平时比、占吃饭几成', () => {
+  const d = book();
+  d.openingDate = '2026-09-01';
+  d.accounts.push({ id: 'a-campus', name: '编的卡', currency: 'CNY', opening: 0 });
+  const camp = (date, amount, cat = 'c-lunch') => ex(date, amount, cat, { account: 'a-campus' });
+  d.tx = [camp('2026-10-05', 12), ex('2026-10-05', 3, 'c-lunch'), ex('2026-10-05', 30, 'c-dinner'), camp('2026-10-06', 10),
+    ex('2026-10-07', 6, 'c-drink'), camp('2026-09-28', 14), camp('2026-09-29', 16), camp('2026-09-30', 18)];
+  const meals = ml.mealsOf(d, '2026-10-05', '2026-10-11');
+  assert.deepEqual(meals.map((x) => [x.day, x.kind, x.v, x.school]), [['2026-10-05', 'lunch', 15, true], ['2026-10-05', 'dinner', 30, false], ['2026-10-06', 'lunch', 10, true]]);
+  const ws = sm.weekSummary(d, '2026-10-07', '2026-10-11');
+  const mw = ml.mealWeek(d, ws, '2026-10-12');
+  assert.deepEqual(mw.grid[0].cells.map((c) => c.v), [15, 10, null, null, null, null, null]);
+  assert.equal(mw.grid[1].cells[0].school, false);
+  assert.equal(mw.kinds[0].avg, 12.5);
+  assert.equal(mw.kinds[0].usual, 16);
+  assert.equal(mw.total, 55);
+  assert.equal(mw.food, 61);
+  assert.deepEqual(mw.place.map((x) => [x.id, x.n]), [['school', 2], ['out', 1]]);
+  assert.equal(mw.next, undefined); // 过去的周没有预测
+});
+
+test('午饭和晚饭·每顿价格的正态—逆伽马后验：没数据就是先验，数据多了靠近实际', () => {
+  const mu0 = Math.log(18);
+  assert.deepEqual(ml.mealPosterior([], mu0), { mu: mu0, kappa: 2, alpha: 2, beta: 0.5, n: 0 });
+  const xs = Array.from({ length: 200 }, (_, i) => Math.log(10 + (i % 5)));
+  const post = ml.mealPosterior(xs, mu0);
+  const xbar = xs.reduce((a, x) => a + x, 0) / xs.length;
+  assert.ok(Math.abs(post.mu - xbar) < 0.01);
+  assert.equal(post.kappa, 202);
+  assert.equal(post.alpha, 102);
+});
+
+test('午饭和晚饭·下周两顿、这个预算月吃饭：同一天结果一样；每顿都记、价格固定时接近 14 × 价格；吃得越贵超预算越可能', () => {
+  const d = book();
+  d.openingDate = '2026-08-01';
+  d.budget.food = 1500;
+  d.tx = [];
+  for (let day = '2026-08-01'; day <= '2026-10-09'; day = m.addDays(day, 1)) d.tx.push(ex(day, 20, 'c-lunch'), ex(day, 20, 'c-dinner'));
+  const a = ml.nextWeekMeals(d, '2026-10-10', { paths: 1000 });
+  assert.deepEqual(a, ml.nextWeekMeals(d, '2026-10-10', { paths: 1000 }));
+  assert.ok(Math.abs(a.mid - 280) < 15, JSON.stringify(a));
+  assert.ok(a.lo <= a.mid && a.mid <= a.hi);
+  // 10 月：已花 9 天 × 40 = 360，往后 21 天 × 40 ≈ 840，一共 ≈ 1200
+  const ok = ml.monthFood(d, '2026-10-10', { paths: 1000 });
+  assert.equal(ok.budget, 1500);
+  assert.equal(ok.spent, 360);
+  assert.ok(Math.abs(ok.mid - 1200) < 40 && ok.pOver < 0.05, JSON.stringify(ok));
+  d.budget.food = 1100;
+  assert.ok(ml.monthFood(d, '2026-10-10', { paths: 1000 }).pOver > 0.9);
+});
+
+test('午饭和晚饭·变贵了没有、换成学校里能省多少（不够明显就不说）', () => {
+  const up = Array.from({ length: 40 }, (_, i) => ({ day: m.addDays('2026-08-01', i * 2), v: 10 * Math.exp(0.003 * i * 2) * (1 + ((i % 3) - 1) * 0.02) }));
+  // 平的，最后一顿特别贵：不算变贵
+  const spike = up.map((x, i) => ({ ...x, v: i === 39 ? 75 : 13 + ((i % 3) - 1) }));
+  assert.ok(ml.mealTrend(spike).perMonth < 0.02, JSON.stringify(ml.mealTrend(spike)));
+  const t = ml.mealTrend(up);
+  assert.ok(t.pUp > 0.99 && t.perMonth > 0.05, JSON.stringify(t));
+  const flat = up.map((x, i) => ({ ...x, v: 10 + ((i % 3) - 1) }));
+  assert.ok(ml.mealTrend(flat).pUp < 0.9);
+  assert.equal(ml.mealTrend(up.slice(0, 10)), null);
+  assert.equal(ml.mealTrend(up.slice(0, 28)), null); // 不到 30 顿
+  assert.equal(ml.mealTrend(up.map((x, i) => ({ ...x, day: m.addDays('2026-08-01', i) }))), null); // 40 顿但跨不满 8 周
+  const meals = [...Array.from({ length: 6 }, (_, i) => ({ kind: 'dinner', v: 12, school: true, day: `2026-10-0${i + 1}` })),
+    ...Array.from({ length: 10 }, (_, i) => ({ kind: 'dinner', v: 25, school: false, day: `2026-10-1${i}` }))];
+  assert.deepEqual(ml.swapSaving(meals), { ...ml.MEAL_KINDS[1], diff: 13, month: 57 });
+  assert.equal(ml.swapSaving(meals.map((x) => ({ ...x, v: x.school ? 12 : 13 }))), null);
+});
+
+test('早餐：校园卡按顿数；别的卡是囤的，最近四周摊到每天；下次大约哪天该买', () => {
+  const d = book();
+  d.openingDate = '2026-09-01';
+  d.accounts.push({ id: 'a-campus', name: '编的卡', currency: 'CNY', opening: 0 });
+  d.tx = [ex('2026-10-01', 28, 'c-breakfast'), ex('2026-10-05', 7, 'c-breakfast'), ex('2026-10-09', 7, 'c-breakfast'), ex('2026-10-13', 14, 'c-breakfast'),
+    ex('2026-10-13', 2, 'c-breakfast', { account: 'a-campus' }), ex('2026-10-14', 2, 'c-breakfast', { account: 'a-campus' })];
+  const ws = sm.weekSummary(d, '2026-10-14', '2026-10-14');
+  const b = ml.breakfast(d, ws, '2026-10-14', '2026-10-14');
+  assert.equal(b.school, 2);
+  assert.equal(b.perDay, Math.round((56 / 28) * 100) / 100);
+  assert.deepEqual(b.next, { from: '2026-10-17', to: '2026-10-17', last: '2026-10-13' });
 });
 
 console.log(`\n${n} 项通过`);
