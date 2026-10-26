@@ -6,7 +6,7 @@ import {
   receivables, claimStatus, personStatus, needsReconcile, CLAIM_REMIND_DAYS, PERSON_REMIND_DAYS, budgetAdvice,
   isBigWish, wishFunds, bigWishPlan, expiredDrops, forgetDrops, restoreWish, coolingLeft, closedPeriods, WISH_KEEP, WISH_SEED, WISH_CAP,
   savingsMap, livingLeft, RECONCILE_DAYS, medTarget, FREE_KEEP, FAMILY_STEP, txGroup, spendOf, daysBetween, parseYmd, ADJUST_CAT, isLivingAccount,
-  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, yearlySubs, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine, plannedSoFar, onPace,
+  taxYear, taxSeason, TAX_TO, subReviewDue, yearlyCost, yearlySubs, FAVOR_CATEGORIES, GIFT_IN, giftsWith, openFavors, holidayFavors, socialPlan, favorDue, yearlyDue, goalsPaid, noneParts, noneLine, noneSplit, plannedSoFar, onPace,
 } from './money.js';
 import { holidayLine } from './cal.js';
 import { personPicker, recentIds } from './picker.js';
@@ -2675,18 +2675,18 @@ const SUMMARY_HELP = [
   ['周总结', ['一周从周一到周日。最上面是这周生活花了多少（心愿基金、专项这些不占预算的另写一行，不算在里面）：进度条是用了这周计划的多少，这周还没过完时，竖线是按日子到今天该花到哪，条没过竖线、或者只多出一成以内，就是节奏正常。', '柱子是每天的生活花销（吃饭 + 日常 + 自由钱），虚线是每天的预算：柱子在虚线下面就是没超。', '环形图是这周的钱花在哪几块，下面的箭头是和上周比。']],
   ['月度报表', ['「月」是一份财务报表，按预算月算（和发钱对齐）。这个月还没过完时，算到今天。',
     '最上面四个数：收入、支出、存下、净资产（所有账户 + 别人欠你的 − 你欠别人的）。',
-    '储蓄率：存下的钱占收入的几成，「每 100 块收入存下多少」。条上的竖线：「按预算花」是每一块都正好花到预算时能到的，20% 是常见的建议。到了「按预算花」那条是绿色。',
-    '收支：第一根柱子是收入，每一块花销往下扣一段，最后一根是剩下的。',
+    '储蓄率：存下的钱占收入的几成，「每 100 块收入存下多少」。条上的竖线：「按预算花」是每一块都正好花到预算时能到的，20% 是常见的建议。到了「按预算花」那条是绿色。是负数时，条从右边的 0 往左长：只是用了存好的钱（专项、心愿基金）就安安静静的；去掉这些还是负的，就是真的花超了，这块会暗下来。',
+    '收支：第一根柱子是收入，每一块花销往下扣一段，最后一根是剩下的。不占预算的分两块：「用存好的」是专项、心愿基金、大额人情这些早就留好的钱；「预算外」是手续费、出差自付这些不在哪一块预算里的。图下面点一行，看钱去了哪。',
     '家底：月初和现在的钱按用途分成几段（和「钱都在哪」一样），下面是最近几个月的净资产。',
     '预算：浅色是预算，深色是实际花的，竖线是预算到头的地方。花钱曲线：实线是累计花了多少，虚线是按计划到这天该花多少，实线在虚线下面就是花得比计划慢。',
-    '花在哪：圆环点一段看这一块花在哪几类。日历上颜色越深，那天花得越多。',
+    '花在哪：圆环点一段看这一块花在哪几类。日历上颜色越深，那天生活花得越多；点一天，下面写那天一共花了多少（不占预算的也算）。',
     '趋势：最近几个月的收入、支出柱子，和储蓄率的线（右边的刻度）。',
     '最下面「存成 PDF」：PDF 里有完整的表格和明细。会打开打印界面，iPhone 上在打印预览里点右上角的分享按钮，选 Save to Files。「导出 Excel」：每一部分一张表，还有这个月的每一笔。「导出给 ChatGPT」：把完整的报表复制好，拿去问。']],
   ['年度报表', ['「年」也是一份财务报表，按自然年（1 月 1 日到 12 月 31 日），每个月也按自然月算，所以和月度报表（预算月）的数字不完全一样。',
-    '储蓄率：这一年存下的占收入的几成，条上的「计划」算上了没有收入的月份。',
+    '储蓄率：这一年存下的占收入的几成，条上的「计划」算上了没有收入的月份。负数的样子和月度一样。',
     '每月收支：12 个月的收入、支出柱子，和储蓄率的线。存钱计划：实线是这一年累计存下的，虚线是按计划累计该存的，实线在上面就是存得比计划好。',
     '家底：年初和现在的钱按用途分，和每个月月底的净资产。预算：一行一块、一列一个月，颜色越深用得越多，红色是超了。',
-    '花在哪：全年的圆环，和每个月按块分的柱子。日历：一格一天，颜色越深那天花得越多，描了一圈的是今天。',
+    '花在哪：全年的圆环，下面「用存好的」「预算外」点开看去处，和每个月按块分的柱子。日历：一格一天，颜色越深那天花得越多，描了一圈的是今天。',
     '这一年过完后，1 月打开去年的年度报表，AI 会写一段年度点评。最下面可以存成 PDF、导出 Excel（每个月一张明细）、导出给 ChatGPT。']],
   ['往后', ['「往后」是往前看：往后 12 个预算月，每个月底存款大概有多少、有多大可能碰到底线。存款和「钱都在哪」的一样，不算心愿基金和这个月还没花的生活费。',
     '照你以前每天花多少、收入到没到账，估出几千种可能的未来，数一数有多少种碰到底线、专项按时留够。想看细节，在页面最下面「怎么算的」。',
@@ -3004,25 +3004,42 @@ const repSigned = (v) => (Math.abs(v) < 0.005 ? '—' : `${v > 0 ? '+' : '−'}$
 const repPct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 
 // 储蓄率（2026-10-25 用户要的：月、年报表里直观明显）：大字 + 一句「每 100 块收入存下多少」+ 一条 0～100% 的条，
-// 条上标出计划（按预算花能到的）和常见建议 20%。多花了不用红，琥珀色
-function savingMeter(rate, { plan = null, planLabel = '计划', delta = null, deltaLabel = '', note = '' } = {}) {
+// 条上标出计划（按预算花能到的）和常见建议 20%。存得少用琥珀色。
+// 负数（2026-10-26 用户定的）：条从右边的 0 往左长。只是用存好的钱（专项、心愿基金、大额人情）花成负的，安安静静写一句；
+// 把这些加回去还是负的 = 真的花超了（realSaved < 0），整块变暗、裂开、往下滴、打开时抖一下（用户选的「恐怖」那一档），字还是安静的
+const dreadShook = new Set(); // 抖过的月 / 年：页面重画时不再抖（只在内存）
+function savingMeter(rate, { plan = null, planLabel = '计划', delta = null, deltaLabel = '', note = '', realSaved = 0, fromSaved = 0, span = '这个月', key = '' } = {}) {
   if (rate == null) return h('div', { class: 'saving-meter none' }, h('span', { class: 'muted small' }, '储蓄率'), h('p', { class: 'muted small' }, '这段时间没有收入，储蓄率不算。'));
   const pct = Math.round(rate * 100);
-  const tone = pct < 0 ? 'warn' : plan != null ? (pct >= Math.round(plan * 100) ? 'good' : pct >= 20 ? 'ok' : 'warn') : pct >= 20 ? 'good' : 'ok';
+  const dread = realSaved <= -1;
+  const neg = rate < 0;
+  const tone = dread ? 'dread' : neg ? 'none' : plan != null ? (pct >= Math.round(plan * 100) ? 'good' : pct >= 20 ? 'ok' : 'warn') : pct >= 20 ? 'good' : 'ok';
   const clamp = (x) => Math.max(0, Math.min(100, x));
   const planPct = plan != null ? Math.round(plan * 100) : null;
   const mark = (at, label, cls) => h('span', { class: `sm-mark ${cls}${at > 70 ? ' end' : at < 15 ? ' start' : ''}`, style: `left:${clamp(at)}%` }, h('i', {}), label ? h('small', {}, label) : null);
-  const say = pct >= 0 ? `每 100 块收入，存下 ${pct} 块` : `花的比收入多 ${-pct}%，用了以前存的钱`;
-  return h('div', { class: `saving-meter ${tone}` },
+  const say = dread ? `${span}，存款在往下走。` : neg ? `用存好的钱花了 ${money(fromSaved)}，不算花超` : `每 100 块收入，存下 ${pct} 块`;
+  const w = clamp(-pct);
+  const track = neg
+    ? h('div', { class: 'sm-track neg', role: 'img', 'aria-label': `储蓄率 ${pct}%` },
+      h('span', { class: 'sm-fill', style: `width:${w}%` }),
+      dread ? [0.18, 0.5, 0.82].map((at, i) => h('span', { class: 'sm-drip', style: `left:${100 - w * at}%;animation-delay:${i * 0.9}s` })) : null,
+      mark(100, '0', 'zero end'))
+    : h('div', { class: 'sm-track', role: 'img', 'aria-label': `储蓄率 ${pct}%${planPct != null ? `，${planLabel} ${planPct}%` : ''}` },
+      h('span', { class: 'sm-fill', style: `width:${clamp(pct)}%` }),
+      planPct == null || Math.abs(planPct - 20) >= 12 ? mark(20, '20%', 'ref') : null,
+      planPct != null ? mark(planPct, `${planLabel} ${planPct}%`, 'plan') : null);
+  const crack = dread ? h('span', { class: 'sm-crack', 'aria-hidden': 'true' }) : null;
+  if (crack) crack.innerHTML = '<svg viewBox="0 0 120 90" preserveAspectRatio="none"><path d="M120 6 L96 18 L101 30 L78 41 L84 52 L62 60 L66 71 L47 90" /><path d="M96 18 L86 9" /><path d="M78 41 L68 34" /><path d="M62 60 L52 56" /></svg>';
+  const shake = dread && !dreadShook.has(key);
+  if (shake) dreadShook.add(key);
+  return h('div', { class: `saving-meter ${tone}${shake ? ' shake' : ''}` },
+    crack,
     h('div', { class: 'sm-top' },
       h('span', { class: 'muted small' }, '储蓄率'),
       delta != null ? h('span', { class: 'muted small' }, `${deltaLabel} ${delta > 0 ? '+' : delta < 0 ? '−' : '±'}${Math.abs(delta)} 个点`) : null),
-    h('div', { class: 'sm-row' }, h('b', { class: 'sm-num' }, `${pct}%`), h('span', { class: 'small' }, say)),
-    h('div', { class: 'sm-track', role: 'img', 'aria-label': `储蓄率 ${pct}%${planPct != null ? `，${planLabel} ${planPct}%` : ''}` },
-      h('span', { class: 'sm-fill', style: `width:${clamp(pct)}%` }),
-      planPct == null || Math.abs(planPct - 20) >= 12 ? mark(20, '20%', 'ref') : null,
-      planPct != null ? mark(planPct, `${planLabel} ${planPct}%`, 'plan') : null),
-    note ? h('p', { class: 'muted small sm-note' }, note) : null);
+    h('div', { class: 'sm-row' }, h('b', { class: 'sm-num' }, `${pct < 0 ? '−' : ''}${Math.abs(pct)}%`), h('span', { class: 'small' }, say)),
+    track,
+    note && !dread ? h('p', { class: 'muted small sm-note' }, note) : null);
 }
 const PURPOSE_COLORS = { 家庭存款: 'var(--jar-k1)', 应急底线: 'var(--jar-k2)', 医疗备用金: 'var(--jar-k3)', 专项存款: 'var(--jar-k4)', 自由存款: 'var(--jar-w1)', 心愿基金: 'var(--jar-w2)', 生活费还剩: 'var(--jar-g)' };
 
@@ -3038,6 +3055,27 @@ function repTable(cols, rows, label) {
 const repDetail = (...children) => h('div', { class: 'rep-detail' }, ...children);
 const repSection = (title, ...children) => h('section', { class: 'card rep-sec' }, h('h3', {}, title), ...children);
 const repLegend = (items) => h('div', { class: 'legend' }, items.map(([name, color]) => h('span', {}, h('i', { style: `background:${color}` }), name)));
+// 不占预算的两块（2026-10-26 用户要的）：图下面一块一行，点一下在原地展开，只写去处和金额，点一笔没有反应。PDF 里都展开
+const NONE_SAVED_COLOR = 'var(--jar-k4)';
+function noneRows(split) {
+  const row = (label, color, b) => {
+    if (b.v < 0.005) return null;
+    const list = h('div', { class: 'none-list' }, b.groups.map((g) => [
+      h('div', { class: 'none-g' }, h('span', {}, g.name), h('span', {}, exact(g.v))),
+      g.tx.length > 1 ? g.tx.map((t) => h('div', { class: 'none-t muted small' }, h('span', {}, `${md(t.date)} ${txTitle(t)}`), h('span', {}, exact(spendOf(store.data, t))))) : null,
+    ]));
+    const wrap = h('div', { class: 'none-block' });
+    const btn = h('button', { type: 'button', class: 'none-row', 'aria-expanded': 'false', onclick: () => {
+      const open = !wrap.classList.contains('open');
+      wrap.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', String(open));
+    } }, h('i', { style: `background:${color}` }), h('span', {}, label), h('b', {}, exact(b.v)), h('span', { class: 'none-chev', 'aria-hidden': 'true' }, '›'));
+    wrap.append(btn, list);
+    return wrap;
+  };
+  const rows = [row('用存好的', NONE_SAVED_COLOR, split.saved), row('预算外', 'var(--g-none-strong)', split.outside)].filter(Boolean);
+  return rows.length ? h('div', { class: 'none-rows' }, rows) : null;
+}
 
 // 这个预算月按预算花能存下几成：(正常收入 − 预算) ÷ 正常收入；暑假那几个月没有收入，不算
 function monthPlanRate(d, p) {
@@ -3081,7 +3119,7 @@ function monthReportView(d, day, head, seg, navRow) {
         kpi(key.saved >= 0 ? '存下' : '多花了', exact(Math.abs(key.saved)), key.saved < 0 ? 'warn' : ''),
         kpi('净资产', exact(key.net))),
       savingMeter(key.savingRate, {
-        plan: monthPlanRate(d, p), planLabel: '按预算花',
+        plan: monthPlanRate(d, p), planLabel: '按预算花', realSaved: r.st.planSaved, fromSaved: r.st.fromSaved, key: p.start,
         delta: withPrev && key.savingRate != null && prev.savingRate != null ? Math.round(key.savingRate * 100) - Math.round(prev.savingRate * 100) : null, deltaLabel: '比上月',
         note: r.ongoing && key.savingRate != null ? '这个月还没过完，后面还要花钱，会往下走一些。' : '',
       }),
@@ -3096,10 +3134,15 @@ function monthReportView(d, day, head, seg, navRow) {
         ], '关键数字'))]);
   if (empty) return h('div', { class: 'report' }, head, seg, nav, top, exportBtns);
 
-  // 收支：瀑布图
+  // 收支：瀑布图；不占预算拆成「用存好的」「预算外」两根，图下面点开看去处
+  const split = noneSplit(d, r.st.tx);
   const s2 = repSection('收支',
-    key.income || key.total ? waterfall([{ label: '收入', v: key.income, color: 'var(--sage)' }, ...r.spend.filter((g) => g.v > 0).map((g) => ({ label: g.id === 'none' ? '不占' : g.name, v: g.v, color: g.color }))],
+    key.income || key.total ? waterfall([{ label: '收入', v: key.income, color: 'var(--sage)' },
+      ...r.spend.filter((g) => g.v > 0 && g.id !== 'none').map((g) => ({ label: g.name, v: g.v, color: g.color })),
+      ...(split.saved.v >= 0.005 ? [{ label: '存好的', v: split.saved.v, color: NONE_SAVED_COLOR }] : []),
+      ...(split.outside.v >= 0.005 ? [{ label: '预算外', v: split.outside.v, color: 'var(--g-none-strong)' }] : [])],
       { endLabel: key.saved >= 0 ? '存下' : '多花', title: '收支瀑布图' }) : null,
+    noneRows(split),
     repDetail(repTable(['', '本月', ...cmpCols], [
       { cells: ['收入'], cls: 'group' },
       ...r.income.map((x) => [x.name, exact(x.v), ...cmp(x.v, x.prev)]),
@@ -3160,24 +3203,40 @@ function monthReportView(d, day, head, seg, navRow) {
       repTable(['', '预算', '实际', '差额', '用了'], [
         ...r.budget.map((x) => [x.name, money(x.budget), exact(x.v), diffText(x.budget, x.v), repPct(x.pct)]),
         { cells: ['合计', money(bSum), exact(vSum), diffText(bSum, vSum), repPct(bSum ? vSum / bSum : 0)], cls: 'total' },
-      ], '预算执行'),
-      r.st.spent.none >= 1 ? h('p', { class: 'muted small' }, noneLine(noneParts(d, r.st.tx))) : null));
+      ], '预算执行')));
 
   // 花在哪：环形 + 每天的日历
   const groups = GROUPS.filter((g) => r.rs.byGroup[g.id]);
   const cal = r.calendar;
   const calMax = Math.max(1, ...cal.days.map((x) => x.v));
   const lead = (new Date(`${p.start}T12:00:00`).getDay() + 6) % 7; // 周一在最左
+  // 日历：颜色是生活花销；点一天，下面一行写那天一共花了多少（2026-10-26 用户要的，不占预算的也算），再点一下收起
+  const calPick = h('p', { class: 'rep-cal-pick small', 'aria-live': 'polite' });
+  let picked = null;
+  const pick = (x, el) => {
+    if (picked) picked.classList.remove('on');
+    picked = picked === el ? null : el;
+    if (picked) picked.classList.add('on');
+    calPick.textContent = picked ? `${Number(x.day.slice(5, 7))}月${Number(x.day.slice(8))}日 · ${exact(x.all)}` : '';
+  };
+  const calGrid = h('div', { class: 'rep-cal', role: 'group', 'aria-label': '每天的生活花销日历，点一天看那天一共花了多少' },
+    [...WEEKDAYS].map((w) => h('span', { class: 'rep-cal-wd', 'aria-hidden': 'true' }, w)),
+    Array.from({ length: lead }, () => h('span', {})),
+    cal.days.map((x) => {
+      const off = x.future || x.before;
+      const el = h(off ? 'span' : 'button', {
+        type: off ? null : 'button',
+        class: `rep-cal-day${off ? ' off' : x.v / calMax > 0.55 ? ' dark' : ''}`,
+        style: off ? '' : `--a:${Math.round(8 + (x.v / calMax) * 72)}%`,
+        'aria-label': off ? null : `${md(x.day)}`,
+        onclick: off ? null : () => pick(x, el),
+      }, String(Number(x.day.slice(8))));
+      return el;
+    }));
   const s5 = repSection('花在哪',
     r.rs.total ? spendDonut(r.rs, groups, { sub: '这个月花销', title: '花在哪了' }) : null,
-    h('div', { class: 'rep-cal', role: 'img', 'aria-label': '每天的生活花销日历' },
-      [...WEEKDAYS].map((w) => h('span', { class: 'rep-cal-wd' }, w)),
-      Array.from({ length: lead }, () => h('span', {})),
-      cal.days.map((x) => h('span', {
-        class: `rep-cal-day${x.future || x.before ? ' off' : x.v / calMax > 0.55 ? ' dark' : ''}`,
-        style: x.future || x.before ? '' : `--a:${Math.round(8 + (x.v / calMax) * 72)}%`,
-        title: `${md(x.day)} ${exact(x.v)}`,
-      }, String(Number(x.day.slice(8)))))),
+    calGrid,
+    calPick,
     repDetail(
       repTable(['类别', '金额', '占比', ...(withPrev ? ['比上月'] : [])],
         r.cats.slice(0, 10).map((x) => [x.name, exact(x.v), repPct(x.share), ...(withPrev ? [repSigned(x.v - x.prev)] : [])]), '花得最多的类别'),
@@ -3262,7 +3321,11 @@ function reportText(r) {
   table(['用途', '月初', r.ongoing ? '现在' : '月底'], r.purposes.map((x) => [x.name, exact(x.start), exact(x.end)]));
   L.push('## 四、预算执行', '');
   table(['', '预算', '实际', '用了'], r.budget.map((x) => [x.name, money(x.budget), exact(x.v), repPct(x.pct)]));
-  if (r.st.spent.none >= 1) L.push(noneLine(noneParts(d, r.st.tx)), '');
+  if (r.st.spent.none >= 1) {
+    const sp = noneSplit(d, r.st.tx);
+    const part = (label, b) => (b.v >= 0.005 ? `${label} ${exact(b.v)}：${b.groups.map((g) => `${g.name} ${exact(g.v)}`).join('、')}` : null);
+    L.push(`不占预算：${[part('用存好的钱', sp.saved), part('预算外', sp.outside)].filter(Boolean).join('；')}`, '');
+  }
   L.push('## 五、花销明细', '');
   table(['类别', '金额', '占比', '笔数'], r.cats.map((x) => [x.name, exact(x.v), repPct(x.share), String(x.n)]));
   L.push(`生活花销平均每天 ${exact(r.calendar.avg)}；没花钱的日子 ${r.calendar.zero} 天（共 ${r.calendar.counted} 天）${r.calendar.max?.v ? `；花得最多的一天 ${md(r.calendar.max.day)} ${exact(r.calendar.max.v)}` : ''}。`, '');
@@ -3386,7 +3449,8 @@ function yearReportView(d, year, head, seg, navRow) {
         kpi(key.saved >= 0 ? '存下' : '多花了', exact(Math.abs(key.saved)), key.saved < 0 ? 'warn' : ''),
         kpi(y.ongoing ? '净资产' : '年底净资产', exact(key.net))),
       savingMeter(key.savingRate, {
-        plan: yearPlan(d).rate != null ? yearPlan(d).rate / 100 : null, planLabel: '计划',
+        plan: yearPlan(d).rate != null ? yearPlan(d).rate / 100 : null, planLabel: '计划', span: '这一年',
+        realSaved: y.st.income - y.st.total + y.st.fromSaved, fromSaved: y.st.fromSaved, key: String(year),
         delta: prevYearRate(d, year, key.savingRate), deltaLabel: '比去年',
         note: y.ongoing && d.settings.summerMonths.length ? `一年里有 ${d.settings.summerMonths.length} 个月没有收入，那几个月会把它拉下来一些，计划已经算上了。` : '',
       }),
@@ -3452,6 +3516,7 @@ function yearReportView(d, year, head, seg, navRow) {
   const groups = GROUPS.filter((g) => y.st.byGroup[g.id]);
   const s5 = repSection('花在哪',
     spendDonut(y.st, groups, { sub: '这一年', title: '钱花在哪了' }),
+    noneRows(noneSplit(d, y.st.tx)),
     stackedBars(y.months.map((m) => ({ label: monthLabel(m), parts: m.active ? GROUPS.map((g) => ({ v: m.byGroup[g.id], color: g.color })) : [] })), { title: '每个月花在哪' }),
     repDetail(
       repTable(['月', ...groups.map((g) => g.name), '合计'], [

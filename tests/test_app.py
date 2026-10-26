@@ -576,9 +576,44 @@ def _(c):
         expect(meter).to_be_visible()
         if "没有收入" not in meter.inner_text():
             expect(meter.locator(".sm-num")).to_have_text(re.compile(r"^−?\d+%$"))
-            expect(meter).to_contain_text(re.compile("每 100 块收入，存下 \\d+ 块|花的比收入多"))
-            expect(meter.locator(".sm-mark.plan")).to_contain_text("按预算花")
+            expect(meter).to_contain_text(re.compile("每 100 块收入，存下 \\d+ 块|用存好的钱花了|存款在往下走"))
+            if "每 100 块" in meter.inner_text():
+                expect(meter.locator(".sm-mark.plan")).to_contain_text("按预算花")
         head.screenshot(path=str(ART / "month-head.png"))
+        # 不占预算拆成两块：用存好的（心愿基金）、预算外（手续费），点一行在原地展开去处和金额
+        wish_cat = next(x["id"] for x in d["categories"] if x["kind"] == "expense" and x.get("group") != "none")
+        d["tx"] += [
+            {"id": "wk-wf", "type": "expense", "date": TODAY, "account": acc, "amount": 7, "category": wish_cat, "wishFund": True, "note": "", "createdAt": f"{TODAY}T12:00:00Z"},
+            {"id": "wk-fee", "type": "expense", "date": TODAY, "account": acc, "amount": 2, "category": "c-fee", "note": "", "createdAt": f"{TODAY}T12:00:00Z"},
+        ]
+        c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+        p.reload()
+        rows = p.locator(".none-row")
+        expect(rows.filter(has_text="用存好的")).to_have_count(1)
+        expect(rows.filter(has_text="预算外")).to_have_count(1)
+        fee = p.locator(".none-block").filter(has_text="预算外")
+        expect(fee.locator(".none-list")).to_be_hidden()
+        fee.locator(".none-row").click()
+        expect(fee.locator(".none-list")).to_contain_text("手续费")
+        expect(fee.locator(".none-row")).to_have_attribute("aria-expanded", "true")
+        p.locator(".none-block").filter(has_text="用存好的").locator(".none-row").click()
+        expect(p.locator(".none-block").filter(has_text="用存好的").locator(".none-list")).to_contain_text("心愿基金")
+        # 月历：点今天，下面写今天一共花了多少（不占预算的也算）；再点一下收起
+        day = p.locator("button.rep-cal-day").last
+        day.click()
+        expect(p.locator(".rep-cal-pick")).to_have_text(re.compile(r"^\d+月\d+日 · ¥[\d,]+(\.\d\d)?$"))
+        day.click()
+        expect(p.locator(".rep-cal-pick")).to_have_text("")
+        # 真的花超了：储蓄率那块暗下来（裂开、往下滴）
+        d["tx"].append({"id": "wk-over", "type": "expense", "date": TODAY, "account": acc, "amount": 999999, "category": wish_cat, "note": "", "createdAt": f"{TODAY}T12:00:00Z"})
+        c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
+        p.reload()
+        meter = p.locator(".rep-head .saving-meter")
+        expect(meter).to_have_class(re.compile("dread"))
+        expect(meter).to_contain_text("存款在往下走")
+        expect(meter.locator(".sm-crack")).to_be_attached()
+        expect(meter.locator(".sm-drip")).to_have_count(3)
+        meter.screenshot(path=str(ART / "month-dread.png"))
     finally:
         c.data()  # 等网页把要上传的传完，再还原
         c.repo.external_write("finance.json", json.dumps(d0, ensure_ascii=False).encode())
@@ -605,8 +640,9 @@ def _(c):
     p.get_by_role("link", name="月", exact=True).click()
     # 月度报表：网页上只有四个关键数字和图；表格、小字都藏着，最下面是两个导出按钮
     expect(p.locator(".rep-sec h3").first).to_have_text("收支")
-    for img in ("收支瀑布图", "月初和月底的钱按用途分", "每一块预算用了多少", "花钱曲线", "每天的生活花销日历", "收入、支出和储蓄率"):
+    for img in ("收支瀑布图", "月初和月底的钱按用途分", "每一块预算用了多少", "花钱曲线", "收入、支出和储蓄率"):
         expect(p.get_by_role("img", name=img)).to_be_visible()
+    expect(p.get_by_role("group", name=re.compile("^每天的生活花销日历"))).to_be_visible()
     expect(p.locator(".rep-table").first).to_be_attached()
     for el in p.locator(".rep-table").all():
         expect(el).to_be_hidden()

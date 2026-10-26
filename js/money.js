@@ -312,6 +312,26 @@ export function noneLine(parts) {
   return `另有 ${money(all)} 不占预算：${parts.map((x) => `${x.name} ${money(x.v)}`).join('、')}`;
 }
 
+// 不占预算拆成两块（2026-10-26 用户要的）：用存好的（专项、心愿基金、大额人情，以前就留好了）和预算外（手续费、出差自付……）。
+// 每块按去处分组，组里是一笔一笔：{ saved: { v, groups }, outside: { v, groups } }，groups = [{ name, v, tx }]，多的在前
+export function noneSplit(data, txs) {
+  const out = { saved: {}, outside: {} };
+  for (const t of txs) {
+    const v = spendOf(data, t);
+    if (!v || txGroup(data, t) !== 'none') continue;
+    const saved = isFromSaved(data, t);
+    const name = !saved ? (t.type === 'writeoff' ? '出差自付' : category(data, t.category)?.name || '其他')
+      : t.wishFund || t.category === 'c-wish' ? '心愿基金'
+      : t.special ? `专项 · ${data.goals?.find((g) => g.id === t.special)?.name || '专项'}`
+      : `人情 · ${data.people?.find((x) => x.id === bigFavorOf(data, t).person)?.name || '某人'}`;
+    const g = (out[saved ? 'saved' : 'outside'][name] ||= { name, v: 0, tx: [] });
+    g.v += v;
+    g.tx.push(t);
+  }
+  const block = (m) => { const groups = Object.values(m).sort((a, b) => b.v - a.v); return { v: groups.reduce((s, g) => s + g.v, 0), groups }; };
+  return { saved: block(out.saved), outside: block(out.outside) };
+}
+
 export const budgetTotal = (data) => GROUPS.reduce((s, g) => s + (Number(data.budget?.[g.id]) || 0), 0);
 export const livingBudget = (data) => LIVING.reduce((s, g) => s + (Number(data.budget?.[g]) || 0), 0);
 

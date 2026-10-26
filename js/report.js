@@ -93,7 +93,10 @@ export function monthReport(data, day, rate, now = ymd(new Date())) {
   const prevCat = prev ? Object.fromEntries(Object.entries(prev.byCat)) : {};
   const cats = Object.entries(rs.byCat).map(([id, c]) => ({ id, name: catName(data, id), v: r2(c.v), n: c.n, share: rs.total ? c.v / rs.total : 0, prev: prev ? r2(prevCat[id] || 0) : null }))
     .sort((a, b) => b.v - a.v);
-  const days = dailyLiving(data, p.start, p.days).map((x) => ({ ...x, v: r2(x.v), future: x.day > asOf, before: Boolean(data.openingDate && x.day < data.openingDate) }));
+  // all：那天一共花了多少（不占预算的也算），点日历上那天时显示（2026-10-26 用户要的）；颜色还是只看生活花销
+  const allOf = {};
+  for (const t of st.tx) { const v = spendOf(data, t); if (v) allOf[t.date] = (allOf[t.date] || 0) + v; }
+  const days = dailyLiving(data, p.start, p.days).map((x) => ({ ...x, v: r2(x.v), all: r2(allOf[x.day] || 0), future: x.day > asOf, before: Boolean(data.openingDate && x.day < data.openingDate) }));
   const counted = days.filter((x) => !x.future && !x.before);
   const calendar = {
     days,

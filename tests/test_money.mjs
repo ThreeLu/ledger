@@ -426,6 +426,21 @@ test('不占预算的花销按来源分开写（心愿基金不说成手续费�
   assert.equal(m.noneLine([]), '');
 });
 
+test('不占预算拆成用存好的和预算外，按去处分组', () => {
+  const d = book();
+  d.goals = [{ id: 'g1', name: '编的电脑', target: 3000, by: '2026-11-01' }];
+  d.tx = [ex('2026-10-02', 30), ex('2026-10-03', 120, 'c-other', { wishFund: true }), ex('2026-10-04', 80, 'c-wish'),
+    ex('2026-10-05', 5, 'c-fee'), ex('2026-10-06', 2900, 'c-other', { special: 'g1' }), ex('2026-10-07', 3, 'c-fee')];
+  const st = m.periodStats(d, m.periodFor(d, '2026-10-07'));
+  const sp = m.noneSplit(d, st.tx);
+  assert.equal(sp.saved.v, 3100);
+  assert.deepEqual(sp.saved.groups.map((g) => [g.name, g.v, g.tx.length]), [['专项 · 编的电脑', 2900, 1], ['心愿基金', 200, 2]]);
+  assert.deepEqual(sp.outside.groups.map((g) => [g.name, g.v, g.tx.length]), [['手续费', 8, 2]]);
+  // 用存好的 = 存钱达标时加回去的那部分
+  assert.equal(sp.saved.v, st.fromSaved);
+  assert.equal(sp.saved.v + sp.outside.v, st.spent.none);
+});
+
 test('月度报表：收支、预算、净资产对得上；按用途的合计 = 净资产；还没过完时算到今天', () => {
   const d = book();
   d.tx = [inc('2026-09-03', 5000), ex('2026-09-10', 1200), ex('2026-09-20', 300, 'c-snack'),

@@ -34,6 +34,7 @@
   --jar-w1: #c49a5e; --jar-w2: #ddbd86; --jar-g: #aaa296;
   --shadow: 0 1px 2px rgba(60, 55, 45, 0.06), 0 6px 20px rgba(60, 55, 45, 0.06);
   --radius: 16px;
+  --dread-bg: #150b0c; --dread-red: #d23c2c; --dread-text: #f2e6e3;
   color-scheme: light;
 }
 
@@ -941,6 +942,48 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 .sm-mark.end small { left: auto; right: 0; transform: none; }
 .sm-mark.start small { left: 0; transform: none; }
 .sm-note { margin: 0; }
+/* 负数：条从右边的 0 往左长 */
+.saving-meter.none .sm-fill { background: var(--g-none-strong); }
+.sm-track.neg .sm-fill { left: auto; right: 0; }
+.sm-mark.zero i { opacity: .4; }
+/* 真的花超了（2026-10-26 用户选的「恐怖」）：暗下来、红光一明一暗、右上角裂开、条往下滴、打开时抖一下；字还是安静的 */
+.saving-meter.dread { --tone: var(--dread-red); position: relative; overflow: hidden; background: var(--dread-bg); color: var(--dread-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dread-red) 45%, transparent), 0 0 24px color-mix(in srgb, var(--dread-red) 30%, transparent);
+  animation: dread-glow 3.2s ease-in-out infinite; }
+.saving-meter.dread .muted, .saving-meter.dread .sm-mark small { color: color-mix(in srgb, var(--dread-text) 60%, transparent); }
+.saving-meter.dread .sm-num { text-shadow: 0 0 18px color-mix(in srgb, var(--dread-red) 70%, transparent); }
+.saving-meter.dread .sm-track { background: color-mix(in srgb, var(--dread-red) 18%, var(--dread-bg)); margin-bottom: 30px; }
+.saving-meter.dread .sm-fill { background: linear-gradient(90deg, #7d1a12, var(--dread-red)); }
+.saving-meter.dread .sm-mark i { background: var(--dread-text); }
+.saving-meter.dread.shake { animation: dread-shake .5s ease-in-out 1, dread-glow 3.2s ease-in-out .5s infinite; }
+.sm-crack { position: absolute; top: 0; right: 0; width: 46%; height: 70%; pointer-events: none; }
+.sm-crack svg { width: 100%; height: 100%; display: block; }
+.sm-crack path { fill: none; stroke: color-mix(in srgb, var(--dread-red) 75%, var(--dread-text)); stroke-width: 1.2; stroke-linejoin: bevel; opacity: .7;
+  vector-effect: non-scaling-stroke; stroke-dasharray: 200; stroke-dashoffset: 200; animation: dread-crack 1.1s ease-out .2s forwards; }
+.sm-drip { position: absolute; top: 9px; width: 4px; height: 6px; margin-left: -2px; border-radius: 50% 50% 50% 50% / 30% 30% 70% 70%; background: var(--dread-red);
+  opacity: 0; animation: dread-drip 2.7s ease-in infinite; }
+@keyframes dread-glow { 50% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dread-red) 70%, transparent), 0 0 36px color-mix(in srgb, var(--dread-red) 50%, transparent); } }
+@keyframes dread-shake { 0%, 100% { transform: translateX(0); } 15% { transform: translateX(-6px) rotate(-.6deg); } 30% { transform: translateX(5px) rotate(.5deg); } 45% { transform: translateX(-4px); } 60% { transform: translateX(3px); } 80% { transform: translateX(-1px); } }
+@keyframes dread-crack { to { stroke-dashoffset: 0; } }
+@keyframes dread-drip { 0% { opacity: 0; transform: translateY(0) scaleY(.6); } 15% { opacity: 1; } 70% { opacity: 1; transform: translateY(16px) scaleY(1.2); } 100% { opacity: 0; transform: translateY(22px) scaleY(.8); } }
+@media (prefers-reduced-motion: reduce) {
+  .saving-meter.dread, .saving-meter.dread.shake, .sm-drip { animation: none; }
+  .sm-crack path { animation: none; stroke-dashoffset: 0; }
+}
+/* 不占预算的两块：一块一行，点一下展开去处和金额 */
+.none-rows { margin: 6px 0 0; border-top: 1px solid var(--line); }
+.none-block { border-bottom: 1px solid var(--line); }
+button.none-row { width: 100%; min-height: 44px; padding: 0 2px; background: none; color: var(--text); font-weight: 400; border-radius: 0; justify-content: flex-start; gap: 8px; }
+.none-row i { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+.none-row span:nth-of-type(1) { flex: 1; text-align: left; }
+.none-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.none-chev { color: var(--muted); transition: transform .2s ease; }
+.none-block.open .none-chev { transform: rotate(90deg); }
+.none-list { display: none; padding: 0 2px 10px 18px; }
+.none-block.open .none-list { display: block; }
+.none-g, .none-t { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.none-g { font-size: 14px; padding: 4px 0 2px; }
+.none-t { padding: 1px 0 1px 10px; }
 .rep-table-wrap { overflow-x: auto; margin: 8px 0 4px; }
 .rep-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .rep-table th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: right; padding: 4px; border-bottom: 0.5px solid var(--line); white-space: nowrap; }
@@ -968,6 +1011,10 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
 .rep-cal-day { font-size: 12px; font-weight: 500; aspect-ratio: 1 / 1; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) var(--a, 8%), var(--chip)); min-width: 0; overflow: hidden; }
 .rep-cal-day.dark { color: var(--accent-text); }
 .rep-cal-day.off { background: transparent; color: var(--muted); opacity: .5; }
+button.rep-cal-day { min-height: 0; padding: 0; width: 100%; color: var(--text); font-size: 12px; font-weight: 500; border-radius: 8px; }
+button.rep-cal-day.dark { color: var(--accent-text); }
+button.rep-cal-day.on { box-shadow: 0 0 0 2px var(--text); }
+.rep-cal-pick { min-height: 20px; margin: 4px 0 0; text-align: center; font-variant-numeric: tabular-nums; }
 .rep-sec .tx-list { margin: 0 -4px; }
 
 /* 存成 PDF：打印时只留报表，一律浅色 */
@@ -1007,6 +1054,9 @@ button.cell { width: 100%; background: none; border-radius: 0; text-align: left;
     --radius: 16px;
   }
   body { background: #fff; }
+  .none-list { display: block !important; }
+  .none-chev, .rep-cal-pick, .sm-drip, .sm-crack { display: none !important; }
+  .saving-meter.dread { animation: none !important; box-shadow: none; }
   nav#nav, .sync-pill, .toast, .back-btn, .page-head .head-actions, .report .segmented, .period-nav .icon-btn, .rep-export, .letter button, .legend-row .chev, .sheet-overlay { display: none !important; }
   .report > .page-head, .report > .period-nav { display: none !important; }
   main { padding: 0; max-width: none; }
