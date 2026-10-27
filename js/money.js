@@ -1159,11 +1159,9 @@ export function headline(hl) {
   const warn = hl.items.filter((x) => x.level === 'warn');
   if (bad.length) return { title: bad.length > 1 ? `有 ${bad.length} 件事需要处理` : '有件事需要处理', text: bad[0].action };
   if (warn.length) return { title: `有 ${warn.length} 件事留意一下`, text: warn[0].action || warn[0].text };
-  const pace = hl.items.find((x) => x.key === 'pace');
-  const how = pace.ratio < 0.9 ? '比计划慢一些' : '和计划差不多';
   const over = hl.overGroups || [];
   if (over.length) {
     return { title: '整体还在计划里', text: `${over.map((g) => `${g.name}超了 ${money(g.over)}`).join('，')}，别的组省下的能补上。` };
   }
-  return { title: '一切正常 ✓', text: `这个月钱花得${how}，存钱进度正常，不需要做什么。` };
+  return { title: '一切正常', text: null }; // 2026-10-27 用户要的：只有四个字，下面不写话
 }

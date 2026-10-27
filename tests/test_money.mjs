@@ -895,4 +895,22 @@ test('洗澡：同一天几笔算一次、隔几天；记不到 3 次不估；�
   assert.ok(Math.abs(y.forecast.times.mid - 36) <= 1, JSON.stringify(y.forecast));
 });
 
+test('首页储蓄率：不满一年从开始记账算起；满一年只看最近 12 个预算月（这个月算到今天）；一次性的钱不算；没有收入不显示', () => {
+  const d = book();
+  assert.equal(sm.rollingSavingRate(d, '2026-08-20'), null);
+  d.tx = [inc('2026-08-01', 5000), ex('2026-08-05', 1000), inc('2026-09-01', 5000), ex('2026-09-03', 2000)];
+  let r = sm.rollingSavingRate(d, '2026-09-10');
+  assert.equal(r.sinceOpen, true);
+  assert.equal(r.from, '2026-08-01');
+  assert.ok(Math.abs(r.rate - 0.7) < 1e-9, JSON.stringify(r));
+  d.categories.push({ id: 'i-lump', name: '一次性', kind: 'income', group: 'none', lump: true });
+  d.tx.push(inc('2026-09-05', 9000, 'i-lump'));
+  assert.ok(Math.abs(sm.rollingSavingRate(d, '2026-09-10').rate - 0.7) < 1e-9);
+  // 一年多以后：2026 年 8 月掉出去，从 2026-09-01 那个预算月算起
+  r = sm.rollingSavingRate(d, '2027-08-10');
+  assert.equal(r.sinceOpen, false);
+  assert.equal(r.from, '2026-09-01');
+  assert.ok(Math.abs(r.rate - 0.6) < 1e-9, JSON.stringify(r));
+});
+
 console.log(`\n${n} 项通过`);

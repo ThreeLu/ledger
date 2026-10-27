@@ -39,6 +39,19 @@ export function rangeStats(data, from, to) {
   return { tx, byGroup, byCat, income, lump, total, living, fromSaved };
 }
 
+// 首页的储蓄率（2026-10-27 用户要的）：最近 12 个预算月（这个月算到今天），不满一年从开始记账算起。
+// 看一整年，不定时的收入哪个月到、暑假没有收入都摊平了。口径和月、年报表一样：(收入 − 花销) ÷ 收入，一次性的钱不算。
+export function rollingSavingRate(data, day) {
+  let p = periodFor(data, day);
+  for (let i = 0; i < 11; i++) p = shiftPeriod(data, p, -1); // shiftPeriod 一次只挪一个月
+  const back = p.start;
+  const sinceOpen = !!data.openingDate && data.openingDate > back;
+  const from = sinceOpen ? data.openingDate : back;
+  const st = rangeStats(data, from, day);
+  if (st.income <= 0) return null;
+  return { rate: (st.income - st.total) / st.income, from, sinceOpen, income: r2(st.income), total: r2(st.total) };
+}
+
 // 每天的生活花销（吃饭 + 日常 + 自由钱）
 export function dailyLiving(data, from, days) {
   return Array.from({ length: days }, (_, i) => {

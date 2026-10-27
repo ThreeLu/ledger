@@ -1993,7 +1993,15 @@ def _(c):
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [{ name: '日常', over: 540 }] }))""")
     assert hd["title"] == "整体还在计划里" and "日常超了 ¥540" in hd["text"], hd
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [] }))""")
-    assert hd["title"].startswith("一切正常"), hd
+    assert hd["title"] == "一切正常" and not hd["text"], hd
+    # 储蓄率：问候下面一个大字，和 rollingSavingRate 算的一样；没有收入就不显示
+    r = p.evaluate("""(d) => import('./js/summary.js').then((s) => s.rollingSavingRate(d, new Date().toLocaleDateString('sv')))""", d)
+    if r:
+        v = p.evaluate("(x) => Math.round(x * 100)", r["rate"])
+        expect(p.locator(".saving-rate b")).to_have_text(f"{'−' if v < 0 else ''}{abs(v)}%")
+        expect(p.locator(".today-head + .saving-rate")).to_have_count(1)
+    else:
+        expect(p.locator(".saving-rate")).to_have_count(0)
 
 
 @step("记账时用心愿基金的钱（不占预算、从能随便用的扣，不够不让记）；订阅页写清这个月的订阅钱")
