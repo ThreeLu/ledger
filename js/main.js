@@ -564,7 +564,7 @@ function openExplain(x, hl) {
 
 const HOME_HELP = [
   ['一句结论', ['一切正常时，「这个月还能花」最上面只写「一切正常」。有事留意或要处理时，放在下面的「要做的事」里，直接告诉你做什么，点「为什么」看解释。']],
-  ['储蓄率', ['问候下面的大字：存下的钱占收入的几成。看的是最近 12 个月（不满一年从开始记账算起），不定时的收入哪个月到、暑假没有收入都摊平了，所以不会一个月一个样。', '存下 = 收入 − 花销（包括用存好的钱花的），一次性的钱（导师补助）不算收入。点它看年度总结。']],
+  ['储蓄率', ['「这个月还能花」最上面一行右边的数：存下的钱占收入的几成。看的是最近 12 个月（不满一年从开始记账算起），不定时的收入哪个月到、暑假没有收入都摊平了，所以不会一个月一个样。', '存下 = 收入 − 花销（包括用存好的钱花的），一次性的钱（导师补助）不算收入。点它看年度总结。']],
   ['要做的事', ['要处理的指标、令牌快到期、节假日人情、发钱日、里程碑都合在这一张卡里，一件一行：红色是要处理，琥珀色是留意一下，紫色是待办。点一行看为什么；已经弄好了点右边「做完了」，就不再提醒（点错了马上点「撤销」）。事多时先露 4 件，点「还有 N 件」看全部。', '发钱日：收入平时哪天到，看以前记的（还没记过就看收入计划里写的「几号」），到那天前一天才问「到了吗」；比平时晚了 3 天还没记，会变成琥珀色提一句。不定时的照旧每天问，点「还没」当天不再问。']],
   ['即将扣款', ['接下来 14 天要自动扣的订阅，一笔一行，左边是哪天。美元的最下面写 Apple ID 余额够不够；不够会写哪天前充多少。点「订阅」看这个月订阅一共多少钱。']],
   ['这个月还能花', ['生活预算（吃饭 + 日常 + 自由钱 + 形象）减去这个预算月已经花的，精确到分。「每天约」= 还能花的 ÷ 剩下的天数。', '最下面一行是预测：照你记的样子，月底大约花多少、超预算的可能。点它看「往后」里的范围和怎么算的。', '圆环是预算用了多少；下面那条和周总结一样：紫色是钱用了多少，竖线是按日子到今天该花到哪（开始记账那个月从记账那天数起）。紫色没过竖线，或者只多出一点（一成以内），都算节奏正常；预算月头 3 天不算快慢；首页、健康指标、周总结、月总结都是这一条规矩。', '预算月从每月 15 号开始，到下个月 14 号，和发钱对齐。开始记账那个月预算按天数折算。']],
@@ -813,7 +813,6 @@ function homeView() {
 
   return h('div', {},
     homeHeader(p),
-    savingRateLine(d),
     spendLeftCard(hl, st, hl.level === 'good' ? hd : null),
     todoCard(hl),
     h('a', { class: 'ask-field', href: '#/ask' }, icon('sparkle'), '想买个东西？问问买不买……'),
@@ -846,14 +845,14 @@ function homeHeader(p) {
       h('a', { class: 'icon-btn wish-btn', href: '#/wishes', 'aria-label': '心愿单' }, icon('gift')), // 心愿单藏在这里（2026-10-25，从「更多」挪过来）
       helpButton('首页怎么看', HOME_HELP)));
 }
-// 首页的总数字：储蓄率（2026-10-27 用户要的，放在问候下面、还能花上面）。只一个大字，不加小字；
-// 是负的也平平地写，不变色（首页要让人一直愿意打开，吓人的样子只在总结页）。
-function savingRateLine(d) {
-  const r = rollingSavingRate(d, today());
+// 首页的总数字：储蓄率（2026-10-27 用户要的），和「一切正常」放在还能花卡片最上面同一行、靠右。只一个数，不加小字；
+// 是负的也平平地写，不变色（首页要让人一直愿意打开，吓人的样子只在总结页）。没有「一切正常」那句时左边写「储蓄率」。
+function savingRateBit(withLabel) {
+  const r = rollingSavingRate(store.data, today());
   if (!r) return null;
   const v = Math.round(r.rate * 100);
-  return h('a', { class: 'saving-rate', href: '#/summary?mode=year', 'aria-label': `储蓄率 ${v}%` },
-    h('span', { class: 'muted small' }, r.sinceOpen ? '储蓄率 · 开始记账以来' : '储蓄率 · 最近 12 个月'),
+  return h('a', { class: 'saving-rate', href: '#/summary?mode=year', 'aria-label': `储蓄率 ${v}%（${r.sinceOpen ? '开始记账以来' : '最近 12 个月'}）` },
+    withLabel ? h('span', { class: 'muted' }, '储蓄率') : null,
     h('b', {}, `${v < 0 ? '−' : ''}${Math.abs(v)}`, h('small', {}, '%')));
 }
 // 精确到分：首页「还能花」「每天约」用它（用户 2026-10-06 要的，不四舍五入到元）
@@ -871,8 +870,11 @@ function spendLeftCard(hl, st, ok = null) {
   const soFar = plannedSoFar(store.data, p, today());
   const timePct = lb > 0 ? Math.min(100, (soFar.planned / lb) * 100) : 0;
   const good = onPace(st.living, soFar);
+  const rate = ok ? null : savingRateBit(false);
   return h('div', { class: 'card spend-left hero' },
-    ok ? h('div', { class: `summary ${hl.overGroups?.length ? 'soft' : 'good'}` }, h('span', { class: 'summary-title' }, ok.title), ok.text ? h('span', { class: 'summary-text' }, ok.text) : null) : null,
+    ok ? h('div', { class: `summary ${hl.overGroups?.length ? 'soft' : 'good'}` }, h('span', { class: 'summary-title' }, ok.title), savingRateBit(true),
+      ok.text ? h('span', { class: 'summary-text' }, ok.text) : null)
+      : rate ? h('div', { class: 'summary plain' }, h('span', { class: 'summary-title muted' }, '储蓄率'), rate) : null,
     h('div', { class: 'hero-top' },
       lb > 0 ? h('div', { class: `ring big${over ? ' over' : ''}`, style: `--v:${over ? 100 : used.toFixed(1)}%`, 'aria-label': `生活预算用了 ${Math.round(used)}%` },
         h('div', {}, h('b', {}, `${Math.round(used)}%`), '用了')) : null,

@@ -1987,19 +1987,20 @@ def _(c):
     p.reload()
     # 一切正常那句只在没有要留意的指标时出现（前面几步花了多少、今天几号会让花钱节奏有时偏快）
     warns = p.locator(".health-tile.warn, .health-tile.bad").count()
-    expect(p.locator(".summary-title")).to_have_count(0 if warns else 1)
+    expect(p.locator(".summary:not(.plain) .summary-title")).to_have_count(0 if warns else 1)
     # 健康指标两列：窄的格子是双数
     assert p.locator(".health-tile:not(.wide)").count() % 2 == 0
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [{ name: '日常', over: 540 }] }))""")
     assert hd["title"] == "整体还在计划里" and "日常超了 ¥540" in hd["text"], hd
     hd = p.evaluate("""() => import('./js/money.js').then((m) => m.headline({ items: [{ key: 'pace', level: 'good', ratio: 1 }], overGroups: [] }))""")
     assert hd["title"] == "一切正常" and not hd["text"], hd
-    # 储蓄率：问候下面一个大字，和 rollingSavingRate 算的一样；没有收入就不显示
+    # 储蓄率：还能花卡片最上面一行右边（和「一切正常」同一行），和 rollingSavingRate 算的一样；没有收入就不显示
     r = p.evaluate("""(d) => import('./js/summary.js').then((s) => s.rollingSavingRate(d, new Date().toLocaleDateString('sv')))""", d)
     if r:
         v = p.evaluate("(x) => Math.round(x * 100)", r["rate"])
         expect(p.locator(".saving-rate b")).to_have_text(f"{'−' if v < 0 else ''}{abs(v)}%")
-        expect(p.locator(".today-head + .saving-rate")).to_have_count(1)
+        expect(p.locator(".spend-left > .summary:first-child .saving-rate")).to_have_count(1)
+        p.locator(".spend-left").screenshot(path=str(ART / ("home-rate-plain.png" if warns else "home-rate.png")))
     else:
         expect(p.locator(".saving-rate")).to_have_count(0)
 

@@ -1102,7 +1102,9 @@ button.rep-cal-day.on { box-shadow: 0 0 0 2px var(--text); }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
-/* 首页储蓄率（2026-10-27）：问候下面一行，只一个大字，不变色 */
-.saving-rate { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 2px 14px; color: inherit; text-decoration: none; }
-.saving-rate b { font-family: var(--serif); font-size: 36px; font-weight: 600; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
-.saving-rate b small { font-size: 20px; margin-left: 2px; color: var(--muted); font-weight: 500; }
+/* 首页储蓄率（2026-10-27）：和「一切正常」同一行、靠右，只一个数，不变色 */
+.hero > .summary .saving-rate { margin-left: auto; display: inline-flex; align-items: baseline; gap: 6px; color: inherit; text-decoration: none; font-size: 13px; }
+.hero > .summary .saving-rate b { font-family: var(--serif); font-size: 24px; font-weight: 600; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
+.hero > .summary .saving-rate b small { font-size: 13px; margin-left: 1px; color: var(--muted); font-weight: 500; }
+.hero > .summary .summary-text { flex-basis: 100%; }
+.hero > .summary.plain .summary-title { color: var(--muted); font-weight: 500; }
