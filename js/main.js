@@ -17,8 +17,9 @@ import { weekOf, weekSummary, monthSummary } from './summary.js';
 import { monthReport, yearReport } from './report.js';
 import { aheadPlan } from './ahead.js';
 import { scoreModels, monthForecast, simulateAhead, adviceItems, uncertaintySources, buyImpact, perUse, BUY_CARD_FROM, ON_TIME, BELOW_MAX, CRED_DAYS } from './forecast.js';
-import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar, mealStrip } from './charts.js';
-import { mealWeek, MEAL_PATHS, TREND_DAYS } from './meals.js';
+import { barChart, donut, lineChart, waterfall, barsLine, stackedBars, yearCalendar, mealStrip, foodDaily, cumForecast, showerChart, FOOD_COLORS } from './charts.js';
+import { mealWeek, foodMonth, foodYear, MEAL_PATHS, TREND_DAYS } from './meals.js';
+import { bathMonth, bathYear, BATH_PATHS, BATH_PRIOR } from './bath.js';
 import { h, today, compressImage, blobToBase64 } from './util.js';
 import { makeXlsx, makeWorkbook } from './xlsx.js';
 import { START_CASH, HOLD, holdName, SURE, BENCH, benchSeries, tradeMarks, LOOK, lookName, zoned, bjDate, marketState, marketOf, tPlus0, lot, fees, currentGame, cash, positions, checkOrder, maxBuy, worth, worthSeries, lookbackDue, reviewDue } from './sim.js';
@@ -2682,12 +2683,15 @@ const SUMMARY_HELP = [
     '预算：浅色是预算，深色是实际花的，竖线是预算到头的地方。花钱曲线：实线是累计花了多少，虚线是按计划到这天该花多少，实线在虚线下面就是花得比计划慢。',
     '花在哪：圆环点一段看这一块花在哪几类。日历上颜色越深，那天生活花得越多；点一天，下面写那天一共花了多少（不占预算的也算）。',
     '趋势：最近几个月的收入、支出柱子，和储蓄率的线（右边的刻度）。',
+    '吃饭：柱子是每天吃饭花了多少（午饭、晚饭、别的三种颜色），线是最近七天的平均，看得出最近在变多还是变少；虚线是每天的预算。下面是累计花了多少，这个月还没过完时，虚线和阴影接着估到月底，横虚线是预算。',
+    '洗澡：一个点是一次（同一天记的几笔算一次），连起来看每次之间钱的起伏，底下的小数字是隔了几天。这个月还没过完时，后面的空心点是估的下几次，竖线是八成的范围。',
     '最下面「存成 PDF」：PDF 里有完整的表格和明细。会打开打印界面，iPhone 上在打印预览里点右上角的分享按钮，选 Save to Files。「导出 Excel」：每一部分一张表，还有这个月的每一笔。「导出给 ChatGPT」：把完整的报表复制好，拿去问。']],
   ['年度报表', ['「年」也是一份财务报表，按自然年（1 月 1 日到 12 月 31 日），每个月也按自然月算，所以和月度报表（预算月）的数字不完全一样。',
     '储蓄率：这一年存下的占收入的几成，条上的「计划」算上了没有收入的月份。负数的样子和月度一样。',
     '每月收支：12 个月的收入、支出柱子，和储蓄率的线。存钱计划：实线是这一年累计存下的，虚线是按计划累计该存的，实线在上面就是存得比计划好。',
     '家底：年初和现在的钱按用途分，和每个月月底的净资产。预算：一行一块、一列一个月，颜色越深用得越多，红色是超了。',
     '花在哪：全年的圆环，下面「用存好的」「预算外」点开看去处，和每个月按块分的柱子。日历：一格一天，颜色越深那天花得越多，描了一圈的是今天。',
+    '吃饭：每个月午饭、晚饭、别的各花了多少，下面的线是每天吃饭（最近七天的平均）一整年的走势。洗澡：这一年的每一次连成线。今年还没过完时，都会估到年底一共大约多少。',
     '这一年过完后，1 月打开去年的年度报表，AI 会写一段年度点评。最下面可以存成 PDF、导出 Excel（每个月一张明细）、导出给 ChatGPT。']],
   ['往后', ['「往后」是往前看：往后 12 个预算月，每个月底存款大概有多少、有多大可能碰到底线。存款和「钱都在哪」的一样，不算心愿基金和这个月还没花的生活费。',
     '照你以前每天花多少、收入到没到账，估出几千种可能的未来，数一数有多少种碰到底线、专项按时留够。想看细节，在页面最下面「怎么算的」。',
@@ -2808,6 +2812,108 @@ function mealHow(mw) {
     f('log x = a + b·t，b ~ N(b̂, se²)，P(变贵) = Φ(b̂ / se)，每个月 = e^(30.44·b) − 1'),
     h('h4', {}, '五、早餐'),
     p('校园卡付的按顿数；别的卡付的是囤着吃的，最近四周买早餐的钱 ÷ 天数 = 每天多少。下次大约哪天该买：上次买的日子 + 以前隔几天买一次的 25% 到 75%。'));
+}
+
+// 吃饭、洗澡（2026-10-27 用户要的，月度报表「趋势」、年度报表「日历」下面）：计算在 meals.js（foodMonth / foodYear）和 bath.js。
+// 用户最想看的是每天吃饭花多少的走势、每次洗澡之间钱的起伏；估计和图放在一起（累计线接着估到月底、洗澡的点接着估下几次）。
+const FOOD_LEGEND = [['午饭', FOOD_COLORS.lunch], ['晚饭', FOOD_COLORS.dinner], ['别的', FOOD_COLORS.other]];
+const chancePct = (x) => (x < 0.01 ? '不到 1%' : `${Math.round(x * 100)}%`);
+const repLine = (a, sub, warn) => h('div', { class: `meal-line small${warn ? ' warn' : ''}` }, h('span', {}, a), sub ? h('span', { class: 'muted' }, sub) : null);
+const repLines = (rows) => (rows.filter(Boolean).length ? h('div', { class: 'meal-lines' }, rows.filter(Boolean).map(([a, sub, warn]) => repLine(a, sub, warn))) : null);
+const smallKpi = (label, v, sub) => h('div', { class: 'meal-kpi' }, h('div', { class: 'muted small' }, label), h('b', {}, v), sub ? h('div', { class: 'muted small' }, sub) : null);
+const range80 = (x) => `八成在 ${money(x.lo)} – ${money(x.hi)}`;
+function whenText(day) {
+  const n = daysBetween(today(), day);
+  return n <= 0 ? '今天' : n === 1 ? '明天' : n === 2 ? '后天' : mmd(day);
+}
+
+function foodSection(f, { year = false } = {}) {
+  if (!f) return null;
+  const [sc, out] = f.place;
+  const kpis = h('div', { class: 'meal-kpis' },
+    smallKpi('平均每天', f.perDay != null ? money(f.perDay) : '—', `${f.counted} 天`),
+    f.kinds.map((k) => smallKpi(`${k.name}每顿`, k.avg != null ? money(k.avg) : '—', `${k.n} 顿`)));
+  const fc = f.forecast;
+  let charts;
+  if (year) {
+    const act = f.months.filter((m) => m.active);
+    const avg = f.avg7.filter((v) => v != null);
+    const dd = f.days.filter((x) => !x.off);
+    charts = [
+      stackedBars(act.map((m) => ({ label: `${m.m}月`, parts: [{ v: m.lunch, color: FOOD_COLORS.lunch }, { v: m.dinner, color: FOOD_COLORS.dinner }, { v: m.other, color: FOOD_COLORS.other }] })), { title: '每个月吃饭花了多少' }),
+      repLegend(FOOD_LEGEND),
+      avg.length > 1 ? h('p', { class: 'muted small rep-cap' }, '每天吃饭（最近七天的平均）') : null,
+      avg.length > 1 ? lineChart([{ values: avg, color: 'var(--accent)' }], { xLabels: [[0, md(dd[0].day)], [avg.length - 1, md(dd.at(-1).day)]], title: '每天吃饭花多少的走势：最近七天的平均' }) : null,
+    ];
+  } else {
+    charts = [
+      foodDaily(f.days, { avg7: f.avg7, perDay: f.budgetPerDay, title: '每天吃饭花了多少：柱子是每天，线是最近七天的平均，虚线是每天的预算' }),
+      h('div', { class: 'legend' }, FOOD_LEGEND.map(([n, c]) => h('span', {}, h('i', { style: `background:${c}` }), n)),
+        h('span', {}, h('i', { class: 'legend-line' }), '七天平均'), h('span', {}, h('i', { class: 'legend-dash' }), '每天预算')),
+      h('p', { class: 'muted small rep-cap' }, fc ? '累计 · 接着估到月底' : '累计'),
+      cumForecast(f.days.map((x) => x.day), f.cumulative, { path: fc?.path || [], budget: f.budget, title: fc ? `吃饭累计花了多少，估到月底大约 ${money(fc.mid)}` : '吃饭累计花了多少' }),
+    ];
+  }
+  const maxMonth = year ? f.months.filter((m) => m.active).reduce((a, m) => (!a || m.v / m.days > a.v / a.days ? m : a), null) : null;
+  const lines = repLines([
+    ['吃饭一共', `${exact(f.total)}${!year && f.budget ? ` · 预算 ${money(f.budget)}` : ''}`],
+    !year && fc ? [`估到月底大约 ${money(fc.mid)}`, range80(fc)] : null,
+    !year && fc ? ['超预算的可能', chancePct(fc.pOver), fc.pOver >= 0.3] : null,
+    !year && !fc && f.budget ? [f.total <= f.budget ? `比预算少 ${money(f.budget - f.total)}` : `比预算多 ${money(f.total - f.budget)}`, null, f.total > f.budget] : null,
+    year && fc ? [`估到年底大约 ${money(fc.mid)}`, range80(fc)] : null,
+    sc.n + out.n ? [`学校里 ${sc.n} 顿 · 外面 ${out.n} 顿`, [sc.n ? `学校里每顿 ${money(sc.avg)}` : null, out.n ? `外面 ${money(out.avg)}` : null].filter(Boolean).join(' · ')] : null,
+    maxMonth && f.months.filter((m) => m.active).length > 1 ? ['每天花得最多的月', `${maxMonth.m}月 · 每天 ${money(maxMonth.v / maxMonth.days)}`] : null,
+    f.max ? ['花得最多的一天', `${md(f.max.day)} · ${money(f.max.v)}`] : null,
+  ]);
+  const detail = repDetail(
+    repTable(['', '顿数', '每顿', '一共'], [...f.kinds.map((k) => [k.name, String(k.n), k.avg != null ? exact(k.avg) : '—', exact(k.sum)]), ['别的（早餐、零食、饮料……）', '', '', exact(f.other)], { cells: ['合计', '', '', exact(f.total)], cls: 'total' }], '吃饭'),
+    year ? repTable(['月', '午饭', '晚饭', '别的', '一共', '每天'], f.months.filter((m) => m.active).map((m) => [`${m.m}月`, exact(m.lunch), exact(m.dinner), exact(m.other), exact(m.v), exact(m.v / m.days)]), '每个月吃饭') : null);
+  return repSection('吃饭', kpis, charts, lines, detail, fc && !year ? foodHow() : null);
+}
+
+function bathSection(b, { year = false } = {}) {
+  if (!b) return null;
+  const nx = b.next;
+  const kpis = h('div', { class: 'meal-kpis' },
+    smallKpi('洗了', `${b.n} 次`, b.n ? `一共 ${money(b.total)}` : null),
+    smallKpi('每次平均', b.avg != null ? money(b.avg) : '—', b.min && b.n > 1 ? `${money(b.min.v)} – ${money(b.max.v)}` : null),
+    smallKpi('平均隔', b.gap != null ? `${Math.round(b.gap * 10) / 10} 天` : '—', null));
+  const fc = year ? b.forecast : b.month;
+  const lines = repLines([
+    nx ? [`下次大约${whenText(nx.list[0].day)}`, `大约 ${money(nx.list[0].mid)} · ${range80(nx.list[0])}`] : null,
+    nx ? [`下 ${nx.list.length} 次一共大约 ${money(nx.sum.mid)}`, `后面两次约 ${nx.list.slice(1).map((x) => whenText(x.day)).join('、')}`] : null,
+    fc ? [year ? `估到年底大约 ${money(fc.mid)}` : `这个预算月大约 ${money(fc.mid)}`, `${range80(fc)} · 还要洗 ${fc.times.lo === fc.times.hi ? fc.times.mid : `${fc.times.lo}–${fc.times.hi}`} 次`] : null,
+    b.n > 1 ? ['最贵 · 最便宜', `${md(b.max.day)} ${money(b.max.v)} · ${md(b.min.day)} ${money(b.min.v)}`] : null,
+    year && b.months.filter((m) => m.n).length > 1 ? ['每个月', b.months.filter((m) => m.n).map((m) => `${m.m}月 ${m.n} 次 ${money(m.v)}`).join(' · ')] : null,
+  ]);
+  const detail = repDetail(repTable(['日子', '花了', '隔了几天'], b.list.map((x) => [md(x.day), exact(x.v), x.gap != null ? `${x.gap} 天` : '—']), '每一次洗澡'));
+  return repSection('洗澡',
+    kpis,
+    b.points.length ? showerChart(b.points, { next: nx?.list || [], title: '每次洗澡花了多少：一个点一次，底下的小数字是隔了几天' }) : null,
+    b.points.length ? h('p', { class: 'muted small rep-cap' }, [b.points.length <= 24 ? '底下的小数字是隔了几天' : null, b.points.some((x) => x.faint) ? '淡的是上个月的' : null, nx ? '空心的是估的下几次，竖线是八成的范围' : null].filter(Boolean).join(' · ')) : null,
+    lines, detail, b.model ? bathHow(b) : null);
+}
+
+function foodHow() {
+  const p = (text) => h('p', { class: 'small' }, text);
+  return h('details', { class: 'meal-how' }, h('summary', { class: 'small' }, '怎么算的'),
+    p('和周总结「午饭和晚饭」是同一套：每顿多少钱、这顿是不是自己付的、早餐零食这些每天多少，一天一天往后估到预算月最后一天，估很多次。'),
+    p('累计图上：实线是记了的，虚线是估的中间那个数（一半的可能比它多），阴影是八成的可能落在里面。'),
+    p('柱子上的线是最近七天的平均（不满七天就按有的天数），比每天的柱子平稳，看得出最近是在变多还是变少。'));
+}
+function bathHow(b) {
+  const f = (text) => h('p', { class: 'how-math' }, text);
+  const p = (text) => h('p', { class: 'small' }, text);
+  const m = b.model;
+  return h('details', { class: 'meal-how' }, h('summary', { class: 'small' }, '怎么算的'),
+    h('h4', {}, '一、每次多少钱'),
+    p('同一天记的几笔算一次。价格取对数后当成正态分布，先以你自己记过的为中心，记得越多越靠近实际。'),
+    f(`log x ~ N(μ, σ²)，κ₀ = ${BATH_PRIOR.kappa}，α₀ = ${BATH_PRIOR.alpha}，s₀ = ${BATH_PRIOR.s}；你的：记了 ${m.n} 次，e^μₙ = ¥${Math.round(Math.exp(m.post.mu) * 100) / 100}`),
+    h('h4', {}, '二、隔几天洗一次'),
+    p(`以前每两次之间隔的天数（${m.gaps.length} 个），每次随机给它们不同的分量再抽。离上次已经过了几天，就只从比这更长的里面抽；都比它短，就算今天。`),
+    h('h4', {}, '三、下几次、到月底'),
+    p(`一次一次往后排日子、抽价格，排 ${BATH_PATHS} 遍。日子和钱都取中间那个数，范围是 10% 到 90%。`),
+    f('σ² ~ InvGamma(αₙ, βₙ)，μ ~ N(μₙ, σ²/κₙ)，x = e^(μ + σz)；间隔 ~ Σ wᵢ·δ(gᵢ)，w ~ Dirichlet(1, …, 1)'));
 }
 
 function summaryView(q) {
@@ -3328,6 +3434,12 @@ function monthReportView(d, day, head, seg, navRow) {
     repLegend([['收入', 'var(--sage)'], ['支出', 'var(--g-food)'], ['储蓄率', 'var(--accent)']]),
     repDetail(repTable(['', '收入', '支出', '存下', '储蓄率'], r.trend.map((x) => [`${x.p.startMonth}月`, money(x.income), money(x.total), money(x.saved), repPct(x.rate)]), '最近几个月')));
 
+  // 吃饭、洗澡（2026-10-27）
+  r.food = foodMonth(d, p, r.asOf, today());
+  r.bath = bathMonth(d, p, r.asOf, today());
+  const s7 = empty ? null : foodSection(r.food);
+  const s8 = empty ? null : bathSection(r.bath);
+
   // AI 点评（这个月过完才有）
   const letter = letterCard(p);
 
@@ -3348,7 +3460,7 @@ function monthReportView(d, day, head, seg, navRow) {
   const notes = noteRows.length ? h('section', { class: 'card rep-sec rep-detail' }, h('h3', {}, '附注'), repTable(['项目', '金额'],
     noteRows.map(([name, v, why]) => [h('span', {}, name, why ? h('span', { class: 'muted small block' }, why) : null), v]), '附注')) : null;
 
-  return h('div', { class: 'report' }, head, seg, nav, top, s2, s3, s4, s5, s6, letter, notes, exportBtns);
+  return h('div', { class: 'report' }, head, seg, nav, top, s2, s3, s4, s5, s6, s7, s8, letter, notes, exportBtns);
 }
 
 const REPORT_ASK = `我是一个大学生，在认真学着记账、稳定存钱。下面是我一个月的财务报表：收支、家底（按账户和按用途）、预算执行、花销明细、最近几个月的趋势，还有附注。
@@ -3407,6 +3519,7 @@ function reportText(r) {
   if (r.top.length) { L.push('最大的几笔：'); for (const t of r.top) L.push(`- ${md(t.date)} ${txTitle(t)} ${exact(cny(t))}${t.note ? `（${t.note}）` : ''}`); L.push(''); }
   L.push('## 六、最近几个月', '');
   table(['', '收入', '支出', '存下', '储蓄率', '净资产'], r.trend.map((x) => [`${x.p.startMonth}月`, money(x.income), money(x.total), money(x.saved), repPct(x.rate), money(x.net)]));
+  foodBathText(L, table, r.food, r.bath);
   const nt = r.notes;
   const notes = [
     nt.lumps.length ? `一次性的钱（不算收入，直接进存款）：${nt.lumps.map((x) => `${x.name} ${exact(x.v)}`).join('、')}` : null,
@@ -3605,6 +3718,12 @@ function yearReportView(d, year, head, seg, navRow) {
   const s6 = repSection('日历',
     yearCalendar(y.calendar, { today: today(), title: '这一年每天的生活花销' }));
 
+  // 吃饭、洗澡（2026-10-27）
+  y.food = empty ? null : foodYear(d, y.from, y.asOf, today());
+  y.bath = empty ? null : bathYear(d, y.from, y.asOf, today());
+  const s7 = foodSection(y.food, { year: true });
+  const s8 = bathSection(y.bath, { year: true });
+
   // 附注（只在 PDF 里）
   const nt = y.notes;
   const noteRows = [
@@ -3619,7 +3738,7 @@ function yearReportView(d, year, head, seg, navRow) {
   const notes = h('section', { class: 'card rep-sec rep-detail' }, h('h3', {}, '附注'), repTable(['项目', '金额'],
     noteRows.map(([name, v, why]) => [h('span', {}, name, why ? h('span', { class: 'muted small block' }, why) : null), v]), '附注'));
 
-  return h('div', { class: 'report' }, head, seg, nav, top, s1, s2, s3, s4, s5, s6, yearLetterCard(y), notes, exports);
+  return h('div', { class: 'report' }, head, seg, nav, top, s1, s2, s3, s4, s5, s6, s7, s8, yearLetterCard(y), notes, exports);
 }
 
 // AI 年度点评：这一年过完，打开去年的年度报表时自动写一次；更早的点一下再写。存在 data.letters['2026']
@@ -3711,6 +3830,7 @@ function yearText(y) {
   L.push('## 花得最多的类别', '');
   mdTable(L, ['类别', '金额', '笔数', '占比'], y.cats.slice(0, 20).map((x) => [x.name, exact(x.v), String(x.n), repPct(x.share)]));
   if (y.top.length) { L.push('最大的几笔：'); for (const t of y.top) L.push(`- ${t.date} ${txTitle(t)} ${exact(cny(t))}${t.note ? `（${t.note}）` : ''}`); L.push(''); }
+  foodBathText(L, (cols, rows) => mdTable(L, cols, rows), y.food, y.bath, { year: true });
   const nt = y.notes;
   L.push('## 附注', '',
     ...[nt.wishesBought.length ? `实现的心愿：${nt.wishesBought.map((x) => `${x.name} ${exact(x.v)}`).join('、')}` : null,
@@ -3749,6 +3869,7 @@ function yearSheets(y) {
       ['别人欠我的', y.startNW.toMe, y.endNW.toMe, ''], ['我欠别人的', -y.startNW.iOwe, -y.endNW.iOwe, ''], ['净资产', y.startNW.net, y.endNW.net, k.netChange], [],
       ['用途', '开始', '结束', '变化'], ...y.purposes.map((x) => [x.name, x.start, x.end, Math.round((x.end - x.start) * 100) / 100])] },
     { name: '每天生活花销', rows: [['日期', '生活花销'], ...y.calendar.filter((x) => !x.off).map((x) => [x.day, x.v])] },
+    ...foodBathSheets(y.food, y.bath, { year: true }),
     { name: '附注', rows: [['项目', '金额', '说明'],
       ...nt.wishesBought.map((x) => ['实现的心愿', x.v, `${x.date} ${x.name}`]),
       ...nt.subs.map((x) => ['订阅', x.v, x.name]),
@@ -3761,6 +3882,38 @@ function yearSheets(y) {
     sheets.push({ name: `${m.m}月`, rows: [TX_HEAD, ...tx.map(txExcelRow)] });
   }
   return sheets;
+}
+
+// 导出用：吃饭、洗澡（2026-10-27）。push(行) 写 Markdown，table(表头, 行) 写表格
+function foodBathText(L, table, food, bath, { year = false } = {}) {
+  if (!food && !bath) return;
+  L.push('## 吃饭和洗澡', '');
+  if (food) {
+    table(['吃饭', '顿数', '每顿', '一共'], [...food.kinds.map((k) => [k.name, String(k.n), k.avg != null ? exact(k.avg) : '—', exact(k.sum)]), ['别的（早餐、零食、饮料……）', '', '', exact(food.other)], ['合计', '', '', exact(food.total)]]);
+    const fc = food.forecast;
+    L.push([`平均每天 ${exact(food.perDay ?? 0)}（${food.counted} 天）`, !year && food.budget ? `预算 ${money(food.budget)}` : null,
+      fc ? `估到${year ? '年' : '月'}底大约 ${money(fc.mid)}（80% 在 ${money(fc.lo)}–${money(fc.hi)}${fc.pOver != null ? `，超预算的可能 ${chancePct(fc.pOver)}` : ''}）` : null,
+      `学校里 ${food.place[0].n} 顿、外面 ${food.place[1].n} 顿`].filter(Boolean).join('；') + '。', '');
+    if (year) table(['月', '午饭', '晚饭', '别的', '一共', '每天'], food.months.filter((m) => m.active).map((m) => [`${m.m}月`, exact(m.lunch), exact(m.dinner), exact(m.other), exact(m.v), exact(m.v / m.days)]));
+    else table(['日子', '午饭', '晚饭', '别的', '一共'], food.days.filter((x) => !x.off).map((x) => [md(x.day), exact(x.lunch), exact(x.dinner), exact(x.other), exact(x.v)]));
+  }
+  if (bath && bath.n) {
+    L.push(`洗澡 ${bath.n} 次，一共 ${exact(bath.total)}，每次平均 ${exact(bath.avg)}${bath.gap != null ? `，平均隔 ${Math.round(bath.gap * 10) / 10} 天` : ''}。`);
+    const fc = year ? bath.forecast : bath.month;
+    if (bath.next) L.push(`下次大约 ${md(bath.next.list[0].day)}，大约 ${money(bath.next.list[0].mid)}；下 ${bath.next.list.length} 次一共大约 ${money(bath.next.sum.mid)}。`);
+    if (fc) L.push(`估到${year ? '年' : '月'}底洗澡一共大约 ${money(fc.mid)}（80% 在 ${money(fc.lo)}–${money(fc.hi)}）。`);
+    L.push('');
+    table(['日子', '花了', '隔了几天'], bath.list.map((x) => [md(x.day), exact(x.v), x.gap != null ? String(x.gap) : '—']));
+  }
+}
+// Excel 用：吃饭、洗澡各一张表
+function foodBathSheets(food, bath, { year = false } = {}) {
+  const out = [];
+  if (food) out.push(year
+    ? { name: '吃饭', rows: [['月', '午饭', '晚饭', '别的', '一共', '每天'], ...food.months.filter((m) => m.active).map((m) => [`${m.m}月`, m.lunch, m.dinner, m.other, m.v, Math.round((m.v / m.days) * 100) / 100])] }
+    : { name: '吃饭', rows: [['日期', '午饭', '晚饭', '别的', '一共', '最近七天平均'], ...food.days.map((x, i) => (x.off ? null : [x.day, x.lunch, x.dinner, x.other, x.v, food.avg7[i]])).filter(Boolean)] });
+  if (bath && bath.n) out.push({ name: '洗澡', rows: [['日期', '花了', '隔了几天'], ...bath.list.map((x) => [x.day, x.v, x.gap ?? ''])] });
+  return out;
 }
 
 // Excel：月度报表
@@ -3781,6 +3934,7 @@ function monthSheets(r) {
     { name: '预算', rows: [['', '预算', '实际', '用了（%）'], ...r.budget.map((x) => [x.name, x.budget, x.v, pct(x.pct)])] },
     { name: '类别', rows: [['类别', '金额', '笔数', '占比（%）', '上月'], ...r.cats.map((x) => [x.name, x.v, x.n, pct(x.share), x.prev ?? ''])] },
     { name: '每天生活花销', rows: [['日期', '生活花销'], ...r.calendar.days.filter((x) => !x.future && !x.before).map((x) => [x.day, x.v])] },
+    ...foodBathSheets(r.food, r.bath),
     { name: '明细', rows: [TX_HEAD, ...d.tx.filter((t) => t.date >= r.p.start && t.date <= r.asOf).sort((a, b) => a.date.localeCompare(b.date)).map(txExcelRow)] },
   ];
 }

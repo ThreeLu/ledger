@@ -1043,6 +1043,12 @@ button.rep-cal-day.on { box-shadow: 0 0 0 2px var(--text); }
 .meal-how summary { color: var(--muted); cursor: pointer; }
 .meal-how h4 { font-size: 14px; margin: 12px 0 4px; }
 .meal-how p { margin: 4px 0; }
+/* 报表里的吃饭、洗澡（2026-10-27） */
+.rep-sec .meal-kpis { margin-bottom: 4px; }
+.rep-cap { margin: 12px 0 2px; }
+.legend i.legend-line { width: 14px; height: 2px; border-radius: 1px; background: var(--text); opacity: .75; vertical-align: middle; }
+.legend i.legend-dash { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed var(--muted); vertical-align: middle; }
+.shower-gap { font-size: 9px; opacity: .8; }
 .rep-cal-pick { min-height: 20px; margin: 4px 0 0; text-align: center; font-variant-numeric: tabular-nums; }
 .rep-sec .tx-list { margin: 0 -4px; }
 

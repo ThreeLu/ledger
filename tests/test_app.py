@@ -571,6 +571,8 @@ def _(c):
             ]
             if k % 4 == 0:
                 d["tx"].append({"id": f"wk-b{k}", "type": "expense", "date": day, "account": other, "amount": 7, "category": "c-breakfast", "note": "", "createdAt": f"{day}T08:00:00Z"})
+            if k % 2 == 1:  # 隔一天洗一次澡（月度报表「洗澡」用）
+                d["tx"].append({"id": f"wk-s{k}", "type": "expense", "date": day, "account": camp, "amount": round(1.2 + (k % 3) * 0.3, 2), "category": "c-bath", "note": "", "createdAt": f"{day}T21:00:00Z"})
         d["tx"].append({"id": "wk-l0", "type": "expense", "date": TODAY, "account": camp, "amount": 15, "category": "c-lunch", "note": "", "createdAt": f"{TODAY}T12:00:00Z"})
         c.repo.external_write("finance.json", json.dumps(d, ensure_ascii=False).encode())
         p.reload()
@@ -620,6 +622,34 @@ def _(c):
             if "每 100 块" in meter.inner_text():
                 expect(meter.locator(".sm-mark.plan")).to_contain_text("按预算花")
         head.screenshot(path=str(ART / "month-head.png"))
+        # 吃饭：每天的柱子 + 七天平均、累计接着估到月底；洗澡：每次连成线、估下几次和到月底
+        food = p.locator(".rep-sec").filter(has=p.locator("h3", has_text=re.compile("^吃饭$")))
+        expect(food.get_by_role("img", name=re.compile("^每天吃饭花了多少"))).to_be_visible()
+        expect(food.get_by_role("img", name=re.compile("^吃饭累计花了多少，估到月底大约 ¥"))).to_be_visible()
+        expect(food.locator(".meal-kpi")).to_have_count(3)
+        expect(food.locator(".meal-lines")).to_contain_text(re.compile(r"估到月底大约 ¥[\d,]+"))
+        expect(food.locator(".meal-lines")).to_contain_text("超预算的可能")
+        expect(food.locator(".rep-table")).to_be_hidden()
+        food.screenshot(path=str(ART / "month-food.png"))
+        bath = p.locator(".rep-sec").filter(has=p.locator("h3", has_text=re.compile("^洗澡$")))
+        chart = bath.get_by_role("img", name=re.compile("^每次洗澡花了多少"))
+        expect(chart).to_be_visible()
+        assert chart.locator("circle[style*='fill:var(--card)']").count() == 3  # 估的下三次是空心的
+        expect(bath.locator(".meal-lines")).to_contain_text(re.compile(r"下次大约(今天|明天|后天|\d+月\d+日)"))
+        expect(bath.locator(".meal-lines")).to_contain_text("这个预算月大约")
+        expect(bath.locator(".meal-kpi").nth(2)).to_contain_text("2 天")  # 隔一天洗一次
+        bath.locator(".meal-how summary").click()
+        expect(bath.locator(".meal-how")).to_contain_text("Dirichlet")
+        expect(bath).not_to_contain_text("NaN")
+        expect(bath).not_to_contain_text("undefined")
+        bath.screenshot(path=str(ART / "month-bath.png"))
+        # 年度也有这两块
+        c.go("#/summary?mode=year")
+        expect(p.locator(".rep-sec h3", has_text=re.compile("^吃饭$"))).to_be_visible()
+        expect(p.get_by_role("img", name="每个月吃饭花了多少")).to_be_visible()
+        expect(p.locator(".rep-sec").filter(has=p.locator("h3", has_text=re.compile("^洗澡$"))).locator(".meal-lines")).to_contain_text("估到年底大约")
+        expect(p.locator(".report")).not_to_contain_text("NaN")
+        c.go("#/summary?mode=month")
         # 不占预算拆成两块：用存好的（心愿基金）、预算外（手续费），点一行在原地展开去处和金额
         wish_cat = next(x["id"] for x in d["categories"] if x["kind"] == "expense" and x.get("group") != "none")
         d["tx"] += [
@@ -1342,7 +1372,7 @@ def _(c):
     assert dl.value.suggested_filename == f"财务报表-{year}.xlsx"
     dl.value.save_as(ART / "year.xlsx")
     wb = openpyxl.load_workbook(ART / "year.xlsx")
-    assert wb.sheetnames[:7] == ["总览", "每月各块花销", "预算用了几成", "类别", "家底", "每天生活花销", "附注"], wb.sheetnames
+    assert [x for x in wb.sheetnames[:9] if x not in ("吃饭", "洗澡")][:7] == ["总览", "每月各块花销", "预算用了几成", "类别", "家底", "每天生活花销", "附注"], wb.sheetnames
     assert f"{date.today().month}月" in wb.sheetnames
     assert wb["总览"]["A2"].value == "收入" and isinstance(wb["总览"]["B2"].value, (int, float)), wb["总览"]["B2"].value
     month_sheet = wb[f"{date.today().month}月"]
@@ -1361,7 +1391,7 @@ def _(c):
         p.get_by_role("button", name="导出 Excel").click()
     dl.value.save_as(ART / "month.xlsx")
     wb = openpyxl.load_workbook(ART / "month.xlsx")
-    assert wb.sheetnames == ["总览", "家底", "预算", "类别", "每天生活花销", "明细"], wb.sheetnames
+    assert [x for x in wb.sheetnames if x not in ("吃饭", "洗澡")] == ["总览", "家底", "预算", "类别", "每天生活花销", "明细"], wb.sheetnames
     # AI 年度点评：第二年 1 月打开去年的，自动写一次、存下来
     c.repo.external_write("config/ai.json", json.dumps({"deepseek": {"key": "sk-test", "model": "deepseek-flash"}}).encode())
     p.clock.set_fixed_time(f"{year + 1}-01-05T12:00:00")

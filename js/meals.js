@@ -51,9 +51,9 @@ export function mealsOf(data, from, to) {
 
 const avg = (xs) => (xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null);
 
-// 正态—逆伽马的后验（x 是 log 价格）
-export function mealPosterior(logs, mu0) {
-  const { kappa, alpha, s } = PRIOR;
+// 正态—逆伽马的后验（x 是 log 价格）；洗澡也用（bath.js，先验不一样）
+export function mealPosterior(logs, mu0, prior = PRIOR) {
+  const { kappa, alpha, s } = prior;
   const beta = alpha * s * s;
   const n = logs.length;
   if (!n) return { mu: mu0, kappa, alpha, beta, n };
@@ -63,7 +63,7 @@ export function mealPosterior(logs, mu0) {
   return { mu: (kappa * mu0 + n * xbar) / kn, kappa: kn, alpha: alpha + n / 2, beta: beta + S / 2 + (kappa * n * (xbar - mu0) ** 2) / (2 * kn), n };
 }
 // 抽一组 (μ, σ)：σ² ~ 逆伽马(α, β)，μ ~ N(μₙ, σ²/κₙ)
-const drawMuSigma = (R, post) => {
+export const drawMuSigma = (R, post) => {
   const s2 = post.beta / R.gamma(post.alpha);
   return { mu: post.mu + Math.sqrt(s2 / post.kappa) * R.normal(), s: Math.sqrt(s2) };
 };
@@ -92,18 +92,20 @@ export function mealModels(data, today) {
   return { from, to, kinds, other: Object.values(byDay), days: slots };
 }
 
-// 往后 n 天：午饭、晚饭 2n 顿 + 别的吃饭花销 n 天。返回每条路径的 { meals, other }
-function simulate(models, n, seed, paths) {
+// 往后 n 天：午饭、晚饭 2n 顿 + 别的吃饭花销 n 天。返回每条路径的 { meals, other }；
+// track：再记下每条路径每天累计到哪（cum[j] = 往后第 j + 1 天为止一共），月度报表画「估到月底」那条线用
+function simulate(models, n, seed, paths, { track = false } = {}) {
   const R = rng(seed);
   const out = [];
   const other = models.other;
   for (let i = 0; i < paths; i++) {
+    const per = track ? new Float64Array(n) : null;
     let meals = 0;
     for (const k of MEAL_KINDS) {
       const m = models.kinds[k.id];
       const { mu, s } = drawMuSigma(R, m.post);
       const p = R.beta(1 + m.paid, 1 + Math.max(0, m.slots - m.paid));
-      for (let j = 0; j < n; j++) if (R.u() < p) meals += Math.exp(mu + s * R.normal());
+      for (let j = 0; j < n; j++) if (R.u() < p) { const v = Math.exp(mu + s * R.normal()); meals += v; if (per) per[j] += v; }
     }
     let rest = 0;
     if (n && other.length) {
@@ -112,9 +114,14 @@ function simulate(models, n, seed, paths) {
       const W = w.reduce((a, x) => a + x, 0);
       const mean = other.reduce((a, x, j) => a + (w[j] / W) * x, 0);
       const varr = other.reduce((a, x, j) => a + (w[j] / W) * (x - mean) ** 2, 0);
-      rest = Math.max(0, n * mean + Math.sqrt(n * varr) * R.normal());
+      const z = R.normal();
+      rest = Math.max(0, n * mean + Math.sqrt(n * varr) * z);
+      // 每天累计：同一个 z 往回缩（第 j 天 = j·均值 + √(j·方差)·z），最后一天和总数一样
+      if (per) for (let j = 0; j < n; j++) per[j] += Math.max(0, (j + 1) * mean + Math.sqrt((j + 1) * varr) * z) - (j ? Math.max(0, j * mean + Math.sqrt(j * varr) * z) : 0);
     }
-    out.push({ meals, other: rest });
+    const x = { meals, other: rest };
+    if (per) { x.cum = per; for (let j = 1; j < n; j++) per[j] += per[j - 1]; }
+    out.push(x);
   }
   return out;
 }
@@ -127,18 +134,105 @@ export function nextWeekMeals(data, today, { paths = MEAL_PATHS, models = mealMo
 }
 
 // 这个预算月吃饭一共多少、超预算的可能（今天以后的按模拟，今天和以前的按记的）
+// path：往后每天累计一共多少的 10% / 50% / 90%（path[j] 是往后第 j + 1 天）
 export function monthFood(data, today, { paths = MEAL_PATHS, models = mealModels(data, today) } = {}) {
   const p = periodFor(data, today);
   const budget = Math.round((Number(data.budget?.food) || 0) * partial(data, p).factor);
   if (!budget || !models.days) return null;
-  let spent = 0;
-  for (const t of data.tx) {
-    if (t.type !== 'expense' || t.date < p.start || t.date > today || t.special || t.wishFund) continue;
-    if (category(data, t.category)?.group === 'food') spent += cny(t);
-  }
+  const spent = foodSpent(data, p.start, today);
   const n = Math.max(0, daysBetween(today, p.end));
-  const sims = simulate(models, n, `meals-month|${today}`, paths).map((x) => spent + x.meals + x.other);
-  return { ...band(sims), spent: r2(spent), budget, pOver: sims.filter((x) => x > budget).length / sims.length, days: n };
+  const raw = simulate(models, n, `meals-month|${today}`, paths, { track: true });
+  const sims = raw.map((x) => spent + x.meals + x.other);
+  const path = Array.from({ length: n }, (_, j) => ({ day: addDays(today, j + 1), ...band(raw.map((x) => spent + x.cum[j])) }));
+  return { ...band(sims), spent: r2(spent), budget, pOver: sims.filter((x) => x > budget).length / sims.length, days: n, path };
+}
+
+// 一段日子里吃饭一共花了多少（吃饭这一组，专项、心愿基金的不算）
+const isFood = (data, t) => t.type === 'expense' && !t.special && !t.wishFund && category(data, t.category)?.group === 'food';
+export function foodSpent(data, from, to) {
+  let v = 0;
+  for (const t of data.tx) if (t.date >= from && t.date <= to && isFood(data, t)) v += cny(t);
+  return r2(v);
+}
+
+// 每天吃饭花了多少，分午饭、晚饭、别的（早餐、零食、饮料、水果……）
+export function foodDays(data, from, to) {
+  const m = new Map();
+  for (let day = from; day <= to; day = addDays(day, 1)) m.set(day, { day, lunch: 0, dinner: 0, other: 0, v: 0 });
+  for (const t of data.tx) {
+    const x = m.get(t.date);
+    if (!x || !isFood(data, t)) continue;
+    const v = cny(t);
+    const kind = MEAL_KINDS.find((k) => k.cat === t.category);
+    x[kind ? kind.id : 'other'] += v;
+    x.v += v;
+  }
+  return [...m.values()].map((x) => ({ day: x.day, lunch: r2(x.lunch), dinner: r2(x.dinner), other: r2(x.other), v: r2(x.v) }));
+}
+
+// 最近 n 天的平均（只算记了账的日子，off 的跳过；不满 n 天就按有的算）
+export function rolling(days, n = 7) {
+  const out = [];
+  const win = [];
+  for (const x of days) {
+    if (x.off) { out.push(null); continue; }
+    win.push(x.v);
+    if (win.length > n) win.shift();
+    out.push(r2(win.reduce((a, v) => a + v, 0) / win.length));
+  }
+  return out;
+}
+
+// 吃饭的几个数（月度、年度报表都用）：每顿平均、学校里 / 外面、花得最多的一天
+function foodStats(data, from, to, days) {
+  const meals = mealsOf(data, from, to);
+  const counted = days.filter((x) => !x.off);
+  const total = r2(counted.reduce((a, x) => a + x.v, 0));
+  const kinds = MEAL_KINDS.map((k) => {
+    const xs = meals.filter((x) => x.kind === k.id).map((x) => x.v);
+    return { ...k, n: xs.length, avg: avg(xs), sum: r2(xs.reduce((a, v) => a + v, 0)) };
+  });
+  const place = ['school', 'out'].map((id) => {
+    const xs = meals.filter((x) => (id === 'school') === x.school).map((x) => x.v);
+    return { id, n: xs.length, avg: avg(xs) };
+  });
+  const max = counted.reduce((m, x) => (x.v > (m?.v ?? 0) ? x : m), null);
+  return { total, perDay: counted.length ? r2(total / counted.length) : null, counted: counted.length, kinds, place, max, other: r2(total - kinds.reduce((a, k) => a + k.sum, 0)) };
+}
+
+// 月度报表「吃饭」：每天（午饭 / 晚饭 / 别的）、最近七天平均、累计和预算；这个预算月还没过完时估到月底
+export function foodMonth(data, p, asOf, today, { paths = MEAL_PATHS } = {}) {
+  const from = partial(data, p).from;
+  const days = foodDays(data, p.start, p.end).map((x) => ({ ...x, off: x.day < from || x.day > asOf }));
+  const st = foodStats(data, from, asOf, days);
+  if (!st.total) return null;
+  const budget = Math.round((Number(data.budget?.food) || 0) * partial(data, p).factor);
+  let cum = 0;
+  const cumulative = days.map((x) => (x.off && x.day > asOf ? null : (cum += x.off ? 0 : x.v, r2(cum))));
+  const out = { ...st, days, avg7: rolling(days), cumulative, budget, budgetPerDay: r2((Number(data.budget?.food) || 0) / p.days) };
+  if (p.start <= today && today < p.end && asOf === today && data.openingDate && data.openingDate < today) out.forecast = monthFood(data, today, { paths });
+  return out;
+}
+
+// 年度报表「吃饭」：每个月（午饭 / 晚饭 / 别的）、每天的最近七天平均；今年还没过完时估到年底
+export function foodYear(data, from, asOf, today, { paths = 2000 } = {}) {
+  const year = from.slice(0, 4);
+  const days = foodDays(data, `${year}-01-01`, `${year}-12-31`).map((x) => ({ ...x, off: x.day < from || x.day > asOf }));
+  const st = foodStats(data, from, asOf, days);
+  if (!st.total) return null;
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const xs = days.filter((x) => !x.off && Number(x.day.slice(5, 7)) === i + 1);
+    const sum = (k) => r2(xs.reduce((a, x) => a + x[k], 0));
+    return { m: i + 1, active: xs.length > 0, days: xs.length, lunch: sum('lunch'), dinner: sum('dinner'), other: sum('other'), v: sum('v') };
+  });
+  const out = { ...st, days, avg7: rolling(days), months };
+  const dec31 = `${year}-12-31`;
+  if (today === asOf && today < dec31 && data.openingDate && data.openingDate < today) {
+    const models = mealModels(data, today);
+    const n = daysBetween(today, dec31);
+    if (models.days) out.forecast = { ...band(simulate(models, n, `meals-year|${today}`, paths).map((x) => st.total + x.meals + x.other)), days: n };
+  }
+  return out;
 }
 
 // 正态分布函数

@@ -277,3 +277,136 @@ export function mealStrip(rows, { title = '' } = {}) {
   for (let v = 0; v <= hi; v += step) svg.append(s('text', { x: x(v), y: base, 'text-anchor': 'middle', class: 'chart-label', text: `¥${v}` }));
   return svg;
 }
+
+// 吃饭的三种颜色：午饭、晚饭、别的（早餐、零食、饮料、水果……）
+export const FOOD_COLORS = { lunch: 'var(--g-food)', dinner: 'var(--accent)', other: 'color-mix(in srgb, var(--g-food) 40%, var(--chip))' };
+const dayNo = (day) => `${Number(day.slice(8))}日`;
+
+// 每天吃饭（月度报表）：一天一根堆叠柱（午饭 / 晚饭 / 别的），实线是最近七天的平均，虚线是每天的预算。
+// days = [{ day, lunch, dinner, other, v, off }]，avg7 = 和 days 对齐（off 的是 null）
+export function foodDaily(days, { avg7 = [], perDay = 0, height = 170, title = '' } = {}) {
+  const top = 14;
+  const bottom = 22;
+  const left = 30;
+  const right = 4;
+  const max = Math.max(1, perDay * 1.15, ...days.filter((x) => !x.off).map((x) => x.v));
+  const y = (v) => top + ((max - v) / max) * (height - top - bottom);
+  const slot = (W - left - right) / Math.max(1, days.length);
+  const bw = Math.max(2, Math.min(9, slot * 0.68));
+  const cx = (i) => left + slot * i + slot / 2;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart food-daily', role: 'img', 'aria-label': title });
+  for (const v of [0, max / 2, max]) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: y(v), y2: y(v), style: 'stroke:var(--line)', 'stroke-width': 1 }));
+    svg.append(s('text', { x: left - 4, y: y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: short(v) }));
+  }
+  days.forEach((x, i) => {
+    if (x.off) return;
+    let at = y(0);
+    const parts = ['lunch', 'dinner', 'other'].filter((k) => x[k] > 0);
+    parts.forEach((k, j) => {
+      const hgt = y(0) - y(x[k]);
+      at -= hgt;
+      svg.append(s('rect', { x: cx(i) - bw / 2, y: at, width: bw, height: Math.max(0.5, hgt - (j < parts.length - 1 ? 0.6 : 0)), rx: j === parts.length - 1 ? Math.min(2, bw / 3) : 0, style: `fill:${FOOD_COLORS[k]}` }));
+    });
+  });
+  if (perDay) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: y(perDay), y2: y(perDay), style: 'stroke:var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 4' }));
+  }
+  const pts = avg7.map((v, i) => (v == null ? null : [cx(i), y(v)])).filter(Boolean);
+  if (pts.length > 1) svg.append(s('path', { d: pts.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' '), fill: 'none', style: 'stroke:var(--text)', 'stroke-width': 1.6, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', opacity: 0.75 }));
+  const n = days.length;
+  for (const i of [0, Math.floor((n - 1) / 2), n - 1]) svg.append(s('text', { x: cx(i), y: height - 6, 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle', class: 'chart-label', text: dayNo(days[i].day) }));
+  return svg;
+}
+
+// 累计花了多少 + 估到最后（月度报表「吃饭」）：实线是记了的，虚线是估的中间那个数，阴影是八成的范围，横虚线是预算。
+// cum = 每天累计（还没到的是 null），path = 今天以后每天的 { lo, mid, hi }（接在最后一个数后面）
+export function cumForecast(days, cum, { path = [], budget = 0, height = 160, title = '' } = {}) {
+  const top = 14;
+  const bottom = 22;
+  const left = 34;
+  const right = 8;
+  const known = cum.filter((v) => v != null);
+  const max = Math.max(1, budget * 1.08, ...known, ...path.map((x) => x.hi));
+  const n = days.length;
+  const X = (i) => left + (i / Math.max(1, n - 1)) * (W - left - right);
+  const Y = (v) => top + ((max - v) / max) * (height - top - bottom);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart', role: 'img', 'aria-label': title });
+  for (const v of [0, max / 2, max]) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: Y(v), y2: Y(v), style: 'stroke:var(--line)', 'stroke-width': 1 }));
+    svg.append(s('text', { x: left - 4, y: Y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: short(v) }));
+  }
+  if (budget) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: Y(budget), y2: Y(budget), style: 'stroke:var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 4' }));
+    svg.append(s('text', { x: W - right, y: Y(budget) - 4, 'text-anchor': 'end', class: 'chart-label', text: '预算' }));
+  }
+  const lastI = cum.reduce((a, v, i) => (v != null ? i : a), -1);
+  if (path.length && lastI >= 0) {
+    const start = [lastI, cum[lastI]];
+    const xs = path.map((_, j) => lastI + 1 + j);
+    const pts = [...[[start[0], start[1]], ...path.map((p, j) => [xs[j], p.hi])].map(([i, v]) => [X(i), Y(v)]), ...[[start[0], start[1]], ...path.map((p, j) => [xs[j], p.lo])].reverse().map(([i, v]) => [X(i), Y(v)])];
+    svg.append(s('path', { d: `M${pts.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(' L')} Z`, style: 'fill:var(--accent)', 'fill-opacity': 0.14, stroke: 'none' }));
+    const mid = [[start[0], start[1]], ...path.map((p, j) => [xs[j], p.mid])];
+    svg.append(s('path', { d: mid.map(([i, v], k) => `${k ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' '), fill: 'none', style: 'stroke:var(--accent)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }));
+  }
+  const line = cum.map((v, i) => (v == null ? null : [X(i), Y(v)])).filter(Boolean);
+  if (line.length) svg.append(s('path', { d: line.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' '), fill: 'none', style: 'stroke:var(--accent)', 'stroke-width': 2.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  if (lastI >= 0) svg.append(s('circle', { cx: X(lastI), cy: Y(cum[lastI]), r: 3.5, style: 'fill:var(--accent);stroke:var(--card)', 'stroke-width': 1.5 }));
+  for (const i of [0, Math.floor((n - 1) / 2), n - 1]) svg.append(s('text', { x: X(i), y: height - 6, 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle', class: 'chart-label', text: dayNo(days[i]) }));
+  return svg;
+}
+
+// 每次洗澡花多少：一个点一次，连成线看起伏；横虚线是平均。点和点中间底下的小字是隔了几天（次数多了不写）。
+// 估的下几次：空心点 + 竖线（八成的范围），和最后一次用虚线连上，底下写大约哪天。
+// points = [{ day, v, gap, faint }]（faint：上个月的，淡一点），next = [{ day, lo, mid, hi }]
+export function showerChart(points, { next = [], height = 150, title = '', fmtDay = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8))}` } = {}) {
+  const top = 14;
+  const left = 30;
+  const right = 10;
+  const gaps = points.length <= 24;
+  const bottom = gaps ? 34 : 22;
+  // 纵轴从最便宜到最贵（不从 0 开始）：每次差几毛钱也看得出起伏
+  const all = [...points.map((p) => p.v), ...next.flatMap((x) => [x.lo, x.hi])];
+  const lo0 = Math.min(...all);
+  const hi0 = Math.max(...all);
+  const pad = (hi0 - lo0) * 0.12 || hi0 * 0.2 || 0.5;
+  const min = Math.max(0, lo0 - pad);
+  const max = hi0 + pad;
+  const n = points.length + next.length;
+  const X = (i) => left + (n > 1 ? (i / (n - 1)) * (W - left - right) : (W - left - right) / 2);
+  const Y = (v) => top + ((max - v) / (max - min || 1)) * (height - top - bottom);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, class: 'chart shower-chart', role: 'img', 'aria-label': title });
+  const money2 = (v) => (v >= 10 ? String(Math.round(v)) : v.toFixed(2));
+  for (const v of [lo0, hi0]) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: Y(v), y2: Y(v), style: 'stroke:var(--line)', 'stroke-width': 1 }));
+    svg.append(s('text', { x: left - 4, y: Y(v) + 4, 'text-anchor': 'end', class: 'chart-label', text: money2(v) }));
+  }
+  const mean = points.length ? points.reduce((a, p) => a + p.v, 0) / points.length : 0;
+  if (points.length > 1) {
+    svg.append(s('line', { x1: left, x2: W - right, y1: Y(mean), y2: Y(mean), style: 'stroke:var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '3 4' }));
+    svg.append(s('text', { x: left + 2, y: Y(mean) - 4, class: 'chart-label', text: `平均 ${money2(mean)}` }));
+  }
+  if (points.length > 1) svg.append(s('path', { d: points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' '), fill: 'none', style: 'stroke:var(--blue)', 'stroke-width': 1.6, 'stroke-linejoin': 'round', opacity: 0.8 }));
+  if (next.length && points.length) {
+    const li = points.length - 1;
+    svg.append(s('path', { d: [[li, points[li].v], ...next.map((x, j) => [li + 1 + j, x.mid])].map(([i, v], k) => `${k ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' '), fill: 'none', style: 'stroke:var(--blue)', 'stroke-width': 1.2, 'stroke-dasharray': '4 4', opacity: 0.7 }));
+  }
+  const r = points.length > 40 ? 2.2 : 3.6;
+  points.forEach((p, i) => {
+    const dot = s('circle', { cx: X(i), cy: Y(p.v), r, style: `fill:var(--blue);stroke:var(--card)${p.faint ? ';opacity:.4' : ''}`, 'stroke-width': 1.5 });
+    dot.append(s('title', { text: `${fmtDay(p.day)} ¥${p.v}` }));
+    svg.append(dot);
+    if (gaps && i && p.gap != null) svg.append(s('text', { x: (X(i - 1) + X(i)) / 2, y: height - 20, 'text-anchor': 'middle', class: 'chart-label shower-gap', text: String(p.gap) }));
+  });
+  next.forEach((x, j) => {
+    const i = points.length + j;
+    svg.append(s('line', { x1: X(i), x2: X(i), y1: Y(x.lo), y2: Y(x.hi), style: 'stroke:var(--blue)', 'stroke-width': 1.5, 'stroke-linecap': 'round', opacity: 0.45 }));
+    svg.append(s('circle', { cx: X(i), cy: Y(x.mid), r: 3.6, style: 'fill:var(--card);stroke:var(--blue)', 'stroke-width': 1.5 }));
+  });
+  // 底下：头、尾的日子（估的那几次写「约」）
+  if (points.length) svg.append(s('text', { x: X(0), y: height - 6, 'text-anchor': n === 1 ? 'middle' : 'start', class: 'chart-label', text: fmtDay(points[0].day) }));
+  const lastDay = next.length ? `约 ${fmtDay(next.at(-1).day)}` : points.length > 1 ? fmtDay(points.at(-1).day) : null;
+  if (lastDay) svg.append(s('text', { x: X(n - 1), y: height - 6, 'text-anchor': 'end', class: 'chart-label', text: lastDay }));
+  if (next.length && points.length > 1) svg.append(s('text', { x: X(points.length - 1), y: height - 6, 'text-anchor': 'middle', class: 'chart-label', text: fmtDay(points.at(-1).day) }));
+  return svg;
+}

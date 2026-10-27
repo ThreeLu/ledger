@@ -9,6 +9,7 @@ const rc = await import(new URL('../js/bills.js', import.meta.url));
 const ah = await import(new URL('../js/ahead.js', import.meta.url));
 const fc = await import(new URL('../js/forecast.js', import.meta.url));
 const ml = await import(new URL('../js/meals.js', import.meta.url));
+const bt = await import(new URL('../js/bath.js', import.meta.url));
 
 let n = 0;
 const test = (name, fn) => {
@@ -825,6 +826,73 @@ test('早餐：校园卡按顿数；别的卡是囤的，最近四周摊到每�
   assert.equal(b.school, 2);
   assert.equal(b.perDay, Math.round((56 / 28) * 100) / 100);
   assert.deepEqual(b.next, { from: '2026-10-17', to: '2026-10-17', last: '2026-10-13' });
+});
+
+test('月度报表·吃饭：每天分午饭、晚饭、别的；七天平均；累计；估到月底的每天和总数对得上', () => {
+  const d = book();
+  d.openingDate = '2026-09-01';
+  d.budget.food = 1500;
+  d.settings.periodStartDay = 15;
+  d.tx = [];
+  for (let day = '2026-09-01'; day <= '2026-10-20'; day = m.addDays(day, 1)) d.tx.push(ex(day, 15, 'c-lunch'), ex(day, 20, 'c-dinner'), ex(day, 5, 'c-snack'));
+  d.tx.push(ex('2026-10-16', 99, 'c-eatout', { special: 'g1' })); // 专项的不算
+  assert.deepEqual(ml.foodDays(d, '2026-10-16', '2026-10-16'), [{ day: '2026-10-16', lunch: 15, dinner: 20, other: 5, v: 40 }]);
+  assert.deepEqual(ml.rolling([{ v: 10 }, { v: 20, off: true }, { v: 30 }]), [10, null, 20]);
+  const p = m.periodFor(d, '2026-10-20');
+  const f = ml.foodMonth(d, p, '2026-10-20', '2026-10-20', { paths: 800 });
+  assert.equal(f.total, 6 * 40);
+  assert.equal(f.perDay, 40);
+  assert.equal(f.cumulative[5], 240);
+  assert.equal(f.cumulative[6], null);
+  assert.deepEqual(f.kinds.map((k) => [k.n, k.avg]), [[6, 15], [6, 20]]);
+  assert.equal(f.other, 30);
+  const fc = f.forecast;
+  assert.equal(fc.path.length, fc.days);
+  assert.equal(fc.path.at(-1).day, p.end);
+  assert.ok(Math.abs(fc.path.at(-1).mid - fc.mid) <= 2, JSON.stringify([fc.path.at(-1), fc.mid]));
+  assert.ok(fc.path.every((x, i) => !i || x.mid >= fc.path[i - 1].mid));
+  assert.ok(Math.abs(fc.mid - 40 * 30) < 60, JSON.stringify(fc));
+  // 过完的月：没有估计
+  const past = ml.foodMonth(d, m.periodFor(d, '2026-10-10'), '2026-10-14', '2026-10-20');
+  assert.equal(past.forecast, undefined);
+  // 年度：每个月、估到年底
+  const y = ml.foodYear(d, '2026-09-01', '2026-10-20', '2026-10-20', { paths: 500 });
+  assert.deepEqual(y.months.slice(8, 10).map((x) => [x.days, x.v]), [[30, 1200], [20, 800]]);
+  assert.ok(Math.abs(y.forecast.mid - (2000 + 72 * 40)) < 150, JSON.stringify(y.forecast));
+});
+
+test('洗澡：同一天几笔算一次、隔几天；记不到 3 次不估；固定每 2 天洗一次、每次 ¥1.5 时估得准', () => {
+  const d = book();
+  d.openingDate = '2026-09-01';
+  d.settings.periodStartDay = 15;
+  d.tx = [ex('2026-10-01', 0.5, 'c-bath'), ex('2026-10-01', 1, 'c-bath'), ex('2026-10-04', 2, 'c-bath'), ex('2026-10-04', 3, 'c-lunch')];
+  assert.deepEqual(bt.showersOf(d, '2026-09-01', '2026-10-31'), [{ day: '2026-10-01', v: 1.5, gap: null }, { day: '2026-10-04', v: 2, gap: 3 }]);
+  assert.equal(bt.bathModel(d, '2026-10-05'), null);
+  d.tx = [];
+  for (let day = '2026-09-01'; day <= '2026-10-19'; day = m.addDays(day, 2)) d.tx.push(ex(day, 1.5, 'c-bath'));
+  const nx = bt.nextShowers(d, '2026-10-20', { paths: 500 });
+  assert.deepEqual(nx, bt.nextShowers(d, '2026-10-20', { paths: 500 })); // 同一天结果一样
+  assert.deepEqual(nx.list.map((x) => x.day), ['2026-10-21', '2026-10-23', '2026-10-25']);
+  assert.ok(nx.list.every((x) => Math.abs(x.mid - 1.5) < 0.1), JSON.stringify(nx));
+  assert.ok(Math.abs(nx.sum.mid - 4.5) < 0.2);
+  // 已经很久没洗：下次就是今天
+  assert.equal(bt.nextShowers(d, '2026-10-30', { paths: 200 }).list[0].day, '2026-10-30');
+  // 到月底（10-20 之后：21、23、…、11-14 共 13 次）
+  const p = m.periodFor(d, '2026-10-20');
+  const b = bt.bathMonth(d, p, '2026-10-20', '2026-10-20', { paths: 500 });
+  assert.equal(b.n, 3); // 15、17、19
+  assert.equal(b.total, 4.5);
+  assert.equal(b.gap, 2);
+  assert.equal(b.points.length, 8);
+  assert.ok(b.points[0].faint && !b.points.at(-1).faint);
+  assert.equal(b.month.times.mid, 13);
+  assert.ok(Math.abs(b.month.mid - 4.5 - 19.5) < 0.5, JSON.stringify(b.month));
+  // 过完的月：不估
+  const old = bt.bathMonth(d, m.periodFor(d, '2026-09-20'), '2026-10-14', '2026-10-20');
+  assert.equal(old.next, undefined);
+  const y = bt.bathYear(d, '2026-09-01', '2026-10-20', '2026-10-20', { paths: 300 });
+  assert.equal(y.n, 25);
+  assert.ok(Math.abs(y.forecast.times.mid - 36) <= 1, JSON.stringify(y.forecast));
 });
 
 console.log(`\n${n} 项通过`);
